@@ -183,7 +183,8 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
             if telegram_spider and telegram_spider.get("users", {}):
                 users = telegram_spider.get("users")
                 pages = max(telegram_spider.get("pages", 1), 1)
-                records.update(crawl_telegram(users=users, pages=pages))
+                limits = max(telegram_spider.get("limits", 3), 1)
+                records.update(crawl_telegram(users=users, pages=pages, limits=limits))
 
             # Twitter
             twitter_spider = conf.get("twitter", {})
