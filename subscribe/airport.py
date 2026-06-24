@@ -12,6 +12,7 @@ import string
 import time
 import traceback
 import urllib
+import urllib.error
 import urllib.parse
 import urllib.request
 from copy import deepcopy
@@ -189,6 +190,54 @@ class AirPort:
         self.username = ""
         self.password = ""
         self.available = True
+        if not self.registed:
+            self._refresh_api_urls()
+
+    def _refresh_api_urls(self) -> None:
+        if self.registed:
+            return
+
+        self.fetch = f"{self.ref}{self.api_prefix}user/server/fetch"
+        self.send_email = f"{self.ref}{self.api_prefix}passport/comm/sendEmailVerify"
+        self.reg = f"{self.ref}{self.api_prefix}passport/auth/register"
+
+    def _set_api_prefix(self, api_prefix: str = "") -> None:
+        api_prefix = utils.get_subpath(api_prefix or self.api_prefix)
+        if api_prefix != self.api_prefix:
+            logger.debug(f"[RegisterInfo] switch api prefix, domain: {self.ref}, api_prefix: {api_prefix}")
+
+        self.api_prefix = api_prefix
+        self._refresh_api_urls()
+
+    @staticmethod
+    def _read_body(response) -> str:
+        try:
+            return response.read().decode("UTF8", errors="ignore")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _response_detail(content: str, limit: int = 300) -> str:
+        content = utils.trim(content)
+        if not content:
+            return ""
+
+        detail = ""
+        try:
+            payload = json.loads(content)
+            if isinstance(payload, dict):
+                for key in ("message", "msg", "error", "errors"):
+                    value = payload.get(key, "")
+                    if value:
+                        detail = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+                        break
+        except Exception:
+            pass
+
+        detail = detail or content
+        detail = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "***@***", detail)
+        detail = re.sub(r"\s+", " ", detail).strip()
+        return detail[:limit]
 
     @staticmethod
     def get_register_require(
@@ -215,7 +264,7 @@ class AirPort:
             logger.debug(f"[QueryError] try to explore another register require, domain: {domain}")
             content = utils.http_get(url=f"{domain}{api_prefix}guest/comm/config", retry=2, proxy=proxy)
 
-        if not content.startswith("{") and content.endswith("}"):
+        if not (content.startswith("{") and content.endswith("}")):
             logger.debug(f"[QueryError] cannot get register require, domain: {domain}")
             return RegisterRequire(verify=default, invite=default, recaptcha=default)
 
@@ -261,11 +310,21 @@ class AirPort:
         try:
             request = urllib.request.Request(self.send_email, data=data, headers=headers, method="POST")
             response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            content = self._read_body(response)
             if not response or response.getcode() != 200:
                 return False
 
-            return json.loads(response.read()).get("data", False)
-        except:
+            return json.loads(content).get("data", False)
+        except urllib.error.HTTPError as e:
+            if retry <= 1 or e.code < 500:
+                detail = self._response_detail(self._read_body(e))
+                logger.debug(
+                    f"[RegisterError] send email verify rejected, domain: {self.ref}, code={e.code}, message: {detail}"
+                )
+                return False
+
+            return self.sen_email_verify(email=email, retry=retry - 1)
+        except Exception:
             return self.sen_email_verify(email=email, retry=retry - 1)
 
     def register(
@@ -297,44 +356,89 @@ class AirPort:
             request = urllib.request.Request(self.reg, data=data, headers=headers, method="POST")
             response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
             code = 400 if not response else response.getcode()
+            content = self._read_body(response)
             if code != 200:
-                logger.error(f"[RegisterError] request error when register, domain: {self.ref}, code={code}")
+                detail = self._response_detail(content)
+                logger.error(
+                    f"[RegisterError] request error when register, domain: {self.ref}, code={code}, message: {detail}"
+                )
                 return "", ""
 
             self.username = email
             self.password = password
 
             cookies = utils.extract_cookie(response.getheader("Set-Cookie"))
-            data = json.loads(response.read()).get("data", {})
+            try:
+                result = json.loads(content) if content else {}
+            except Exception:
+                detail = self._response_detail(content)
+                logger.error(f"[RegisterError] invalid response when register, domain: {self.ref}, message: {detail}")
+                return "", ""
+
+            data = result.get("data", {}) if isinstance(result, dict) else {}
             token, authorization = "", ""
             if isinstance(data, dict):
                 token = data.get("token", "")
                 authorization = data.get("auth_data", "")
 
-            # 先判断是否存在免费套餐，如果存在则购买
-            self.order_plan(
-                email=email,
-                password=password,
-                cookies=cookies,
-                authorization=authorization,
-            )
+            if not authorization:
+                login_cookies, login_authorization = renewal.get_cookies(
+                    domain=self.ref,
+                    username=email,
+                    password=password,
+                    retry=2,
+                    api_prefix=self.api_prefix,
+                    jsonify=self.api_prefix == ANOTHER_API_PREFIX,
+                )
+                cookies = cookies or login_cookies
+                authorization = authorization or login_authorization
 
-            subscribe_info = renewal.get_subscribe_info(
-                domain=self.ref,
-                cookies=cookies,
-                authorization=authorization,
-                api_prefix=self.api_prefix,
-            )
+            # 先判断是否存在免费套餐，如果存在则购买
+            if cookies or authorization:
+                self.order_plan(
+                    email=email,
+                    password=password,
+                    cookies=cookies,
+                    authorization=authorization,
+                )
+
+            subscribe_info = None
+            if cookies or authorization:
+                subscribe_info = renewal.get_subscribe_info(
+                    domain=self.ref,
+                    cookies=cookies,
+                    authorization=authorization,
+                    api_prefix=self.api_prefix,
+                )
             if subscribe_info:
                 self.sub = subscribe_info.sub_url
             if not self.sub:
                 if token:
-                    self.sub = f"{self.ref}/api/v1/client/subscribe?token={token}"
+                    client_prefix = "/api/v1/" if self.api_prefix == ANOTHER_API_PREFIX else self.api_prefix
+                    self.sub = f"{self.ref}{client_prefix}client/subscribe?token={token}"
                 else:
-                    logger.error(f"[RegisterError] cannot get token when register, domain: {self.ref}")
+                    detail = self._response_detail(content)
+                    logger.error(
+                        f"[RegisterError] cannot get token when register, domain: {self.ref}, message: {detail}"
+                    )
 
             return cookies, authorization
-        except:
+        except urllib.error.HTTPError as e:
+            detail = self._response_detail(self._read_body(e))
+            if e.code < 500 or retry <= 1:
+                logger.error(
+                    f"[RegisterError] request error when register, domain: {self.ref}, code={e.code}, message: {detail}"
+                )
+                return "", ""
+
+            return self.register(email, password, email_code, invite_code, retry - 1)
+        except Exception as e:
+            if retry <= 1:
+                logger.error(
+                    f"[RegisterError] request error when register, domain: {self.ref}, message: {type(e).__name__}: {e}"
+                )
+                return "", ""
+
             return self.register(email, password, email_code, invite_code, retry - 1)
 
     def order_plan(
@@ -445,7 +549,7 @@ class AirPort:
             return "", ""
 
         # API地址前缀
-        self.api_prefix = rr.api_prefix or self.api_prefix
+        self._set_api_prefix(rr.api_prefix or self.api_prefix)
 
         if not rr.verify:
             email = utils.random_chars(length=random.randint(6, 10), punctuation=False)
