@@ -190,6 +190,7 @@ class AirPort:
         self.username = ""
         self.password = ""
         self.available = True
+        self.last_register_error = ""
         if not self.registed:
             self._refresh_api_urls()
 
@@ -238,6 +239,19 @@ class AirPort:
         detail = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "***@***", detail)
         detail = re.sub(r"\s+", " ", detail).strip()
         return detail[:limit]
+
+    def _set_register_error(self, detail: str) -> None:
+        self.last_register_error = utils.trim(detail)
+
+    def _looks_like_email_code_required(self) -> bool:
+        detail = self.last_register_error
+        if not detail:
+            return False
+
+        if re.search(r"滑块|recaptcha|captcha|turnstile|邀请|关闭注册|illegal|非法", detail, flags=re.I):
+            return False
+
+        return re.search(r"邮箱.*验证码|邮件.*验证码|email.*code|verify.*code|验证码有误", detail, flags=re.I) is not None
 
     @staticmethod
     def get_register_require(
@@ -334,6 +348,7 @@ class AirPort:
             logger.info(f"achieved max retry when register, domain: {self.ref}")
             return "", ""
 
+        self._set_register_error("")
         if not password:
             password = utils.random_chars(random.randint(8, 16), punctuation=True)
 
@@ -359,6 +374,7 @@ class AirPort:
             content = self._read_body(response)
             if code != 200:
                 detail = self._response_detail(content)
+                self._set_register_error(detail)
                 logger.error(
                     f"[RegisterError] request error when register, domain: {self.ref}, code={code}, message: {detail}"
                 )
@@ -372,6 +388,7 @@ class AirPort:
                 result = json.loads(content) if content else {}
             except Exception:
                 detail = self._response_detail(content)
+                self._set_register_error(detail)
                 logger.error(f"[RegisterError] invalid response when register, domain: {self.ref}, message: {detail}")
                 return "", ""
 
@@ -418,6 +435,7 @@ class AirPort:
                     self.sub = f"{self.ref}{client_prefix}client/subscribe?token={token}"
                 else:
                     detail = self._response_detail(content)
+                    self._set_register_error(detail)
                     logger.error(
                         f"[RegisterError] cannot get token when register, domain: {self.ref}, message: {detail}"
                     )
@@ -426,6 +444,7 @@ class AirPort:
         except urllib.error.HTTPError as e:
             detail = self._response_detail(self._read_body(e))
             if e.code < 500 or retry <= 1:
+                self._set_register_error(detail)
                 logger.error(
                     f"[RegisterError] request error when register, domain: {self.ref}, code={e.code}, message: {detail}"
                 )
@@ -434,6 +453,7 @@ class AirPort:
             return self.register(email, password, email_code, invite_code, retry - 1)
         except Exception as e:
             if retry <= 1:
+                self._set_register_error(f"{type(e).__name__}: {e}")
                 logger.error(
                     f"[RegisterError] request error when register, domain: {self.ref}, message: {type(e).__name__}: {e}"
                 )
@@ -522,6 +542,85 @@ class AirPort:
         except:
             return []
 
+    def _register_with_email_verify(
+        self,
+        retry: int,
+        invite_code: str = None,
+        only_gmail: bool = False,
+        attempts: int = 5,
+    ) -> tuple[str, str]:
+        excluded_mailboxes = []
+
+        for _ in range(attempts):
+            mailbox, account = None, None
+            try:
+                mailbox = mailtm.create_instance(only_gmail=only_gmail, exclude=excluded_mailboxes)
+                provider = mailbox.__class__.__name__
+                if provider not in excluded_mailboxes:
+                    excluded_mailboxes.append(provider)
+
+                account = mailbox.get_account()
+                if not account:
+                    logger.error(f"cannot create temporary email account, site: {self.ref}, provider: {provider}")
+                    continue
+
+                message, baseline = None, 0
+                starttime = time.time()
+                try:
+                    baseline = len(mailbox.get_messages(account=account))
+                    success = self.sen_email_verify(email=account.address, retry=3)
+                    if not success:
+                        logger.error(
+                            f"send email verify failed, site: {self.ref}, provider: {provider}, email: {account.address}"
+                        )
+                        mailbox.delete_account(account=account)
+                        continue
+
+                    endtime = time.time() + 120
+                    sleep = random.randint(1, 3)
+                    while time.time() < endtime:
+                        messages = mailbox.get_messages(account=account)
+                        if len(messages) != baseline:
+                            message = messages[0] if messages else None
+                            break
+
+                        time.sleep(sleep)
+
+                    if message:
+                        logger.debug(f"email has been received, domain: {self.ref}\tcost: {int(time.time()- starttime)}s")
+                    else:
+                        logger.error(
+                            f"receiving mail timeout, site: {self.ref}, provider: {provider}, address: {mailbox.api_address}, email: {account.address}"
+                        )
+                        mailbox.delete_account(account=account)
+                        continue
+                except Exception:
+                    logger.error(f"receive email failed, site: {self.ref}, provider: {provider}, email: {account.address}")
+                    mailbox.delete_account(account=account)
+                    continue
+
+                # 如果标准正则无法提取验证码则直接匹配数字
+                mask = mailbox.extract_mask(message.text) or mailbox.extract_mask(message.text, r"[：\s]+([0-9]{6})")
+                mailbox.delete_account(account=account)
+                if not mask:
+                    logger.error(f"cannot fetch mask, url: {self.ref}, message: {message.text}")
+                    continue
+
+                cookies, authorization = self.register(
+                    email=account.address,
+                    password=account.password,
+                    email_code=mask,
+                    invite_code=invite_code,
+                    retry=retry,
+                )
+                if cookies or authorization or self.sub:
+                    return cookies, authorization
+            except:
+                if mailbox and account:
+                    mailbox.delete_account(account=account)
+
+        return "", ""
+
     def get_subscribe(
         self, retry: int, rr: RegisterRequire = None, rigid: bool = True, chuck: bool = False, invite_code: str = None
     ) -> tuple[str, str]:
@@ -561,85 +660,29 @@ class AirPort:
                 return "", ""
 
             email = f"{email}@{email_domain}"
-            return self.register(email=email, password=password, invite_code=invite_code, retry=retry)
+            cookies, authorization = self.register(email=email, password=password, invite_code=invite_code, retry=retry)
+            if cookies or authorization or self.sub:
+                return cookies, authorization
+
+            if self._looks_like_email_code_required():
+                logger.info(f"[RegisterInfo] retry with email verification, domain: {self.ref}")
+                return self._register_with_email_verify(
+                    retry=retry,
+                    invite_code=invite_code,
+                    only_gmail=False,
+                    attempts=5,
+                )
+
+            return "", ""
         else:
             only_gmail = True if rr.whitelist and rr.verify else False
             attempts = 3 if only_gmail else 5
-            excluded_mailboxes = []
-
-            for _ in range(attempts):
-                mailbox, account = None, None
-                try:
-                    mailbox = mailtm.create_instance(only_gmail=only_gmail, exclude=excluded_mailboxes)
-                    provider = mailbox.__class__.__name__
-                    if provider not in excluded_mailboxes:
-                        excluded_mailboxes.append(provider)
-
-                    account = mailbox.get_account()
-                    if not account:
-                        logger.error(f"cannot create temporary email account, site: {self.ref}, provider: {provider}")
-                        continue
-
-                    message, baseline = None, 0
-                    starttime = time.time()
-                    try:
-                        baseline = len(mailbox.get_messages(account=account))
-                        success = self.sen_email_verify(email=account.address, retry=3)
-                        if not success:
-                            logger.error(
-                                f"send email verify failed, site: {self.ref}, provider: {provider}, email: {account.address}"
-                            )
-                            mailbox.delete_account(account=account)
-                            continue
-
-                        endtime = time.time() + 120
-                        sleep = random.randint(1, 3)
-                        while time.time() < endtime:
-                            messages = mailbox.get_messages(account=account)
-                            if len(messages) != baseline:
-                                message = messages[0] if messages else None
-                                break
-
-                            time.sleep(sleep)
-
-                        if message:
-                            logger.debug(
-                                f"email has been received, domain: {self.ref}\tcost: {int(time.time()- starttime)}s"
-                            )
-                        else:
-                            logger.error(
-                                f"receiving mail timeout, site: {self.ref}, provider: {provider}, address: {mailbox.api_address}, email: {account.address}"
-                            )
-                            mailbox.delete_account(account=account)
-                            continue
-                    except Exception:
-                        logger.error(
-                            f"receive email failed, site: {self.ref}, provider: {provider}, email: {account.address}"
-                        )
-                        mailbox.delete_account(account=account)
-                        continue
-
-                    # 如果标准正则无法提取验证码则直接匹配数字
-                    mask = mailbox.extract_mask(message.text) or mailbox.extract_mask(message.text, r"[：\s]+([0-9]{6})")
-                    mailbox.delete_account(account=account)
-                    if not mask:
-                        logger.error(f"cannot fetch mask, url: {self.ref}, message: {message.text}")
-                        continue
-
-                    cookies, authorization = self.register(
-                        email=account.address,
-                        password=account.password,
-                        email_code=mask,
-                        invite_code=invite_code,
-                        retry=retry,
-                    )
-                    if cookies or authorization or self.sub:
-                        return cookies, authorization
-                except:
-                    if mailbox and account:
-                        mailbox.delete_account(account=account)
-
-            return "", ""
+            return self._register_with_email_verify(
+                retry=retry,
+                invite_code=invite_code,
+                only_gmail=only_gmail,
+                attempts=attempts,
+            )
 
     def parse(
         self,
