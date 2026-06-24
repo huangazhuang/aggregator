@@ -3,29 +3,73 @@ log-level: silent
 mixed-port: 7890
 mode: Rule
 proxies:
-- cipher: aes-256-cfb
-  name: 🇰🇷 韩国-GEUMCHEON-GU-1
-  password: qwerREWQ@@
-  port: 59490
-  server: 221.150.109.89
+- name: NODE1-VPN-1A-1A
+  password: 0e1eaee8-f0b2-4080-ab59-011bddc073cd
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- cipher: aes-256-gcm
+  name: 🇸🇬 新加坡-新加坡-4
+  password: dada1203
+  port: 80
+  server: 47.129.143.46
   type: ss
+  udp: true
+- name: NODE1-VPN-1A-1B
+  password: 57b11e69-1421-4a8d-a9f6-c25d530909f7
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- cipher: aes-256-gcm
+  name: 🇸🇬 新加坡-新加坡-1
+  password: dada1203
+  port: 80
+  server: 13.250.63.234
+  type: ss
+  udp: true
+- auth: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
+  name: 🇸🇬 SG-001-FREE-1C
+  password: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- name: NODE1-VPN-1I
+  password: 08afbd6d-f899-46a3-ba50-86f83b485b39
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
 - alterId: 0
   cipher: auto
-  name: 🇩🇪 德国-FRANKFURT AM MAIN-2
-  port: 1020
+  name: 🇩🇪 德国-FRANKFURT AM MAIN-3
+  port: 1050
   server: spt.reata.ir
   skip-cert-verify: true
   tls: false
   type: vmess
   udp: true
-  uuid: a8022edb-0bd7-4f86-b70d-20f7f8a59814
-- name: NODE1-VPN-1B-1B
-  password: b1488858-38d1-4091-b966-71f4a2669715
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
+  uuid: b5b183b6-a4f0-41ad-a015-ba9f000ad7ed
+- cipher: aes-256-gcm
+  name: 🇸🇬 新加坡-新加坡-3
+  password: dada1203
+  port: 80
+  server: 54.169.246.92
+  type: ss
+  udp: true
+- auth: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
+  name: 🇸🇬 SG-001-FREE-1F
+  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
   udp: true
 - cipher: chacha20-ietf-poly1305
   name: 🇳🇱 荷兰-阿姆斯特丹-2
@@ -41,59 +85,12 @@ proxies:
   skip-cert-verify: false
   type: trojan
   udp: true
-- name: NODE1-VPN-1A-1A
-  password: 0e1eaee8-f0b2-4080-ab59-011bddc073cd
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- auth: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
-  name: 🇸🇬 SG-001-FREE-1C
-  password: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
-  port: 8443
-  server: 13.229.46.36
-  skip-cert-verify: true
-  type: hysteria2
-  udp: true
-- name: NODE1-VPN-1C
-  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1K
-  password: 54067e4d-9849-48ca-babd-836cb0bec98a
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1A-1B
-  password: 57b11e69-1421-4a8d-a9f6-c25d530909f7
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1D
-  password: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- auth: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  name: 美B3-1-1A
-  obfs: salamander
-  obfs-password: ZVY8lIsu22AMT4kO
-  password: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  port: 41002
-  server: shadow.adami.icu
-  skip-cert-verify: true
-  sni: shadow.adami.icu
-  type: hysteria2
+- cipher: chacha20-ietf-poly1305
+  name: 🇳🇱 荷兰-阿姆斯特丹-1
+  password: k1dBOmOB4oqi7Ump37a1bQ
+  port: 8080
+  server: 82.38.31.216
+  type: ss
   udp: true
 - auth: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
   name: 🇸🇬 SG-001-FREE-1A
@@ -103,45 +100,6 @@ proxies:
   skip-cert-verify: true
   type: hysteria2
   udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-1
-  password: dada1203
-  port: 80
-  server: 13.250.63.234
-  type: ss
-  udp: true
-- name: NODE1-VPN-1B-1A
-  password: 651df13d-41b2-4be8-a13f-28669baedc5d
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- auth: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  name: 🇭🇰 HK高速-1A
-  obfs: salamander
-  obfs-password: uNFFqj7aeBqGNwXI
-  password: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  port: 20010
-  server: hk.adami.icu
-  skip-cert-verify: true
-  sni: hk.adami.icu
-  type: hysteria2
-  udp: true
-- name: NODE1-VPN-1H
-  password: 914fa5e2-ff77-4667-9e5f-7f5506f5e25a
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇳🇱 荷兰-阿姆斯特丹-1
-  password: k1dBOmOB4oqi7Ump37a1bQ
-  port: 8080
-  server: 82.38.31.216
-  type: ss
-  udp: true
 - auth: b1488858-38d1-4091-b966-71f4a2669715
   name: 🇸🇬 SG-001-FREE-1D
   password: b1488858-38d1-4091-b966-71f4a2669715
@@ -150,14 +108,30 @@ proxies:
   skip-cert-verify: true
   type: hysteria2
   udp: true
-- auth: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
-  name: 🇸🇬 SG-001-FREE-1F
-  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
-  port: 8443
-  server: 13.229.46.36
-  skip-cert-verify: true
-  type: hysteria2
+- name: NODE1-VPN-1E
+  password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
+- name: NODE1-VPN-1N
+  password: 2c01d94f-c255-45b9-a42b-72ce16674b15
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- alterId: 0
+  cipher: auto
+  name: 🇩🇪 德国-FRANKFURT AM MAIN-2
+  port: 1020
+  server: spt.reata.ir
+  skip-cert-verify: true
+  tls: false
+  type: vmess
+  udp: true
+  uuid: a8022edb-0bd7-4f86-b70d-20f7f8a59814
 - name: NODE1-VPN-1J
   password: bcf1f838-0323-4b1c-ade6-b3fc13feb519
   port: 443
@@ -165,22 +139,8 @@ proxies:
   skip-cert-verify: false
   type: trojan
   udp: true
-- name: NODE1-VPN-1I
-  password: 08afbd6d-f899-46a3-ba50-86f83b485b39
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1M
-  password: d061b5c8-5eec-492d-b6bd-8d04e4c8ea82
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1E
-  password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
+- name: NODE1-VPN-1C-1B
+  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
   port: 443
   server: node1-vpn.hrzy.me
   skip-cert-verify: false
@@ -193,51 +153,15 @@ proxies:
   server: 153.76.112.64
   type: ss
   udp: true
-- auth: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  name: 🇺🇸 美国1-1A
-  obfs: salamander
-  obfs-password: ZVY8lIsu22AMT4kO
-  password: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  port: 40006
-  server: shadow.adami.icu
-  skip-cert-verify: true
-  sni: shadow.adami.icu
-  type: hysteria2
+- name: NODE1-VPN-1K
+  password: 54067e4d-9849-48ca-babd-836cb0bec98a
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-3
-  password: dada1203
-  port: 80
-  server: 54.169.246.92
-  type: ss
-  udp: true
-- auth: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  name: HK1高速-1A
-  obfs: salamander
-  obfs-password: 2QO7xB3Sy1OwnWoD
-  password: d53c3f62-cf48-492e-a5c3-52c32b158fc4
-  port: 22001
-  server: hk1.adami.icu
-  skip-cert-verify: true
-  sni: hk1.adami.icu
-  type: hysteria2
-  udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-4
-  password: dada1203
-  port: 80
-  server: 47.129.143.46
-  type: ss
-  udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-2
-  password: dada1203
-  port: 80
-  server: 54.169.219.98
-  type: ss
-  udp: true
-- name: NODE1-VPN-1N
-  password: 2c01d94f-c255-45b9-a42b-72ce16674b15
+- name: NODE1-VPN-1D
+  password: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
   port: 443
   server: node1-vpn.hrzy.me
   skip-cert-verify: false
@@ -251,91 +175,106 @@ proxies:
   skip-cert-verify: true
   type: hysteria2
   udp: true
-- alterId: 0
-  cipher: auto
-  name: 🇩🇪 德国-FRANKFURT AM MAIN-3
-  port: 1050
-  server: spt.reata.ir
-  skip-cert-verify: true
-  tls: false
-  type: vmess
+- name: NODE1-VPN-1B
+  password: b1488858-38d1-4091-b966-71f4a2669715
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
-  uuid: b5b183b6-a4f0-41ad-a015-ba9f000ad7ed
+- cipher: aes-256-gcm
+  name: 🇸🇬 新加坡-新加坡-2
+  password: dada1203
+  port: 80
+  server: 54.169.219.98
+  type: ss
+  udp: true
+- name: NODE1-VPN-1C-1A
+  password: 9b65b4fd-5b28-470b-bd86-5a0a52535a05
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1M
+  password: d061b5c8-5eec-492d-b6bd-8d04e4c8ea82
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1H
+  password: 914fa5e2-ff77-4667-9e5f-7f5506f5e25a
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
 proxy-groups:
 - interval: 300
   name: automatic
   proxies:
   - NODE1-VPN-1A-1A
-  - 🇩🇪 德国-FRANKFURT AM MAIN-2
-  - 🇳🇱 荷兰-阿姆斯特丹-1
-  - 🇸🇬 SG-001-FREE-1C
-  - 🇺🇸 美国1-1A
-  - NODE1-VPN-1B-1B
-  - 🇸🇬 SG-001-FREE-1F
-  - NODE1-VPN-1E
-  - 🇳🇱 荷兰-阿姆斯特丹-2
-  - 🇸🇬 SG-001-FREE-1A
-  - 🇸🇬 SG-001-FREE-1D
-  - NODE1-VPN-1H
-  - NODE1-VPN-1K
-  - NODE1-VPN-1I
-  - 🇸🇬 新加坡-新加坡-4
-  - NODE1-VPN-1J
-  - 🇭🇰 HK高速-1A
-  - 🇸🇬 新加坡-新加坡-3
-  - NODE1-VPN-1N
-  - NODE1-VPN-1O
   - 🇸🇬 SG-001-FREE-1B
-  - HK1高速-1A
-  - NODE1-VPN-1A-1B
-  - 🇸🇬 新加坡-新加坡-1
-  - NODE1-VPN-1M
-  - 美B3-1-1A
-  - NODE1-VPN-1B-1A
+  - NODE1-VPN-1N
   - 🇩🇪 德国-FRANKFURT AM MAIN-3
-  - 🇩🇪 德国-法兰克福-4
-  - 🇰🇷 韩国-GEUMCHEON-GU-1
-  - 🇸🇬 新加坡-新加坡-2
+  - 🇸🇬 新加坡-新加坡-3
+  - NODE1-VPN-1O
+  - NODE1-VPN-1J
+  - NODE1-VPN-1H
+  - NODE1-VPN-1C-1B
+  - NODE1-VPN-1B
+  - 🇸🇬 SG-001-FREE-1A
+  - NODE1-VPN-1C-1A
+  - 🇸🇬 新加坡-新加坡-4
   - NODE1-VPN-1D
-  - NODE1-VPN-1C
+  - 🇸🇬 SG-001-FREE-1C
+  - NODE1-VPN-1K
+  - NODE1-VPN-1A-1B
+  - 🇸🇬 新加坡-新加坡-2
+  - 🇸🇬 新加坡-新加坡-1
+  - 🇳🇱 荷兰-阿姆斯特丹-1
+  - NODE1-VPN-1I
+  - 🇩🇪 德国-FRANKFURT AM MAIN-2
+  - 🇸🇬 SG-001-FREE-1D
+  - 🇳🇱 荷兰-阿姆斯特丹-2
+  - 🇩🇪 德国-法兰克福-4
+  - NODE1-VPN-1M
+  - NODE1-VPN-1E
+  - 🇸🇬 SG-001-FREE-1F
   type: url-test
   url: https://www.google.com/favicon.ico
 - name: 🌐 Proxy
   proxies:
   - automatic
   - NODE1-VPN-1A-1A
-  - 🇩🇪 德国-FRANKFURT AM MAIN-2
-  - 🇳🇱 荷兰-阿姆斯特丹-1
-  - 🇸🇬 SG-001-FREE-1C
-  - 🇺🇸 美国1-1A
-  - NODE1-VPN-1B-1B
-  - 🇸🇬 SG-001-FREE-1F
-  - NODE1-VPN-1E
-  - 🇳🇱 荷兰-阿姆斯特丹-2
-  - 🇸🇬 SG-001-FREE-1A
-  - 🇸🇬 SG-001-FREE-1D
-  - NODE1-VPN-1H
-  - NODE1-VPN-1K
-  - NODE1-VPN-1I
-  - 🇸🇬 新加坡-新加坡-4
-  - NODE1-VPN-1J
-  - 🇭🇰 HK高速-1A
-  - 🇸🇬 新加坡-新加坡-3
-  - NODE1-VPN-1N
-  - NODE1-VPN-1O
   - 🇸🇬 SG-001-FREE-1B
-  - HK1高速-1A
-  - NODE1-VPN-1A-1B
-  - 🇸🇬 新加坡-新加坡-1
-  - NODE1-VPN-1M
-  - 美B3-1-1A
-  - NODE1-VPN-1B-1A
+  - NODE1-VPN-1N
   - 🇩🇪 德国-FRANKFURT AM MAIN-3
-  - 🇩🇪 德国-法兰克福-4
-  - 🇰🇷 韩国-GEUMCHEON-GU-1
-  - 🇸🇬 新加坡-新加坡-2
+  - 🇸🇬 新加坡-新加坡-3
+  - NODE1-VPN-1O
+  - NODE1-VPN-1J
+  - NODE1-VPN-1H
+  - NODE1-VPN-1C-1B
+  - NODE1-VPN-1B
+  - 🇸🇬 SG-001-FREE-1A
+  - NODE1-VPN-1C-1A
+  - 🇸🇬 新加坡-新加坡-4
   - NODE1-VPN-1D
-  - NODE1-VPN-1C
+  - 🇸🇬 SG-001-FREE-1C
+  - NODE1-VPN-1K
+  - NODE1-VPN-1A-1B
+  - 🇸🇬 新加坡-新加坡-2
+  - 🇸🇬 新加坡-新加坡-1
+  - 🇳🇱 荷兰-阿姆斯特丹-1
+  - NODE1-VPN-1I
+  - 🇩🇪 德国-FRANKFURT AM MAIN-2
+  - 🇸🇬 SG-001-FREE-1D
+  - 🇳🇱 荷兰-阿姆斯特丹-2
+  - 🇩🇪 德国-法兰克福-4
+  - NODE1-VPN-1M
+  - NODE1-VPN-1E
+  - 🇸🇬 SG-001-FREE-1F
   type: select
 rules:
 - MATCH,🌐 Proxy
