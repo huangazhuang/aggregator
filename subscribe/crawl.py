@@ -506,7 +506,7 @@ def crawl_google(
     interval: int = 0,
     notinurl: list = [],
 ) -> dict:
-    items, query = set(), urllib.parse.quote('"/api/v1/client/subscribe?token="')
+    items = set()
     if notinurl and type(notinurl) == list:
         for text in notinurl:
             text = utils.trim(text).lower()
@@ -514,13 +514,17 @@ def crawl_google(
                 items.add(urllib.parse.quote(f"-site:{text}"))
 
     reject = "+".join(list(items))
-    if reject:
-        # not search from some site, see: https://zhuanlan.zhihu.com/p/136076792
-        query = f"{query}+{reject}"
+
+    queries = [
+        '"/api/v1/client/subscribe?token="',
+        '"clash" "subscribe" "token="',
+        '"proxies:" "vmess://"',
+        '"trojan://" "vmess://" "ss://"',
+        '"vless://" "trojan://"',
+        '"hysteria2://" OR "hy2://"',
+    ]
 
     num, limits = 100, min(max(1, limits), 1000)
-    url = f"https://www.google.com/search?q={query}&tbs=qdr:d{max(qdr, 1)}"
-
     params = {
         "hl": "zh-CN",
         "num": num,
@@ -528,40 +532,57 @@ def crawl_google(
 
     starttime = time.time()
     collections = {}
-    for start in range(0, limits, num):
-        params["start"] = start
-        content = re.sub(r"\\\\n", "", utils.http_get(url=url, params=params))
-        content = re.sub(r"\?token\\\\u003d", "?token=", content, flags=re.I)
-        fallback = html.unescape(content).replace("\\u003d", "=").replace("\\/", "/")
-        collections.update(
-            extract_subscribes(
-                content=fallback,
-                push_to=push_to,
-                exclude=exclude,
-                source=Origin.GOOGLE.name,
+    per_query = max(num, limits // len(queries))
+
+    for q in queries:
+        query = urllib.parse.quote(q)
+        if reject:
+            # not search from some site, see: https://zhuanlan.zhihu.com/p/136076792
+            query = f"{query}+{reject}"
+
+        url = f"https://www.google.com/search?q={query}&tbs=qdr:d{max(qdr, 1)}"
+        for start in range(0, per_query, num):
+            params["start"] = start
+            content = re.sub(r"\\\\n", "", utils.http_get(url=url, params=params))
+            content = re.sub(r"\?token\\\\u003d", "?token=", content, flags=re.I)
+            fallback = html.unescape(content).replace("\\u003d", "=").replace("\\/", "/")
+            collections.update(
+                extract_subscribes(
+                    content=fallback,
+                    push_to=push_to,
+                    exclude=exclude,
+                    source=Origin.GOOGLE.name,
+                    limits=limits,
+                    nocache=True,
+                )
             )
-        )
 
-        regex = r'https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/?(?:<em(?:\s+)?class="qkunPe">/?)?api/v1/client/subscribe\?token(?:</em>)?=[a-zA-Z0-9]{16,32}'
-        subscribes = re.findall(regex, content)
-        for s in subscribes:
-            s = re.sub(r'<em(?:\s+)?class="qkunPe">|</em>|\s+', "", s).replace("http://", "https://", 1)
-            try:
-                if exclude and re.search(exclude, s):
+            regex = r'https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/?(?:<em(?:\s+)?class="qkunPe">/?)?api/v1/client/subscribe\?token(?:</em>)?=[a-zA-Z0-9]{16,32}'
+            subscribes = re.findall(regex, content)
+            for s in subscribes:
+                s = re.sub(r'<em(?:\s+)?class="qkunPe">|</em>|\s+', "", s).replace("http://", "https://", 1)
+                try:
+                    if exclude and re.search(exclude, s):
+                        continue
+                    collections[s] = {"push_to": push_to, "origin": Origin.GOOGLE.name, "nocache": True}
+                except:
                     continue
-                collections[s] = {"push_to": push_to, "origin": Origin.GOOGLE.name}
-            except:
-                continue
 
-        # no more results
-        if re.search(
-            r'<p aria-level="3" role="heading".*?>\s*找不到和您查询的“\s*<span>\s*.*?/api/v1/client/subscribe\?token=.*?\s*</span>\s*”相符的内容或信息。\s*</p>',
-            content,
-            flags=re.I,
-        ):
+            # no more results
+            if re.search(
+                r'<p aria-level="3" role="heading".*?>\s*找不到和您查询的“\s*<span>\s*.*?/api/v1/client/subscribe\?token=.*?\s*</span>\s*”相符的内容或信息。\s*</p>',
+                content,
+                flags=re.I,
+            ):
+                break
+
+            if len(collections) >= limits:
+                break
+
+            time.sleep(interval)
+
+        if len(collections) >= limits:
             break
-
-        time.sleep(interval)
 
     cost = "{:.2f}s".format(time.time() - starttime)
     logger.info(f"[GoogleCrawl] finished crawl from Google, found {len(collections)} subscriptions, cost: {cost}")
@@ -576,14 +597,19 @@ def crawl_yandex(
     interval: int = 0,
     notinurl: list = [],
 ) -> dict:
-    reject, query = "", urllib.parse.quote("/api/v1/client/subscribe?token=")
+    reject = ""
     if notinurl and type(notinurl) == list:
         items = list(set([re.escape(utils.trim(x).lower()) for x in notinurl]))
         reject = "|".join(items)
 
-    url = f'https://yandex.com/search/?text="{query}"&lr=10599&cee=1'
-    if within > 0:
-        url = f"{url}&within={within}"
+    queries = [
+        "/api/v1/client/subscribe?token=",
+        "clash subscribe token=",
+        "proxies: vmess://",
+        "trojan:// vmess:// ss://",
+        "vless:// trojan://",
+        "hysteria2://",
+    ]
 
     starttime = time.time()
 
@@ -594,63 +620,78 @@ def crawl_yandex(
         "Accept-Encoding": "gzip",
     }
 
-    # get total pages
-    content = utils.http_get(url=url, headers=headers)
-    if content:
-        regex = r'<a class="VanillaReact Pager-Item Pager-Item_type_page" href=".*?" aria-label="Page \d+".*?>(\d+)</a>'
-        groups = re.findall(regex, content, flags=re.I)
-        if groups:
-            pages = min(pages, max([int(x) for x in groups]))
-
     collections, pages = {}, max(1, pages)
 
-    for page in range(0, pages):
-        content = utils.http_get(url=f"{url}&p={page}", headers=headers)
-        if not content:
-            logger.error(f"[YandexCrawl] cannot get content from page: {page}")
-            continue
+    for q in queries:
+        query = urllib.parse.quote(q)
+        url = f'https://yandex.com/search/?text="{query}"&lr=10599&cee=1'
+        if within > 0:
+            url = f"{url}&within={within}"
 
-        fallback = html.unescape(content).replace("<b>", "").replace("</b>", "")
-        collections.update(
-            extract_subscribes(
-                content=fallback,
-                push_to=push_to,
-                exclude=exclude,
-                source=Origin.YANDEX.name,
-            )
-        )
+        # get total pages
+        content = utils.http_get(url=url, headers=headers)
+        query_pages = pages
+        if content:
+            regex = r'<a class="VanillaReact Pager-Item Pager-Item_type_page" href=".*?" aria-label="Page \d+".*?>(\d+)</a>'
+            groups = re.findall(regex, content, flags=re.I)
+            if groups:
+                query_pages = min(pages, max([int(x) for x in groups]))
 
-        groups = re.findall(r"<li class=\"serp-item\s+serp-item_card\s?\".*?>([\s\S]*?)</li>", content)
-        if not groups:
-            logger.error(f"[YandexCrawl] cannot get any search result from page: {page}")
-            continue
-
-        for group in groups:
-            try:
-                if reject:
-                    regex = r'<div class="Path Organic-Path path organic__path"><a .*?href="(.*?)".*?>.*?</a></div>'
-                    link = re.findall(regex, group, flags=re.I)[0]
-                    if re.search(reject, link):
-                        continue
-            except:
-                logger.error(f"[YandexCrawl] invalid regex pattern: {reject}")
+        for page in range(0, query_pages):
+            content = utils.http_get(url=f"{url}&p={page}", headers=headers)
+            if not content:
+                logger.error(f"[YandexCrawl] cannot get content from query: {q}, page: {page}")
                 continue
 
-            regex = r"https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/<b>api</b>/<b>v</b><b>1</b>/<b>client</b>/<b>subscribe</b>\?<b>token</b>=[a-zA-Z0-9]{16,32}"
-            links = re.findall(regex, group, flags=re.I)
-            for link in links:
+            fallback = html.unescape(content).replace("<b>", "").replace("</b>", "")
+            collections.update(
+                extract_subscribes(
+                    content=fallback,
+                    push_to=push_to,
+                    exclude=exclude,
+                    source=Origin.YANDEX.name,
+                    nocache=True,
+                )
+            )
+
+            groups = re.findall(r"<li class=\"serp-item\s+serp-item_card\s?\".*?>([\s\S]*?)</li>", content)
+            if not groups:
+                logger.error(f"[YandexCrawl] cannot get any search result from query: {q}, page: {page}")
+                continue
+
+            for group in groups:
                 try:
-                    link = re.sub(r"<b>|</b>", "", link).replace("http://", "https://")
-                    if exclude and re.search(exclude, link):
-                        continue
-                    collections[link] = {
-                        "push_to": push_to,
-                        "origin": Origin.YANDEX.name,
-                    }
+                    if reject:
+                        regex = r'<div class="Path Organic-Path path organic__path"><a .*?href="(.*?)".*?>.*?</a></div>'
+                        link = re.findall(regex, group, flags=re.I)[0]
+                        if re.search(reject, link):
+                            continue
                 except:
+                    logger.error(f"[YandexCrawl] invalid regex pattern: {reject}")
                     continue
 
-        time.sleep(interval)
+                regex = r"https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/<b>api</b>/<b>v</b><b>1</b>/<b>client</b>/<b>subscribe</b>\?<b>token</b>=[a-zA-Z0-9]{16,32}"
+                links = re.findall(regex, group, flags=re.I)
+                for link in links:
+                    try:
+                        link = re.sub(r"<b>|</b>", "", link).replace("http://", "https://")
+                        if exclude and re.search(exclude, link):
+                            continue
+                        collections[link] = {
+                            "push_to": push_to,
+                            "origin": Origin.YANDEX.name,
+                            "nocache": True,
+                        }
+                    except:
+                        continue
+
+            if len(collections) >= pages * 100:
+                break
+
+            time.sleep(interval)
+
+        if len(collections) >= pages * 100:
+            break
 
     cost = "{:.2f}s".format(time.time() - starttime)
     logger.info(f"[YandexCrawl] finished crawl from Yandex, found {len(collections)} subscriptions, cost: {cost}")

@@ -150,7 +150,7 @@ jobs:
                   "engine": "local",
                   "items": {"clash-local": {"folderid": "", "fileid": "clash.yaml"}},
               },
-              "delay": 5000,
+              "delay": 10000,
           }
 
           os.makedirs("subscribe/config", exist_ok=True)
@@ -216,8 +216,8 @@ jobs:
         if: steps.mode.outputs.mode != 'manual'
         shell: bash
         run: |
-          base_args=(--all --targets clash --num 64 --delay 5000 --easygoing)
-          fallback_args=(--all --targets clash --num 64 --delay 5000 --easygoing --skip --overwrite)
+          base_args=(--all --targets clash --num 64 --delay 10000 --easygoing)
+          fallback_args=(--all --targets clash --num 64 --delay 10000 --easygoing --skip --overwrite)
 
           if [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
             base_args+=(--skip)
@@ -265,7 +265,7 @@ jobs:
               "domains": [],
               "crawl": {
                   "enable": True,
-                  "threshold": 5,
+                  "threshold": 10,
                   "singlelink": True,
                   "persist": {
                       "subs": "crawler-subs-store",
@@ -311,42 +311,42 @@ jobs:
                       "users": {
                           "v2raydailyupdate": {
                               "enable": True,
-                              "include": "",
+                              "include": "|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://[a-zA-Z0-9:.?+=@%&#_\\-/]{10,}",
                               "exclude": "",
                               "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
                               "push_to": ["crawler"],
                           },
                           "vmessorg": {
                               "enable": True,
-                              "include": "",
+                              "include": "|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://[a-zA-Z0-9:.?+=@%&#_\\-/]{10,}",
                               "exclude": "",
                               "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
                               "push_to": ["crawler"],
                           },
                           "PrivateVPNs": {
                               "enable": True,
-                              "include": "",
+                              "include": "|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://[a-zA-Z0-9:.?+=@%&#_\\-/]{10,}",
                               "exclude": "",
                               "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
                               "push_to": ["crawler"],
                           },
                           "freev2rayssr": {
                               "enable": True,
-                              "include": "",
+                              "include": "|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://[a-zA-Z0-9:.?+=@%&#_\\-/]{10,}",
                               "exclude": "",
                               "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
                               "push_to": ["crawler"],
                           },
                           "proxy_mtm": {
                               "enable": True,
-                              "include": "",
+                              "include": "|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://[a-zA-Z0-9:.?+=@%&#_\\-/]{10,}",
                               "exclude": "",
                               "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
                               "push_to": ["crawler"],
                           },
                           "proxystore11": {
                               "enable": True,
-                              "include": "",
+                              "include": "|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://[a-zA-Z0-9:.?+=@%&#_\\-/]{10,}",
                               "exclude": "",
                               "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
                               "push_to": ["crawler"],
@@ -455,7 +455,7 @@ jobs:
                       "crawler-proxies-store": {"folderid": "", "fileid": "crawler-proxies.txt"},
                   },
               },
-              "delay": 5000,
+              "delay": 10000,
           }
 
           os.makedirs("subscribe/config", exist_ok=True)
@@ -476,7 +476,7 @@ jobs:
           fi
 
           set +e
-          python -u subscribe/process.py -s subscribe/config/clash-verge-crawler.generated.json --overwrite --flexible --invisible
+          python -u subscribe/process.py -s subscribe/config/clash-verge-crawler.generated.json --overwrite --flexible --invisible --timeout 10000
           status=$?
           set -e
 

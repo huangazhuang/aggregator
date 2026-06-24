@@ -855,14 +855,88 @@ class TempMailLol(TemporaryMail):
         return True
 
 
+class OneSecMail(TemporaryMail):
+    def __init__(self) -> None:
+        self.api_address = "https://www.1secmail.com/api/v1/"
+
+    def get_domains_list(self) -> list:
+        content = utils.http_get(url=self.api_address, params={"action": "getDomainList"}, retry=2)
+        if not content:
+            return []
+
+        try:
+            domains = json.loads(content)
+            return [x for x in domains if isinstance(x, str) and x]
+        except:
+            return []
+
+    def get_account(self, retry: int = 3) -> Account:
+        address = self.generate_address(bits=random.randint(6, 12))
+        if not address:
+            return None
+
+        return Account(address=address)
+
+    def get_messages(self, account: Account) -> list:
+        if not account or "@" not in account.address:
+            return []
+
+        login, domain = account.address.split("@", maxsplit=1)
+        content = utils.http_get(
+            url=self.api_address,
+            params={"action": "getMessages", "login": login, "domain": domain},
+            retry=1,
+        )
+        if not content:
+            return []
+
+        messages = []
+        try:
+            items = json.loads(content)
+            for item in items:
+                mail_id = item.get("id", "")
+                if not mail_id:
+                    continue
+
+                body = utils.http_get(
+                    url=self.api_address,
+                    params={"action": "readMessage", "login": login, "domain": domain, "id": mail_id},
+                    retry=1,
+                )
+                if not body:
+                    continue
+
+                data = json.loads(body)
+                text = "\n".join([data.get("textBody", ""), data.get("htmlBody", ""), data.get("body", "")]).strip()
+                messages.append(
+                    Message(
+                        id=str(mail_id),
+                        sender={data.get("from", ""): data.get("from", "")},
+                        to={account.address: account.address},
+                        subject=data.get("subject", ""),
+                        text=text,
+                        html=data.get("htmlBody", ""),
+                        data=data,
+                    )
+                )
+        except:
+            logger.error(f"[OneSecMailError] cannot get messages, address: {account.address}")
+
+        return messages
+
+    def delete_account(self, account: Account) -> bool:
+        logger.info(f"[OneSecMailError] not support delete account, domain: {self.api_address}")
+        return True
+
+
 def create_instance(only_gmail: bool = False, exclude: list = None) -> TemporaryMail:
     if only_gmail:
         return Emailnator(onlygmail=True)
 
     exclude = set(exclude or [])
-    providers = [TempMailLol, MailTM, MOAKT, SnapMail, LinShiEmail, RootSh]
+    providers = [TempMailLol, OneSecMail, MailTM, MOAKT, SnapMail, LinShiEmail, RootSh]
     providers = [p for p in providers if p.__name__ not in exclude]
     if not providers:
-        providers = [TempMailLol, MailTM, MOAKT]
+        providers = [TempMailLol, OneSecMail, MailTM, MOAKT]
 
     return random.choice(providers)()
