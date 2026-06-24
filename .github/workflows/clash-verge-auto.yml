@@ -46,6 +46,11 @@ env:
   REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
   REQUESTED_PAGES: ${{ github.event.inputs.pages || vars.COLLECT_PAGES || '5' }}
   SCHEDULE_NAME: ${{ github.event.schedule || '' }}
+  CLASH_SUBSCRIPTIONS_SECRET: ${{ secrets.CLASH_SUBSCRIPTIONS }}
+  CLASH_SUBSCRIPTIONS_VAR: ${{ vars.CLASH_SUBSCRIPTIONS }}
+  CLASH_SUBSCRIPTION_URL_SECRET: ${{ secrets.CLASH_SUBSCRIPTION_URL }}
+  CLASH_SUBSCRIPTION_URL_VAR: ${{ vars.CLASH_SUBSCRIPTION_URL }}
+  ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS || 'true' }}
 
 jobs:
   build:
@@ -81,6 +86,92 @@ jobs:
             fi
           done
 
+      - name: Build manual subscription config
+        id: manual
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.request
+
+          raw = "\n".join(
+              x
+              for x in [
+                  os.environ.get("CLASH_SUBSCRIPTIONS_SECRET", ""),
+                  os.environ.get("CLASH_SUBSCRIPTIONS_VAR", ""),
+              ]
+              if x
+          )
+
+          remote = os.environ.get("CLASH_SUBSCRIPTION_URL_SECRET", "") or os.environ.get("CLASH_SUBSCRIPTION_URL_VAR", "")
+          if remote:
+              req = urllib.request.Request(remote, headers={"User-Agent": "Mozilla/5.0"})
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  raw += "\n" + resp.read().decode("utf-8", errors="ignore")
+
+          urls = []
+          seen = set()
+          for url in re.findall(r"https?://[^\s'\"<>]+", raw):
+              url = url.strip().rstrip(",;)"])
+              if url and url not in seen:
+                  urls.append(url)
+                  seen.add(url)
+
+          if not urls:
+              print("manual=false")
+              sys.exit(0)
+
+          config = {
+              "domains": [
+                  {
+                      "name": "manual-subscriptions",
+                      "sub": urls,
+                      "enable": True,
+                      "rename": "",
+                      "include": "",
+                      "exclude": "",
+                      "push_to": ["clash-verge"],
+                      "ignorede": True,
+                      "liveness": True,
+                      "rate": 20.0,
+                      "secure": False,
+                  }
+              ],
+              "crawl": {"enable": False},
+              "groups": {
+                  "clash-verge": {
+                      "emoji": True,
+                      "list": False,
+                      "targets": {"clash": "clash-local"},
+                  }
+              },
+              "storage": {
+                  "engine": "local",
+                  "items": {"clash-local": {"folderid": "", "fileid": "clash.yaml"}},
+              },
+              "delay": 5000,
+          }
+
+          os.makedirs("subscribe/config", exist_ok=True)
+          with open("subscribe/config/clash-verge.generated.json", "w", encoding="utf-8") as f:
+              json.dump(config, f, ensure_ascii=False, indent=2)
+
+          os.makedirs("data", exist_ok=True)
+          with open("data/subscribes.txt", "w", encoding="utf-8") as f:
+              f.write("\n".join(urls) + "\n")
+
+          print(f"manual=true count={len(urls)}")
+          PY
+
+          if [ -s subscribe/config/clash-verge.generated.json ]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Choose run mode
         id: mode
         shell: bash
@@ -94,7 +185,9 @@ jobs:
             fi
           fi
 
-          if [ ! -s data/subscribes.txt ]; then
+          if [ "${{ steps.manual.outputs.enabled }}" = "true" ]; then
+            mode="manual"
+          elif [ ! -s data/subscribes.txt ]; then
             mode="collect"
           fi
 
@@ -118,7 +211,28 @@ jobs:
           echo "pages=${pages}" >> "${GITHUB_OUTPUT}"
           echo "Collection pages: ${pages}"
 
-      - name: Generate Clash profile
+      - name: Generate Clash profile from manual subscriptions
+        if: steps.mode.outputs.mode == 'manual'
+        shell: bash
+        run: |
+          mkdir -p data
+          export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
+
+          if [ "${REQUESTED_ALIVE_CHECK}" = "true" ]; then
+            export SKIP_ALIVE_CHECK="false"
+          else
+            export SKIP_ALIVE_CHECK="true"
+          fi
+
+          python -u subscribe/process.py -s subscribe/config/clash-verge.generated.json --overwrite --invisible
+
+          if [ ! -s "data/${PROFILE_FILE}" ]; then
+            echo "Manual subscriptions did not produce data/${PROFILE_FILE}."
+            exit 1
+          fi
+
+      - name: Generate Clash profile from collected sources
+        if: steps.mode.outputs.mode != 'manual'
         shell: bash
         run: |
           base_args=(--all --targets clash --num 64 --delay 5000 --pages "${{ steps.pages.outputs.pages }}")
@@ -149,7 +263,7 @@ jobs:
           fi
 
           if [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; then
-            echo "Failed to generate data/${PROFILE_FILE}."
+            echo "Failed to generate data/${PROFILE_FILE}. Provide CLASH_SUBSCRIPTIONS for stable long-term use."
             exit 1
           fi
 

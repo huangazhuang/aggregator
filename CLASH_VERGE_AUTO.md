@@ -12,23 +12,54 @@ https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/cla
 
 Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址即可。建议把更新间隔设为 360 分钟或 720 分钟。
 
+## 推荐配置
+
+要长期可用，建议使用你自己的稳定订阅源，而不是只依赖项目自动注册免费站点。
+
+到仓库 `Settings` -> `Secrets and variables` -> `Actions` -> `Secrets` 添加：
+
+- `CLASH_SUBSCRIPTIONS`：一行一个订阅 URL，可以放多个。
+
+也可以添加：
+
+- `CLASH_SUBSCRIPTION_URL`：一个远程文本文件 URL，文件中一行一个订阅 URL。
+- `CHECKIN_CONFIG_JSON`：可选，用于机场每日签到保流量。
+
+`CHECKIN_CONFIG_JSON` 示例：
+
+```json
+{
+  "domains": [
+    {
+      "domain": "https://example.com",
+      "param": {
+        "email": "name@example.com",
+        "passwd": "password",
+        "login": "/auth/login",
+        "checkin": "/user/checkin"
+      }
+    }
+  ]
+}
+```
+
 ## 首次运行
 
 1. 打开仓库的 `Actions` 页面。
 2. 如果 GitHub 提示 fork 仓库的 workflows 未启用，先点击启用。
 3. 选择 `Clash Verge Auto`。
 4. 点击 `Run workflow`。
-5. `mode` 选 `collect`，`alive_check` 首次建议选 `false`，`pages` 保持 `5`。
-6. 等待运行完成后，再导入上面的订阅地址。
-
-如果想优先过滤可用节点，后续可以手动再跑一次：`mode=refresh`，`alive_check=true`。
+5. 如果已经配置 `CLASH_SUBSCRIPTIONS`，`mode` 选 `auto` 即可。
+6. `alive_check` 首次建议选 `false`，成功生成后可以再手动跑一次 `alive_check=true`。
+7. 等待运行完成后，再导入上面的订阅地址。
 
 ## 自动运行策略
 
 - 每 6 小时自动刷新已有订阅。
 - 每周一 08:47（Asia/Shanghai）自动重新收集来源。
+- 每天 10:45（Asia/Shanghai）自动执行签到；只有配置 `CHECKIN_CONFIG_JSON` 时才会实际签到。
 - 每次运行都会更新 `clash-verge-output` 分支的 `last-run.txt`，用于保活 Actions 和确认最近运行时间。
-- 默认收集前 5 页来源；可在仓库 `Settings` -> `Secrets and variables` -> `Actions` -> `Variables` 里设置 `COLLECT_PAGES`，范围 1 到 30。
+- 没有 `CLASH_SUBSCRIPTIONS` 时，会回退到项目自带的免费站点收集；这个方式不保证每次都有可用节点。
 
 ## 输出分支
 

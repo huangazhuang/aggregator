@@ -4,6 +4,9 @@ on:
     - cron: "45 02 * * *"
   workflow_dispatch:
 
+env:
+  CHECKIN_CONFIG_JSON: ${{ secrets.CHECKIN_CONFIG_JSON }}
+
 jobs:
   sync_with_upstream:
     runs-on: ubuntu-latest
@@ -23,6 +26,12 @@ jobs:
 
       - name: Run Checkin Script
         run: |
+          if [ -z "$CHECKIN_CONFIG_JSON" ]; then
+            echo "CHECKIN_CONFIG_JSON is empty; skip traffic checkin."
+            exit 0
+          fi
+
+          printf '%s' "$CHECKIN_CONFIG_JSON" > ./.github/actions/checkin/config.json
           python ./.github/actions/checkin/universal.py || echo "Checkin script failed"
 
       - name: Record Timestamp
