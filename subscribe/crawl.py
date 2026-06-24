@@ -5,6 +5,7 @@
 
 import base64
 import gzip
+import html
 import importlib
 import itertools
 import json
@@ -530,6 +531,16 @@ def crawl_google(
         params["start"] = start
         content = re.sub(r"\\\\n", "", utils.http_get(url=url, params=params))
         content = re.sub(r"\?token\\\\u003d", "?token=", content, flags=re.I)
+        fallback = html.unescape(content).replace("\\u003d", "=").replace("\\/", "/")
+        collections.update(
+            extract_subscribes(
+                content=fallback,
+                push_to=push_to,
+                exclude=exclude,
+                source=Origin.GOOGLE.name,
+            )
+        )
+
         regex = r'https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/?(?:<em(?:\s+)?class="qkunPe">/?)?api/v1/client/subscribe\?token(?:</em>)?=[a-zA-Z0-9]{16,32}'
         subscribes = re.findall(regex, content)
         for s in subscribes:
@@ -597,6 +608,16 @@ def crawl_yandex(
         if not content:
             logger.error(f"[YandexCrawl] cannot get content from page: {page}")
             continue
+
+        fallback = html.unescape(content).replace("<b>", "").replace("</b>", "")
+        collections.update(
+            extract_subscribes(
+                content=fallback,
+                push_to=push_to,
+                exclude=exclude,
+                source=Origin.YANDEX.name,
+            )
+        )
 
         groups = re.findall(r"<li class=\"serp-item\s+serp-item_card\s?\".*?>([\s\S]*?)</li>", content)
         if not groups:
@@ -926,11 +947,36 @@ def extract_twitter_cookies(retry: int = 2) -> str:
     return cookies
 
 
+def activate_twitter_guest_token() -> str:
+    headers = {
+        "User-Agent": utils.USER_AGENT,
+        "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        request = urllib.request.Request(
+            url="https://api.twitter.com/1.1/guest/activate.json",
+            data=b"",
+            headers=headers,
+            method="POST",
+        )
+        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+        if not response or response.getcode() != 200:
+            return ""
+
+        return json.loads(response.read()).get("guest_token", "")
+    except:
+        return ""
+
+
 def get_guest_token() -> str:
     cookies = extract_twitter_cookies(retry=3)
     if not cookies:
-        logger.error(f"[TwitterCrawl] cannot extract Twitter cookies")
-        return ""
+        guest_token = activate_twitter_guest_token()
+        if not guest_token:
+            logger.error(f"[TwitterCrawl] cannot extract Twitter cookies")
+        return guest_token
 
     headers = {
         "User-Agent": utils.USER_AGENT,
@@ -942,7 +988,7 @@ def get_guest_token() -> str:
         return ""
 
     matcher = re.findall("gt=([0-9]{19})", content, flags=re.I)
-    return matcher[0] if matcher else ""
+    return matcher[0] if matcher else activate_twitter_guest_token()
 
 
 def username_to_id(username: str, headers: dict) -> str:

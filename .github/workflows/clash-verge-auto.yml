@@ -474,7 +474,7 @@ jobs:
           mkdir -p public
           cp "data/${PROFILE_FILE}" "public/${PROFILE_FILE}"
 
-          for name in subscribes.txt domains.txt valid-domains.txt; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
             if [ -f "data/${name}" ]; then
               cp "data/${name}" "public/${name}"
             fi
@@ -482,8 +482,21 @@ jobs:
 
           run_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}/${PROFILE_FILE}"
+          proxy_count="$(python - <<'PY'
+          import os
+          import yaml
+
+          filename = os.path.join("data", os.environ.get("PROFILE_FILE", "clash.yaml"))
+          try:
+              with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+                  data = yaml.load(f, Loader=yaml.SafeLoader) or {}
+              print(len(data.get("proxies", [])))
+          except Exception:
+              print(0)
+          PY
+          )"
           printf "%s\n" "${run_at}" > public/last-run.txt
-          printf '{"run_at":"%s","mode":"%s","profile_url":"%s"}\n' "${run_at}" "${{ steps.mode.outputs.mode }}" "${url}" > public/status.json
+          printf '{"run_at":"%s","mode":"%s","alive_check":"%s","proxy_count":%s,"profile_url":"%s"}\n' "${run_at}" "${{ steps.mode.outputs.mode }}" "${REQUESTED_ALIVE_CHECK}" "${proxy_count}" "${url}" > public/status.json
           cat > public/README.md <<EOF
           # Clash Verge Auto Profile
 
@@ -516,7 +529,7 @@ jobs:
           cp public/last-run.txt "${publish_dir}/last-run.txt"
           cp public/status.json "${publish_dir}/status.json"
 
-          for name in subscribes.txt domains.txt valid-domains.txt; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
             if [ -f "public/${name}" ]; then
               cp "public/${name}" "${publish_dir}/${name}"
             fi
@@ -524,7 +537,7 @@ jobs:
 
           cd "${publish_dir}"
           git add README.md "${PROFILE_FILE}" last-run.txt status.json
-          for name in subscribes.txt domains.txt valid-domains.txt; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
             if [ -f "${name}" ]; then
               git add "${name}"
             fi
