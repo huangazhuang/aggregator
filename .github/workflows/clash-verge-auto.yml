@@ -25,6 +25,11 @@ on:
         options:
           - "true"
           - "false"
+      pages:
+        description: "Max source pages to scan when collecting."
+        required: true
+        default: "5"
+        type: string
 
 permissions:
   contents: write
@@ -39,12 +44,13 @@ env:
   PROFILE_FILE: clash.yaml
   REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
   REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
+  REQUESTED_PAGES: ${{ github.event.inputs.pages || vars.COLLECT_PAGES || '5' }}
   SCHEDULE_NAME: ${{ github.event.schedule || '' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -95,11 +101,28 @@ jobs:
           echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
           echo "Selected mode: ${mode}"
 
+      - name: Normalize collection pages
+        id: pages
+        shell: bash
+        run: |
+          pages="${REQUESTED_PAGES}"
+          if ! [[ "${pages}" =~ ^[0-9]+$ ]]; then
+            pages="5"
+          fi
+          if [ "${pages}" -lt 1 ]; then
+            pages="1"
+          fi
+          if [ "${pages}" -gt 30 ]; then
+            pages="30"
+          fi
+          echo "pages=${pages}" >> "${GITHUB_OUTPUT}"
+          echo "Collection pages: ${pages}"
+
       - name: Generate Clash profile
         shell: bash
         run: |
-          base_args=(--all --targets clash --num 64 --delay 5000)
-          fallback_args=(--all --targets clash --num 64 --delay 5000 --skip --overwrite)
+          base_args=(--all --targets clash --num 64 --delay 5000 --pages "${{ steps.pages.outputs.pages }}")
+          fallback_args=(--all --targets clash --num 64 --delay 5000 --pages "${{ steps.pages.outputs.pages }}" --skip --overwrite)
 
           if [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
             base_args+=(--skip)
