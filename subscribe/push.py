@@ -395,7 +395,8 @@ class PushToLocal(PushTo):
 
         fileid = config.get("fileid", "")
         folderid = config.get("folderid", "")
-        filepath = os.path.abspath(os.path.join(folderid, fileid))
+        basedir = os.path.abspath(os.environ.get("LOCAL_BASEDIR", ""))
+        filepath = os.path.abspath(os.path.join(basedir, folderid, fileid))
         return f"{utils.FILEPATH_PROTOCAL}{filepath}"
 
 

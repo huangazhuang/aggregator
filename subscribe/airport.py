@@ -4,7 +4,6 @@
 # @Time    : 2022-07-15
 
 import base64
-import concurrent.futures
 import json
 import os
 import random
@@ -461,51 +460,82 @@ class AirPort:
             return self.register(email=email, password=password, invite_code=invite_code, retry=retry)
         else:
             only_gmail = True if rr.whitelist and rr.verify else False
+            attempts = 3 if only_gmail else 5
+            excluded_mailboxes = []
 
-            try:
-                mailbox = mailtm.create_instance(only_gmail=only_gmail)
-                account = mailbox.get_account()
-                if not account:
-                    logger.error(f"cannot create temporary email account, site: {self.ref}")
-                    return "", ""
+            for _ in range(attempts):
+                mailbox, account = None, None
+                try:
+                    mailbox = mailtm.create_instance(only_gmail=only_gmail, exclude=excluded_mailboxes)
+                    provider = mailbox.__class__.__name__
+                    if provider not in excluded_mailboxes:
+                        excluded_mailboxes.append(provider)
 
-                message = None
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    account = mailbox.get_account()
+                    if not account:
+                        logger.error(f"cannot create temporary email account, site: {self.ref}, provider: {provider}")
+                        continue
+
+                    message, baseline = None, 0
                     starttime = time.time()
                     try:
-                        future = executor.submit(mailbox.monitor_account, account, 120, random.randint(1, 3))
+                        baseline = len(mailbox.get_messages(account=account))
                         success = self.sen_email_verify(email=account.address, retry=3)
                         if not success:
-                            executor.shutdown(wait=False)
-                            return "", ""
-                        message = future.result(timeout=120)
-                        logger.debug(
-                            f"email has been received, domain: {self.ref}\tcost: {int(time.time()- starttime)}s"
-                        )
-                    except concurrent.futures.TimeoutError:
+                            logger.error(
+                                f"send email verify failed, site: {self.ref}, provider: {provider}, email: {account.address}"
+                            )
+                            mailbox.delete_account(account=account)
+                            continue
+
+                        endtime = time.time() + 120
+                        sleep = random.randint(1, 3)
+                        while time.time() < endtime:
+                            messages = mailbox.get_messages(account=account)
+                            if len(messages) != baseline:
+                                message = messages[0] if messages else None
+                                break
+
+                            time.sleep(sleep)
+
+                        if message:
+                            logger.debug(
+                                f"email has been received, domain: {self.ref}\tcost: {int(time.time()- starttime)}s"
+                            )
+                        else:
+                            logger.error(
+                                f"receiving mail timeout, site: {self.ref}, provider: {provider}, address: {mailbox.api_address}, email: {account.address}"
+                            )
+                            mailbox.delete_account(account=account)
+                            continue
+                    except Exception:
                         logger.error(
-                            f"receiving mail timeout, site: {self.ref}, address: {mailbox.api_address}, email: {account.address}"
+                            f"receive email failed, site: {self.ref}, provider: {provider}, email: {account.address}"
                         )
+                        mailbox.delete_account(account=account)
+                        continue
 
-                if not message:
-                    return "", ""
+                    # 如果标准正则无法提取验证码则直接匹配数字
+                    mask = mailbox.extract_mask(message.text) or mailbox.extract_mask(message.text, r"[：\s]+([0-9]{6})")
+                    mailbox.delete_account(account=account)
+                    if not mask:
+                        logger.error(f"cannot fetch mask, url: {self.ref}, message: {message.text}")
+                        continue
 
-                # 如果标准正则无法提取验证码则直接匹配数字
-                mask = mailbox.extract_mask(message.text) or mailbox.extract_mask(message.text, r"[：\s]+([0-9]{6})")
-                mailbox.delete_account(account=account)
-                if not mask:
-                    logger.error(f"cannot fetch mask, url: {self.ref}, message: {message.text}")
-                    return "", ""
+                    cookies, authorization = self.register(
+                        email=account.address,
+                        password=account.password,
+                        email_code=mask,
+                        invite_code=invite_code,
+                        retry=retry,
+                    )
+                    if cookies or authorization or self.sub:
+                        return cookies, authorization
+                except:
+                    if mailbox and account:
+                        mailbox.delete_account(account=account)
 
-                return self.register(
-                    email=account.address,
-                    password=account.password,
-                    email_code=mask,
-                    invite_code=invite_code,
-                    retry=retry,
-                )
-            except:
-                return "", ""
+            return "", ""
 
     def parse(
         self,

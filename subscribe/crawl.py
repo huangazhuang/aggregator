@@ -248,7 +248,7 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
                 if not url.startswith(utils.FILEPATH_PROTOCAL):
                     content = utils.http_get(url=url)
                 else:
-                    file = url.sub[len(utils.FILEPATH_PROTOCAL) - 1 :]
+                    file = url[len(utils.FILEPATH_PROTOCAL) :]
                     if os.path.exists(file) and os.path.isfile(file):
                         with open(file, "r", encoding="UTF8") as f:
                             content = f.read()

@@ -74,6 +74,16 @@ def http_get(
     trace: bool = False,
     max_size=None,
 ) -> str:
+    if url.startswith(FILEPATH_PROTOCAL):
+        filepath = url[len(FILEPATH_PROTOCAL) :]
+        try:
+            if os.path.exists(filepath) and os.path.isfile(filepath):
+                with open(filepath, "r", encoding="utf8") as f:
+                    return f.read()
+        except:
+            logger.error(f"read local file failed, url={url}")
+        return ""
+
     if not isurl(url=url):
         logger.error(f"invalid url: {url}")
         return ""

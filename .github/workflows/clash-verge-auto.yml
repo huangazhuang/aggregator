@@ -20,7 +20,7 @@ on:
       alive_check:
         description: "Run Clash liveness checks before publishing."
         required: true
-        default: "false"
+        default: "true"
         type: choice
         options:
           - "true"
@@ -38,8 +38,9 @@ env:
   OUTPUT_BRANCH: clash-verge-output
   PROFILE_FILE: clash.yaml
   REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
-  REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'false' }}
+  REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
   SCHEDULE_NAME: ${{ github.event.schedule || '' }}
+  GH_TOKEN: ${{ github.token }}
   CLASH_SUBSCRIPTIONS_SECRET: ${{ secrets.CLASH_SUBSCRIPTIONS }}
   CLASH_SUBSCRIPTIONS_VAR: ${{ vars.CLASH_SUBSCRIPTIONS }}
   CLASH_SUBSCRIPTION_URL_SECRET: ${{ secrets.CLASH_SUBSCRIPTION_URL }}
@@ -215,8 +216,8 @@ jobs:
         if: steps.mode.outputs.mode != 'manual'
         shell: bash
         run: |
-          base_args=(--all --targets clash --num 64 --delay 5000)
-          fallback_args=(--all --targets clash --num 64 --delay 5000 --skip --overwrite)
+          base_args=(--all --targets clash --num 64 --delay 5000 --easygoing)
+          fallback_args=(--all --targets clash --num 64 --delay 5000 --easygoing --skip --overwrite)
 
           if [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
             base_args+=(--skip)
@@ -235,17 +236,237 @@ jobs:
           set -e
 
           if [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; then
-            echo "Primary generation did not produce ${PROFILE_FILE}; trying a no-alive-check rebuild."
-            set +e
-            python -u subscribe/collect.py "${fallback_args[@]}"
-            status=$?
-            set -e
+            if [ "${REQUESTED_ALIVE_CHECK}" = "true" ]; then
+              echo "Airport collection did not produce live nodes; continuing with crawler mode."
+            else
+              echo "Primary generation did not produce ${PROFILE_FILE}; trying a no-alive-check rebuild."
+              set +e
+              python -u subscribe/collect.py "${fallback_args[@]}"
+              status=$?
+              set -e
+            fi
           fi
 
-          if [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; then
-            echo "Failed to generate data/${PROFILE_FILE}. Provide CLASH_SUBSCRIPTIONS for stable long-term use."
-            exit 1
+          if [ -s "data/${PROFILE_FILE}" ]; then
+            cp "data/${PROFILE_FILE}" "data/collect-${PROFILE_FILE}"
+          else
+            echo "No airport collection profile available for merge."
           fi
+
+      - name: Build crawler config
+        if: steps.mode.outputs.mode != 'manual'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          config = {
+              "domains": [],
+              "crawl": {
+                  "enable": True,
+                  "threshold": 5,
+                  "singlelink": True,
+                  "persist": {
+                      "subs": "crawler-subs-store",
+                      "proxies": "crawler-proxies-store",
+                  },
+                  "config": {
+                      "rename": "",
+                      "include": "",
+                      "exclude": "",
+                      "push_to": ["crawler"],
+                      "ignorede": True,
+                      "liveness": True,
+                      "rate": 20.0,
+                      "secure": False,
+                  },
+                  "github": {
+                      "enable": True,
+                      "pages": 2,
+                      "push_to": ["crawler"],
+                      "exclude": "",
+                      "spams": [],
+                  },
+                  "google": {
+                      "enable": True,
+                      "limits": 300,
+                      "qdr": 7,
+                      "push_to": ["crawler"],
+                      "exclude": "",
+                      "notinurl": ["github.com", "githubusercontent.com"],
+                  },
+                  "yandex": {
+                      "enable": True,
+                      "pages": 5,
+                      "within": 7,
+                      "push_to": ["crawler"],
+                      "exclude": "",
+                      "notinurl": ["github.com", "githubusercontent.com"],
+                  },
+                  "telegram": {"enable": False, "users": {}},
+                  "twitter": {
+                      "enable": True,
+                      "users": {
+                          "v2raydailyupdate": {
+                              "enable": True,
+                              "num": 50,
+                              "include": "",
+                              "exclude": "",
+                              "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
+                              "push_to": ["crawler"],
+                          },
+                          "vpnfail": {
+                              "enable": True,
+                              "num": 50,
+                              "include": "",
+                              "exclude": "",
+                              "config": {"push_to": ["crawler"], "ignorede": True, "liveness": True, "rate": 20.0},
+                              "push_to": ["crawler"],
+                          },
+                      },
+                  },
+                  "repositories": [],
+                  "pages": [],
+                  "scripts": [
+                      {
+                          "enable": True,
+                          "script": "gitforks#collect_subs",
+                          "params": {
+                              "username": "wzdnzd",
+                              "repository": "aggregator",
+                              "sort": "newest",
+                              "persist": {"folderid": "", "fileid": "crawler-gitfork-subs.txt"},
+                              "config": {
+                                  "push_to": ["crawler"],
+                                  "ignorede": True,
+                                  "liveness": True,
+                                  "rate": 20.0,
+                              },
+                              "remain": 0,
+                              "life": 0,
+                          },
+                      },
+                      {
+                          "enable": True,
+                          "script": "v2rayse#fetch",
+                          "params": {
+                              "url": "https://v2rayse.com",
+                              "nopublic": True,
+                              "types": ["ss", "ssr", "vmess", "trojan", "tuic", "snell", "vless", "hysteria2", "hysteria", "http", "socks5", "anytls"],
+                              "persist": {
+                                  "proxies": {"folderid": "", "fileid": "crawler-v2rayse.txt"},
+                                  "modified": {"folderid": "", "fileid": "crawler-v2rayse-modified.json"},
+                              },
+                              "config": {
+                                  "push_to": ["crawler"],
+                                  "ignorede": True,
+                                  "liveness": True,
+                                  "rate": 20.0,
+                              },
+                          },
+                      },
+                  ],
+              },
+              "groups": {
+                  "crawler": {
+                      "emoji": True,
+                      "list": False,
+                      "targets": {"clash": "crawler-clash-local"},
+                  }
+              },
+              "storage": {
+                  "engine": "local",
+                  "items": {
+                      "crawler-clash-local": {"folderid": "", "fileid": "crawler-clash.yaml"},
+                      "crawler-subs-store": {"folderid": "", "fileid": "crawler-subs.json"},
+                      "crawler-proxies-store": {"folderid": "", "fileid": "crawler-proxies.txt"},
+                  },
+              },
+              "delay": 5000,
+          }
+
+          os.makedirs("subscribe/config", exist_ok=True)
+          with open("subscribe/config/clash-verge-crawler.generated.json", "w", encoding="utf-8") as f:
+              json.dump(config, f, ensure_ascii=False, indent=2)
+          PY
+
+      - name: Generate Clash profile from crawlers
+        if: steps.mode.outputs.mode != 'manual'
+        shell: bash
+        run: |
+          export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
+
+          if [ "${REQUESTED_ALIVE_CHECK}" = "true" ]; then
+            export SKIP_ALIVE_CHECK="false"
+          else
+            export SKIP_ALIVE_CHECK="true"
+          fi
+
+          set +e
+          python -u subscribe/process.py -s subscribe/config/clash-verge-crawler.generated.json --overwrite --flexible --invisible
+          status=$?
+          set -e
+
+          if [ "${status}" -ne 0 ]; then
+            echo "Crawler generation failed; keeping airport collection output."
+          elif [ ! -s "data/crawler-clash.yaml" ]; then
+            echo "Crawler generation produced no Clash profile; keeping airport collection output."
+          fi
+
+      - name: Merge collected and crawled profiles
+        if: steps.mode.outputs.mode != 'manual'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          sys.path.insert(0, os.path.abspath("subscribe"))
+
+          import yaml
+          import clash
+
+          output = os.path.join("data", os.environ.get("PROFILE_FILE", "clash.yaml"))
+          sources = [
+              os.path.join("data", "collect-clash.yaml"),
+              os.path.join("data", "crawler-clash.yaml"),
+          ]
+          proxies = []
+
+          for source in sources:
+              if not os.path.exists(source) or os.path.getsize(source) <= 0:
+                  continue
+
+              with open(source, "r", encoding="utf-8", errors="ignore") as f:
+                  try:
+                      data = yaml.load(f, Loader=yaml.SafeLoader) or {}
+                  except Exception:
+                      data = {}
+
+              items = data.get("proxies", [])
+              if isinstance(items, list):
+                  proxies.extend([p for p in items if isinstance(p, dict)])
+                  print(f"{source}: {len(items)} proxies")
+
+          if not proxies:
+              print("No proxies found to merge.")
+              sys.exit(1)
+
+          config = {
+              "mixed-port": 7890,
+              "external-controller": clash.EXTERNAL_CONTROLLER,
+              "mode": "Rule",
+              "log-level": "silent",
+          }
+          config.update(clash.filter_proxies(proxies))
+
+          with open(output, "w", encoding="utf-8") as f:
+              yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
+              yaml.dump(config, f, allow_unicode=True)
+
+          print(f"merged {len(proxies)} source proxies into {len(config.get('proxies', []))} unique proxies")
+          PY
 
       - name: Prepare publish files
         shell: bash

@@ -777,12 +777,92 @@ class Emailnator(TemporaryMail):
         return True
 
 
-def create_instance(only_gmail: bool = False) -> TemporaryMail:
+class TempMailLol(TemporaryMail):
+    """tempmail.lol v2 API wrapper."""
+
+    def __init__(self) -> None:
+        self.api_address = "https://api.tempmail.lol/v2"
+        self.headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": utils.USER_AGENT,
+        }
+
+    def get_domains_list(self) -> list:
+        return []
+
+    def get_account(self, retry: int = 3) -> Account:
+        if retry <= 0:
+            return None
+
+        try:
+            payload = json.dumps({"domain": None, "prefix": None}).encode("UTF8")
+            request = urllib.request.Request(
+                url=f"{self.api_address}/inbox/create",
+                data=payload,
+                headers=self.headers,
+                method="POST",
+            )
+            response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
+            if not response or response.getcode() not in [200, 201]:
+                return None
+
+            data = json.loads(response.read())
+            address = data.get("address", "")
+            token = data.get("token", "")
+            if not address or not token:
+                return None
+
+            return Account(address=address, id=token)
+        except:
+            return self.get_account(retry=retry - 1)
+
+    def get_messages(self, account: Account) -> list:
+        if not account or not account.id:
+            return []
+
+        url = f"{self.api_address}/inbox?token={urllib.parse.quote(account.id)}"
+        content = utils.http_get(url=url, headers=self.headers, retry=1)
+        if not content:
+            return []
+
+        try:
+            data = json.loads(content)
+            if data.get("expired", False):
+                return []
+
+            emails = data.get("emails") or []
+            messages = []
+            for email in emails:
+                text = "\n".join([email.get("body", ""), email.get("html", "")]).strip()
+                messages.append(
+                    Message(
+                        sender={email.get("from", ""): email.get("from", "")},
+                        to={email.get("to", ""): email.get("to", "")},
+                        subject=email.get("subject", ""),
+                        text=text,
+                        html=email.get("html", ""),
+                        data=email,
+                    )
+                )
+            return messages
+        except:
+            logger.error(f"[TempMailLolError] cannot get messages, address: {account.address}")
+            return []
+
+    def delete_account(self, account: Account) -> bool:
+        logger.info(f"[TempMailLolError] not support delete account, domain: {self.api_address}")
+        return True
+
+
+def create_instance(only_gmail: bool = False, exclude: list = None) -> TemporaryMail:
     if only_gmail:
         return Emailnator(onlygmail=True)
 
-    num = random.randint(0, 1)
-    if num == 1:
-        return MailTM()
-    else:
-        return MOAKT()
+    exclude = set(exclude or [])
+    providers = [TempMailLol, MailTM, MOAKT, SnapMail, LinShiEmail, RootSh]
+    providers = [p for p in providers if p.__name__ not in exclude]
+    if not providers:
+        providers = [TempMailLol, MailTM, MOAKT]
+
+    return random.choice(providers)()
