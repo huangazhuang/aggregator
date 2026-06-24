@@ -3,88 +3,26 @@ log-level: silent
 mixed-port: 7890
 mode: Rule
 proxies:
-- alterId: 0
-  cipher: auto
-  name: 🇩🇪 德国-FRANKFURT AM MAIN-3
-  port: 1050
-  server: spt.reata.ir
+- name: 直连KRTC-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 43.164.190.228
   skip-cert-verify: true
-  tls: false
-  type: vmess
+  type: anytls
   udp: true
-  uuid: b5b183b6-a4f0-41ad-a015-ba9f000ad7ed
-- cipher: chacha20-ietf-poly1305
-  name: 🇳🇱 荷兰-阿姆斯特丹-1
-  password: k1dBOmOB4oqi7Ump37a1bQ
-  port: 8080
-  server: 82.38.31.216
-  type: ss
-  udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-4
-  password: dada1203
-  port: 80
-  server: 47.129.143.46
-  type: ss
-  udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-2
-  password: dada1203
-  port: 80
-  server: 54.169.219.98
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇳🇱 荷兰-阿姆斯特丹-2
-  password: k1dBOmOB4oqi7Ump37a1bQ
-  port: 8080
-  server: 82.38.31.198
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇩🇪 德国-法兰克福-4
-  password: qSD_rJKu3Xazdb4ybvHupw
-  port: 1080
-  server: 153.76.112.64
-  type: ss
-  udp: true
-- auth: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
-  name: 🇸🇬 SG-001-FREE-1F
-  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
-  port: 8443
-  server: 13.229.46.36
+- name: 🇹🇭 泰国-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 117.18.127.213
   skip-cert-verify: true
-  type: hysteria2
+  type: anytls
   udp: true
-- auth: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
-  name: 🇸🇬 SG-001-FREE-1A
+- name: NODE1-VPN-1E
   password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
-  port: 8443
-  server: 13.229.46.36
-  skip-cert-verify: true
-  type: hysteria2
-  udp: true
-- auth: b1488858-38d1-4091-b966-71f4a2669715
-  name: 🇸🇬 SG-001-FREE-1D
-  password: b1488858-38d1-4091-b966-71f4a2669715
-  port: 8443
-  server: 13.229.46.36
-  skip-cert-verify: true
-  type: hysteria2
-  udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-1
-  password: dada1203
-  port: 80
-  server: 13.250.63.234
-  type: ss
-  udp: true
-- cipher: aes-256-cfb
-  name: 🇰🇷 韩国-GEUMCHEON-GU-1
-  password: qwerREWQ@@
-  port: 59490
-  server: 221.150.109.89
-  type: ss
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
 - auth: 57b11e69-1421-4a8d-a9f6-c25d530909f7
   name: 🇸🇬 SG-001-FREE-1B
@@ -94,12 +32,155 @@ proxies:
   skip-cert-verify: true
   type: hysteria2
   udp: true
-- cipher: aes-256-gcm
-  name: 🇸🇬 新加坡-新加坡-3
-  password: dada1203
-  port: 80
-  server: 54.169.246.92
-  type: ss
+- name: NODE1-VPN-1I
+  password: 08afbd6d-f899-46a3-ba50-86f83b485b39
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1A
+  password: 57b11e69-1421-4a8d-a9f6-c25d530909f7
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 直连SAK9-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 160.16.153.151
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- name: 直连JPTC-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 43.165.166.227
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1O
+  password: 1cb19d72-4df2-4f4c-8e6a-a23dd958554d
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1H
+  password: 914fa5e2-ff77-4667-9e5f-7f5506f5e25a
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇹🇼 台湾3-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: hinet3.geeknetwork.fun
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- auth: b1488858-38d1-4091-b966-71f4a2669715
+  name: 🇸🇬 SG-001-FREE-1D
+  password: b1488858-38d1-4091-b966-71f4a2669715
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- name: 🇹🇼 台湾4-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: hinet4.geeknetwork.fun
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- name: 🇺🇸 美国2
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 43.162.97.211
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1M
+  password: d061b5c8-5eec-492d-b6bd-8d04e4c8ea82
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- auth: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
+  name: 🇸🇬 SG-001-FREE-1F
+  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- name: 直连SAK10-GPT
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 153.121.38.210
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- name: 🇺🇸 美国
+  password: e52f56ca-1a79-415a-a424-a39c2e74f8b8
+  port: 11443
+  server: 43.162.91.94
+  skip-cert-verify: true
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1N
+  password: 2c01d94f-c255-45b9-a42b-72ce16674b15
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- auth: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
+  name: 🇸🇬 SG-001-FREE-1A
+  password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- name: NODE1-VPN-1D
+  password: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1C
+  password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1K
+  password: 54067e4d-9849-48ca-babd-836cb0bec98a
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1B
+  password: b1488858-38d1-4091-b966-71f4a2669715
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1J
+  password: bcf1f838-0323-4b1c-ade6-b3fc13feb519
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
 - auth: 6f1b9606-73ed-466c-bdad-e1ecf6cf88bd
   name: 🇸🇬 SG-001-FREE-1C
@@ -113,39 +194,63 @@ proxy-groups:
 - interval: 300
   name: automatic
   proxies:
-  - 🇸🇬 SG-001-FREE-1C
-  - 🇸🇬 新加坡-新加坡-4
-  - 🇩🇪 德国-法兰克福-4
-  - 🇰🇷 韩国-GEUMCHEON-GU-1
-  - 🇸🇬 SG-001-FREE-1B
+  - NODE1-VPN-1I
+  - 🇺🇸 美国2
+  - 🇹🇼 台湾4-GPT
+  - 🇹🇼 台湾3-GPT
+  - NODE1-VPN-1K
+  - 直连KRTC-GPT
   - 🇸🇬 SG-001-FREE-1A
-  - 🇸🇬 新加坡-新加坡-2
-  - 🇩🇪 德国-FRANKFURT AM MAIN-3
-  - 🇸🇬 新加坡-新加坡-1
-  - 🇳🇱 荷兰-阿姆斯特丹-1
+  - 直连SAK9-GPT
+  - 🇺🇸 美国
+  - 🇸🇬 SG-001-FREE-1C
+  - NODE1-VPN-1O
+  - NODE1-VPN-1J
+  - NODE1-VPN-1E
+  - NODE1-VPN-1A
+  - NODE1-VPN-1M
+  - 直连SAK10-GPT
+  - NODE1-VPN-1C
+  - 🇸🇬 SG-001-FREE-1B
   - 🇸🇬 SG-001-FREE-1D
-  - 🇳🇱 荷兰-阿姆斯特丹-2
+  - NODE1-VPN-1D
+  - 直连JPTC-GPT
+  - NODE1-VPN-1B
   - 🇸🇬 SG-001-FREE-1F
-  - 🇸🇬 新加坡-新加坡-3
+  - 🇹🇭 泰国-GPT
+  - NODE1-VPN-1N
+  - NODE1-VPN-1H
   type: url-test
   url: https://www.google.com/favicon.ico
 - name: 🌐 Proxy
   proxies:
   - automatic
-  - 🇸🇬 SG-001-FREE-1C
-  - 🇸🇬 新加坡-新加坡-4
-  - 🇩🇪 德国-法兰克福-4
-  - 🇰🇷 韩国-GEUMCHEON-GU-1
-  - 🇸🇬 SG-001-FREE-1B
+  - NODE1-VPN-1I
+  - 🇺🇸 美国2
+  - 🇹🇼 台湾4-GPT
+  - 🇹🇼 台湾3-GPT
+  - NODE1-VPN-1K
+  - 直连KRTC-GPT
   - 🇸🇬 SG-001-FREE-1A
-  - 🇸🇬 新加坡-新加坡-2
-  - 🇩🇪 德国-FRANKFURT AM MAIN-3
-  - 🇸🇬 新加坡-新加坡-1
-  - 🇳🇱 荷兰-阿姆斯特丹-1
+  - 直连SAK9-GPT
+  - 🇺🇸 美国
+  - 🇸🇬 SG-001-FREE-1C
+  - NODE1-VPN-1O
+  - NODE1-VPN-1J
+  - NODE1-VPN-1E
+  - NODE1-VPN-1A
+  - NODE1-VPN-1M
+  - 直连SAK10-GPT
+  - NODE1-VPN-1C
+  - 🇸🇬 SG-001-FREE-1B
   - 🇸🇬 SG-001-FREE-1D
-  - 🇳🇱 荷兰-阿姆斯特丹-2
+  - NODE1-VPN-1D
+  - 直连JPTC-GPT
+  - NODE1-VPN-1B
   - 🇸🇬 SG-001-FREE-1F
-  - 🇸🇬 新加坡-新加坡-3
+  - 🇹🇭 泰国-GPT
+  - NODE1-VPN-1N
+  - NODE1-VPN-1H
   type: select
 rules:
 - MATCH,🌐 Proxy
