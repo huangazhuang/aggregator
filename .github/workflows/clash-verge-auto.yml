@@ -114,11 +114,14 @@ jobs:
 
           urls = []
           seen = set()
-          for url in re.findall(r"https?://[^\s'\"<>]+", raw):
-              url = url.strip().rstrip(",;)"])
-              if url and url not in seen:
-                  urls.append(url)
-                  seen.add(url)
+          for line in raw.replace("\r", "\n").split("\n"):
+              for part in re.split(r"[\s,]+", line):
+                  url = part.strip().strip("'\"<>").rstrip(",;)]")
+                  if not url.startswith(("http://", "https://")):
+                      continue
+                  if url not in seen:
+                      urls.append(url)
+                      seen.add(url)
 
           if not urls:
               print("manual=false")
