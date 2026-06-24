@@ -91,5 +91,4 @@ https://vps.bluexray.net/api/v1/client/subscribe?token=82cf07cf19d8d433bf16eecd7
 https://vps.bluexray.net/api/v1/client/subscribe?token=ce4e9dc6fc26873d9516cc4e90d782d1
 https://vps.bluexray.net/api/v1/client/subscribe?token=db12685b33b15d4b5f39d15fbe84787b
 https://vps.bluexray.net/api/v1/client/subscribe?token=e17a661c1a000cedfdfcb8a1a640598c
-https://www.cloudaddy.top/api/v1/client/subscribe?token=b021895388014c98259ec9c51e7ffd5a
 https://www.louwangzhiyu.org/api/v1/client/subscribe?token=0d896743c3491615e4426cf05bda9389
