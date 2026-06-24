@@ -5,71 +5,91 @@ mode: Rule
 log-level: info
 external-controller: 127.0.0.1:9090
 proxies:
-  - {name: 🇸🇬 SG-001-FREE-1C, server: 13.229.46.36, port: 8443, type: hysteria2, password: b1488858-38d1-4091-b966-71f4a2669715, auth: b1488858-38d1-4091-b966-71f4a2669715, skip-cert-verify: true, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1D, server: 13.229.46.36, port: 8443, type: hysteria2, password: 726696fc-5fd2-446b-b55c-8642516d22a4, auth: 726696fc-5fd2-446b-b55c-8642516d22a4, skip-cert-verify: true, udp: true}
   - {name: NODE1-VPN-1J, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: bcf1f838-0323-4b1c-ade6-b3fc13feb519, skip-cert-verify: false, udp: true}
-  - {name: NODE1-VPN-1E, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9, skip-cert-verify: false, udp: true}
-  - {name: NODE1-VPN-1L, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 1cb19d72-4df2-4f4c-8e6a-a23dd958554d, skip-cert-verify: false, udp: true}
-  - {name: NODE1-VPN-1C, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be, skip-cert-verify: false, udp: true}
   - {name: NODE1-VPN-1B, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 726696fc-5fd2-446b-b55c-8642516d22a4, skip-cert-verify: false, udp: true}
-  - {name: NODE1-VPN-1I, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 08afbd6d-f899-46a3-ba50-86f83b485b39, skip-cert-verify: false, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1F, server: 13.229.46.36, port: 8443, type: hysteria2, password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be, auth: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be, skip-cert-verify: true, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1B, server: 13.229.46.36, port: 8443, type: hysteria2, password: 726696fc-5fd2-446b-b55c-8642516d22a4, auth: 726696fc-5fd2-446b-b55c-8642516d22a4, skip-cert-verify: true, udp: true}
-  - {name: NODE1-VPN-1A, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: b1488858-38d1-4091-b966-71f4a2669715, skip-cert-verify: false, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1A, server: 13.229.46.36, port: 8443, type: hysteria2, password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9, auth: 29ef16f1-3e26-4894-9864-8ba2558f5cd9, skip-cert-verify: true, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1D, server: 13.229.46.36, port: 8443, type: hysteria2, password: 57b11e69-1421-4a8d-a9f6-c25d530909f7, auth: 57b11e69-1421-4a8d-a9f6-c25d530909f7, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1O, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: d061b5c8-5eec-492d-b6bd-8d04e4c8ea82, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1P, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 1cb19d72-4df2-4f4c-8e6a-a23dd958554d, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1A, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1M, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: cf437985-e674-427d-88f1-b1aaa933b85c, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1F, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 6ed9d270-84a8-4fb4-a681-b70a91b51923, skip-cert-verify: false, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1B, server: 13.229.46.36, port: 8443, type: hysteria2, password: 29ef16f1-3e26-4894-9864-8ba2558f5cd9, auth: 29ef16f1-3e26-4894-9864-8ba2558f5cd9, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1C, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be, skip-cert-verify: false, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1E, server: 13.229.46.36, port: 8443, type: hysteria2, password: 6ed9d270-84a8-4fb4-a681-b70a91b51923, auth: 6ed9d270-84a8-4fb4-a681-b70a91b51923, skip-cert-verify: true, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1F, server: 13.229.46.36, port: 8443, type: hysteria2, password: 57b11e69-1421-4a8d-a9f6-c25d530909f7, auth: 57b11e69-1421-4a8d-a9f6-c25d530909f7, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1K, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 08afbd6d-f899-46a3-ba50-86f83b485b39, skip-cert-verify: false, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1C, server: 13.229.46.36, port: 8443, type: hysteria2, password: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be, auth: 7b5ac32f-a9fb-435f-8acc-d150d8dbd3be, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1E, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 57b11e69-1421-4a8d-a9f6-c25d530909f7, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1L, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 4dc3ba52-4474-43d2-b8b4-1fb4ffbb620b, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1I, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 50037aca-1ee1-4750-9438-93fe5e380642, skip-cert-verify: false, udp: true}
 proxy-groups:
   - name: 🔰 节点选择
     type: select
     proxies:
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: ♻️ 自动选择
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 300
     proxies:
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: 🎥 NETFLIX
     type: select
     proxies:
       - 🔰 节点选择
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: ⛔️ 广告拦截
     type: select
     proxies:
@@ -88,18 +108,23 @@ proxy-groups:
       - 🔰 节点选择
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: 🌏 国内媒体
     type: select
     proxies:
@@ -110,53 +135,68 @@ proxy-groups:
     proxies:
       - 🎯 全球直连
       - 🔰 节点选择
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: 📲 电报信息
     type: select
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: 🍎 苹果服务
     type: select
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
       - ♻️ 自动选择
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
   - name: 🎯 全球直连
     type: select
     proxies:
@@ -172,18 +212,23 @@ proxy-groups:
       - 🔰 节点选择
       - 🎯 全球直连
       - ♻️ 自动选择
-      - 🇸🇬 SG-001-FREE-1C
+      - 🇸🇬 SG-001-FREE-1D
       - NODE1-VPN-1J
+      - NODE1-VPN-1B
+      - NODE1-VPN-1O
+      - NODE1-VPN-1P
+      - NODE1-VPN-1A
+      - NODE1-VPN-1M
+      - NODE1-VPN-1F
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1C
+      - 🇸🇬 SG-001-FREE-1E
+      - 🇸🇬 SG-001-FREE-1F
+      - NODE1-VPN-1K
+      - 🇸🇬 SG-001-FREE-1C
       - NODE1-VPN-1E
       - NODE1-VPN-1L
-      - NODE1-VPN-1C
-      - NODE1-VPN-1B
       - NODE1-VPN-1I
-      - 🇸🇬 SG-001-FREE-1F
-      - 🇸🇬 SG-001-FREE-1B
-      - NODE1-VPN-1A
-      - 🇸🇬 SG-001-FREE-1A
-      - 🇸🇬 SG-001-FREE-1D
 rules:
   - DOMAIN-SUFFIX,local,🎯 全球直连
   - IP-CIDR,192.168.0.0/16,🎯 全球直连,no-resolve
