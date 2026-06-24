@@ -1,0 +1,202 @@
+name: Clash Verge Auto
+
+on:
+  schedule:
+    # Refresh existing subscriptions every 6 hours.
+    - cron: "17 */6 * * *"
+    # Rebuild the source list every Monday 00:47 UTC / 08:47 Asia-Shanghai.
+    - cron: "47 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto chooses refresh normally and collect on the weekly run."
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - refresh
+          - collect
+      alive_check:
+        description: "Run Clash liveness checks before publishing."
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clash-verge-auto
+  cancel-in-progress: true
+
+env:
+  TZ: Asia/Shanghai
+  OUTPUT_BRANCH: clash-verge-output
+  PROFILE_FILE: clash.yaml
+  REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
+  REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
+  SCHEDULE_NAME: ${{ github.event.schedule || '' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          architecture: "x64"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip3 install -r requirements.txt
+
+      - name: Restore previous data
+        run: |
+          mkdir -p data
+          git fetch origin "${OUTPUT_BRANCH}:refs/remotes/origin/${OUTPUT_BRANCH}" --depth=1 || true
+
+          for name in subscribes.txt domains.txt valid-domains.txt; do
+            if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/${name}" 2>/dev/null; then
+              cp "/tmp/${name}" "data/${name}"
+              echo "Restored ${name} from ${OUTPUT_BRANCH}."
+            fi
+          done
+
+      - name: Choose run mode
+        id: mode
+        shell: bash
+        run: |
+          mode="${REQUESTED_MODE}"
+          if [ "${mode}" = "auto" ]; then
+            if [ "${SCHEDULE_NAME}" = "47 0 * * 1" ]; then
+              mode="collect"
+            else
+              mode="refresh"
+            fi
+          fi
+
+          if [ ! -s data/subscribes.txt ]; then
+            mode="collect"
+          fi
+
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+          echo "Selected mode: ${mode}"
+
+      - name: Generate Clash profile
+        shell: bash
+        run: |
+          base_args=(--all --targets clash --num 64 --delay 5000)
+          fallback_args=(--all --targets clash --num 64 --delay 5000 --skip --overwrite)
+
+          if [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
+            base_args+=(--skip)
+          fi
+
+          run_mode="${{ steps.mode.outputs.mode }}"
+          if [ "${run_mode}" = "refresh" ]; then
+            base_args+=(--refresh)
+          else
+            base_args+=(--overwrite)
+          fi
+
+          set +e
+          python -u subscribe/collect.py "${base_args[@]}"
+          status=$?
+          set -e
+
+          if [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; then
+            echo "Primary generation did not produce ${PROFILE_FILE}; trying a no-alive-check rebuild."
+            set +e
+            python -u subscribe/collect.py "${fallback_args[@]}"
+            status=$?
+            set -e
+          fi
+
+          if [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; then
+            echo "Failed to generate data/${PROFILE_FILE}."
+            exit 1
+          fi
+
+      - name: Prepare publish files
+        shell: bash
+        run: |
+          mkdir -p public
+          cp "data/${PROFILE_FILE}" "public/${PROFILE_FILE}"
+
+          for name in subscribes.txt domains.txt valid-domains.txt; do
+            if [ -f "data/${name}" ]; then
+              cp "data/${name}" "public/${name}"
+            fi
+          done
+
+          run_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}/${PROFILE_FILE}"
+          printf "%s\n" "${run_at}" > public/last-run.txt
+          printf '{"run_at":"%s","mode":"%s","profile_url":"%s"}\n' "${run_at}" "${{ steps.mode.outputs.mode }}" "${url}" > public/status.json
+          cat > public/README.md <<EOF
+          # Clash Verge Auto Profile
+
+          Subscription URL:
+
+          ${url}
+
+          Last run: ${run_at}
+          EOF
+
+      - name: Publish profile branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          publish_dir="$(mktemp -d)"
+          if git show-ref --verify --quiet "refs/remotes/origin/${OUTPUT_BRANCH}"; then
+            git worktree add -B "${OUTPUT_BRANCH}" "${publish_dir}" "origin/${OUTPUT_BRANCH}"
+          else
+            git worktree add --detach "${publish_dir}"
+            cd "${publish_dir}"
+            git switch --orphan "${OUTPUT_BRANCH}"
+            git reset
+            cd "${GITHUB_WORKSPACE}"
+          fi
+
+          cp public/README.md "${publish_dir}/README.md"
+          cp "public/${PROFILE_FILE}" "${publish_dir}/${PROFILE_FILE}"
+          cp public/last-run.txt "${publish_dir}/last-run.txt"
+          cp public/status.json "${publish_dir}/status.json"
+
+          for name in subscribes.txt domains.txt valid-domains.txt; do
+            if [ -f "public/${name}" ]; then
+              cp "public/${name}" "${publish_dir}/${name}"
+            fi
+          done
+
+          cd "${publish_dir}"
+          git add README.md "${PROFILE_FILE}" last-run.txt status.json
+          for name in subscribes.txt domains.txt valid-domains.txt; do
+            if [ -f "${name}" ]; then
+              git add "${name}"
+            fi
+          done
+          git commit -m "Update Clash Verge profile" --allow-empty
+          git push origin "HEAD:${OUTPUT_BRANCH}"
+
+      - name: Summary
+        shell: bash
+        run: |
+          url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}/${PROFILE_FILE}"
+          echo "### Clash Verge subscription" >> "${GITHUB_STEP_SUMMARY}"
+          echo "${url}" >> "${GITHUB_STEP_SUMMARY}"
