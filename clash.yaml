@@ -3,26 +3,27 @@ log-level: silent
 mixed-port: 7890
 mode: Rule
 proxies:
+- client-fingerprint: chrome
+  encryption: mlkem768x25519plus.native.0rtt.NQUgohqnA3eE9EVicLD6D1v7RxG2Wj-9Xn0RX4hoPEc
+  flow: xtls-rprx-vision
+  name: 🇯🇵 日本原生-01
+  network: tcp
+  port: 17582
+  reality-opts:
+    public-key: uulaeRaS324oQzATyX8HBEzO76aXMmlZ00rvOCEnfD0
+    short-id: ac89d110
+  server: yh1.pddwdf.store
+  servername: python.org
+  tls: true
+  type: vless
+  udp: true
+  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
 - cipher: 2022-blake3-aes-256-gcm
-  name: 🇯🇵 日本 4 原生IP
-  password: NDNjNmQ0MGNhYjdkZmUyYmYzZDg2YzcxMGM4NzU2NWM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 28485
+  name: 🇯🇵 日本 6 原生IP
+  password: NDNlYjM4YzA0Zjk4NGVlMGZjMDc3MmViNGZmOGRmZGY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 48973
   server: xgrr.sdnlv0.cn
   type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇪🇬 埃及 2
-  password: OThkZGFhYzE3ZDMzYjZhY2NiNTA0MGZlNDRjZDcwZTk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 56052
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1N
-  password: 0cd51aa3-d4d3-4354-8733-d1cab88a1675
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
   name: 烏克蘭 2
@@ -31,18 +32,133 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- auth: 69668271-1b64-4541-9905-18a5cb20d86e
-  name: 🇸🇬 SG-001-FREE-1E
-  password: 69668271-1b64-4541-9905-18a5cb20d86e
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: AG-NIR
+  network: tcp
+  port: 64295
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.a1.w76ew8ab.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: 7a44b0d7-eb8f-4de8-9f0c-556e29574e97
+- cipher: 2022-blake3-aes-256-gcm
+  name: 德國 2
+  password: YmVkMTY2MmNmZmZmYWY4YWZmZDYzNzQ1YTUyNDU5NTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 22455
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- alterId: 0
+  cipher: auto
+  name: 🇺🇸 美国-洛杉矶-3
+  port: 180
+  server: 82.198.246.37
+  skip-cert-verify: true
+  tls: false
+  type: vmess
+  udp: true
+  uuid: d13fc2f5-3e05-4795-81eb-44143a09e552
+- client-fingerprint: chrome
+  flow: xtls-rprx-vision
+  name: 🇹🇼 台灣 3 原生IP
+  network: tcp
+  port: 8080
+  reality-opts:
+    public-key: uiIkgjDc-zDF5koz0P7XkJnFTZitErljAKanKLCf2gQ
+    short-id: 6313ab3b
+  server: tt.pddwdf.store
+  servername: python.org
+  tls: true
+  type: vless
+  udp: true
+  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+- cipher: chacha20-ietf-poly1305
+  name: 🇹🇷 土耳其 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 33476
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇨🇭 瑞士 2
+  password: ODQ1OGY3YTZlYmZiY2YwM2RjZWRmZTM3ODE0ZTMxZmE=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 55144
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇺🇸 美國 6 原生IP
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 39723
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇹🇼 台灣 4
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 50971
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇸🇬 新加坡 6 原生IP
+  password: NWMyZWZhNjZlOWViYTU2MDVjZjcwNThlODA1YzZiMTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 20600
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇻🇳 越南 2
+  password: N2YxOTI4ODk3Y2M2MzkzM2QwMTcyNzNlZGQ1MjVhMmQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 58043
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 法國 2
+  password: MjUwNDlkODZmMzNiODIyNmJiYTE2OTdmMmFkMjJmMjQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 27064
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇺🇸 美國 8 原生IP
+  password: MmZmN2MxMGUwNTNmMWQ1YWJlMmEyNjc5MzUyMTFmOTA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 33144
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- auth: 62229f8b-f0fe-40c2-96a0-a8b2041274d8
+  name: 🇸🇬 SG-001-FREE-1C
+  password: 62229f8b-f0fe-40c2-96a0-a8b2041274d8
   port: 8443
   server: 13.229.46.36
   skip-cert-verify: true
   type: hysteria2
   udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇰🇷 韓國 3
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 44099
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇪🇬 埃及 2
+  password: OThkZGFhYzE3ZDMzYjZhY2NiNTA0MGZlNDRjZDcwZTk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 56052
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 冰島 2
+  password: ZDFjMWY1NzRhMmI5NGRjZTY0Y2M1YzgyMzE0YWI5Zjk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 36086
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇯🇵 日本 4 原生IP
+  password: NDNjNmQ0MGNhYjdkZmUyYmYzZDg2YzcxMGM4NzU2NWM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 28485
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
@@ -54,9 +170,44 @@ proxies:
   type: ss
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
-  name: 荷蘭 2
-  password: Y2I4MTc2ZTAzMWQ0YWY1N2QwYWZlYTBjOTBlYjg1ZGM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 14193
+  name: 🇹🇼 台灣 5 原生IP
+  password: NDk4NzI1ZTEwMTk3NGMyYTUxNjNkNTcwMjIxZTU0MzM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 42980
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇷🇺 俄羅斯 2 原生IP
+  password: Y2U1NDZkZjA1NDMzMDNkNDM0YmU0NTljYTYxODc5Yjg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 12615
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇯🇵 日本家宽 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 6057
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇲🇳 蒙古 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 34208
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇺🇸 美國 5
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 18008
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇺🇸 美国 10 原生IP
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 8053
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
@@ -67,25 +218,25 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇧🇷 巴西 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 11270
+- cipher: 2022-blake3-aes-256-gcm
+  name: 荷蘭 2
+  password: Y2I4MTc2ZTAzMWQ0YWY1N2QwYWZlYTBjOTBlYjg1ZGM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 14193
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- auth: cce5c77a-844a-4b57-897c-a161ed9bdda6
-  name: 🇸🇬 SG-001-FREE-1B
-  password: cce5c77a-844a-4b57-897c-a161ed9bdda6
-  port: 8443
-  server: 13.229.46.36
+- name: 🇮🇪 爱尔兰-都柏林-1
+  password: t1k169n5zmvvwn96r9ft
+  port: 57452
+  server: 146.70.90.195
   skip-cert-verify: true
-  type: hysteria2
+  sni: api-yandex.maps.ru
+  type: trojan
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
-  name: 澳大利亞 2
-  password: YTIyOTFhNGQ3YjEwZTU1NThiMGVlNTBmYWNiMDI1OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 15783
+  name: 🇭🇰 香港 6
+  password: NGQyZjBkNmJlMmNjNWIyMTU2NDY5MTgyNjU3YzgzNTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 14941
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
@@ -96,6 +247,132 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 菲律賓 2
+  password: ZTU4NGEyZTFiMmIzYzc2Njc5ODNkNzRlOGYwMmEyMmI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 38739
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇸🇬 新加坡 4
+  password: MTE4ODc5YzI3OTgxZDNlYzI3ZTM4MmE2NTg5NDI4YTg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 39368
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇧🇷 巴西 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 11270
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇯🇵 日本 5
+  password: YzdhNDhiYTY4YTc3YWEzMGJjNTUzNjc3MWY2Y2QwYjU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 47439
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇰🇷 韓國 3
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 44099
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 泰國 2
+  password: ODk4MTlkYjRhZGMwMWE1YzkwZWRiMGE1ZmY1MDI5OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 47286
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇭🇰 香港 4 原生IP
+  password: MDM5MWZjOTFlZmNiMzBkYzE2ZmRjNmNiYzhiZjg5OGI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 36137
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇮🇳 印度尼西亞 2
+  password: ZDI1Zjc0MDc2NDM2YTYzZjI2MDJkOWJhYzljMDFmMjA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 28659
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 澳大利亞 2
+  password: YTIyOTFhNGQ3YjEwZTU1NThiMGVlNTBmYWNiMDI1OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 15783
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇹🇼 台灣 6 原生IP
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 24868
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 波蘭 2
+  password: MGMwNWM0MTk1ODJiNDg1NzBiOGYxMzQ1ZjI5ODQxMzY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 42295
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 馬來西亞 2
+  password: YTc1ZjVhMTg3YTBmZGU0OGI2N2NkNTYxNzVmZDY2ZjE=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 44106
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 阿聯酋 2 原生IP
+  password: ZTNmODgyNmZkZTBlODA3YTdmMDc2NjFlM2VhMmYzYzU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 49831
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇨🇦 加拿大 2
+  password: Mjc3ZTk5OWIwOWU4MDdmNThhYWE5N2IxNzRkNWE1ZWY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 25916
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- client-fingerprint: chrome
+  flow: xtls-rprx-vision
+  name: 🇯🇵 日本家宽 1
+  network: tcp
+  port: 50687
+  reality-opts:
+    public-key: kc42NZMuiE8Mf0jjRGjW9UfMCRW-T6moLPjXVhdTR2U
+    short-id: 5c0da443
+  server: bl.xzcloudnode.sbs
+  servername: python.org
+  tls: true
+  type: vless
+  udp: true
+  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+- client-fingerprint: chrome
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港 1 原生IP
+  network: tcp
+  port: 36111
+  reality-opts:
+    public-key: bX15T5DsxifN-n4rkqK8_JraARzFh4gXlCpOOtdMBAk
+    short-id: b1bd33bd
+  server: hk2.pddwdf.store
+  servername: python.org
+  tls: true
+  type: vless
+  udp: true
+  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
 - client-fingerprint: chrome
   encryption: mlkem768x25519plus.native.0rtt.FXnt5tgwJ1qR3mJ002a9l-vHCHG9kRso7gIPNiqoTGc
   flow: xtls-rprx-vision
@@ -111,27 +388,6 @@ proxies:
   type: vless
   udp: true
   uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- cipher: chacha20-ietf-poly1305
-  name: 🇺🇸 美國 6 原生IP
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 39723
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇭🇰 香港 6
-  password: NGQyZjBkNmJlMmNjNWIyMTU2NDY5MTgyNjU3YzgzNTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 14941
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇺🇸 美國 8 原生IP
-  password: MmZmN2MxMGUwNTNmMWQ1YWJlMmEyNjc5MzUyMTFmOTA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 33144
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
 - client-fingerprint: chrome
   flow: xtls-rprx-vision
   name: 🇹🇼 台灣 2 原生IP
@@ -146,26 +402,35 @@ proxies:
   type: vless
   udp: true
   uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- name: NODE1-VPN-1B
-  password: 62229f8b-f0fe-40c2-96a0-a8b2041274d8
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇲🇳 蒙古 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 34208
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇮🇳 印度 2
+  password: MTNjZmM1MmJiYjVjNWQwOWJlYzMyNjQyNjE5YTM1MTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 43611
   server: xgrr.sdnlv0.cn
   type: ss
+  udp: true
+- auth: 69668271-1b64-4541-9905-18a5cb20d86e
+  name: 🇸🇬 SG-001-FREE-1A
+  password: 69668271-1b64-4541-9905-18a5cb20d86e
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
-  name: 🇭🇰 香港 4 原生IP
-  password: MDM5MWZjOTFlZmNiMzBkYzE2ZmRjNmNiYzhiZjg5OGI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 36137
+  name: 義大利 2
+  password: ZTRiZGRmZTJmZDhlZDk2MTU5ZDEzZTE3Yzc4NjI5M2E=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 46253
   server: xgrr.sdnlv0.cn
   type: ss
+  udp: true
+- auth: 2d9da0b8-500b-41a5-a698-ff5af97fe535
+  name: 🇸🇬 SG-001-FREE-1D
+  password: 2d9da0b8-500b-41a5-a698-ff5af97fe535
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
   udp: true
 - cipher: chacha20-ietf-poly1305
   name: 🇺🇸 美國 4 原生IP
@@ -174,454 +439,143 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇯🇵 日本 5
-  password: YzdhNDhiYTY4YTc3YWEzMGJjNTUzNjc3MWY2Y2QwYjU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 47439
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇻🇳 越南 2
-  password: N2YxOTI4ODk3Y2M2MzkzM2QwMTcyNzNlZGQ1MjVhMmQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 58043
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇮🇳 印度 2
-  password: MTNjZmM1MmJiYjVjNWQwOWJlYzMyNjQyNjE5YTM1MTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 43611
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1A
-  password: 69668271-1b64-4541-9905-18a5cb20d86e
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1G
-  password: e75ed3e2-a219-4919-af8b-b9fac459111c
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- client-fingerprint: chrome
-  flow: xtls-rprx-vision
-  name: 🇹🇼 台灣 1
-  network: tcp
-  port: 11309
-  reality-opts:
-    public-key: zlyUn3PhuPbPFfuh0fL74f9uKOXXTCNiTCNDEQzBik8
-    short-id: 6829946e
-  server: tw.pddwdf.store
-  servername: python.org
-  tls: true
-  type: vless
-  udp: true
-  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- cipher: 2022-blake3-aes-256-gcm
-  name: 義大利 2
-  password: ZTRiZGRmZTJmZDhlZDk2MTU5ZDEzZTE3Yzc4NjI5M2E=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 46253
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇹🇼 台灣 6 原生IP
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 24868
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇯🇵 日本家宽 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 6057
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- auth: c858d700-0307-45b7-80bb-3a1fb8a98377
-  name: 🇸🇬 SG-001-FREE-1D
-  password: c858d700-0307-45b7-80bb-3a1fb8a98377
-  port: 8443
-  server: 13.229.46.36
-  skip-cert-verify: true
-  type: hysteria2
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇨🇭 瑞士 2
-  password: ODQ1OGY3YTZlYmZiY2YwM2RjZWRmZTM3ODE0ZTMxZmE=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 55144
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- auth: 62229f8b-f0fe-40c2-96a0-a8b2041274d8
-  name: 🇸🇬 SG-001-FREE-1A
-  password: 62229f8b-f0fe-40c2-96a0-a8b2041274d8
-  port: 8443
-  server: 13.229.46.36
-  skip-cert-verify: true
-  type: hysteria2
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 冰島 2
-  password: ZDFjMWY1NzRhMmI5NGRjZTY0Y2M1YzgyMzE0YWI5Zjk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 36086
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇹🇼 台灣 4
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 50971
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 法國 2
-  password: MjUwNDlkODZmMzNiODIyNmJiYTE2OTdmMmFkMjJmMjQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 27064
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 阿聯酋 2 原生IP
-  password: ZTNmODgyNmZkZTBlODA3YTdmMDc2NjFlM2VhMmYzYzU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 49831
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇯🇵 日本 6 原生IP
-  password: NDNlYjM4YzA0Zjk4NGVlMGZjMDc3MmViNGZmOGRmZGY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 48973
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1J
-  password: a077aee5-ba2d-406b-897b-6d17551fd40f
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1E
-  password: 17dd50bd-c9f8-436e-b908-62c5605f87ab
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- client-fingerprint: chrome
-  flow: xtls-rprx-vision
-  name: 🇹🇼 台灣 3 原生IP
-  network: tcp
-  port: 8080
-  reality-opts:
-    public-key: uiIkgjDc-zDF5koz0P7XkJnFTZitErljAKanKLCf2gQ
-    short-id: 6313ab3b
-  server: tt.pddwdf.store
-  servername: python.org
-  tls: true
-  type: vless
-  udp: true
-  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇸🇬 新加坡 4
-  password: MTE4ODc5YzI3OTgxZDNlYzI3ZTM4MmE2NTg5NDI4YTg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 39368
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1I
-  password: 169c025d-278b-4c64-a872-23e9a1b457fc
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇹🇷 土耳其 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 33476
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 波蘭 2
-  password: MGMwNWM0MTk1ODJiNDg1NzBiOGYxMzQ1ZjI5ODQxMzY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 42295
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1M
-  password: 3228d217-788f-499b-b1fc-a75762fdc7a2
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1K
-  password: 4ae119e0-3628-4538-91bd-d216bfcd0288
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: NODE1-VPN-1C
-  password: c858d700-0307-45b7-80bb-3a1fb8a98377
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
 - auth: 17dd50bd-c9f8-436e-b908-62c5605f87ab
-  name: 🇸🇬 SG-001-FREE-1C
+  name: 🇸🇬 SG-001-FREE-1F
   password: 17dd50bd-c9f8-436e-b908-62c5605f87ab
   port: 8443
   server: 13.229.46.36
   skip-cert-verify: true
   type: hysteria2
   udp: true
-- name: NODE1-VPN-1L
-  password: af2f44a2-9e20-4380-bfd7-e16e168adddb
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇸🇬 新加坡 6 原生IP
-  password: NWMyZWZhNjZlOWViYTU2MDVjZjcwNThlODA1YzZiMTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 20600
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 德國 2
-  password: YmVkMTY2MmNmZmZmYWY4YWZmZDYzNzQ1YTUyNDU5NTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 22455
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇮🇳 印度尼西亞 2
-  password: ZDI1Zjc0MDc2NDM2YTYzZjI2MDJkOWJhYzljMDFmMjA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 28659
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇷🇺 俄羅斯 2 原生IP
-  password: Y2U1NDZkZjA1NDMzMDNkNDM0YmU0NTljYTYxODc5Yjg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 12615
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇹🇼 台灣 5 原生IP
-  password: NDk4NzI1ZTEwMTk3NGMyYTUxNjNkNTcwMjIxZTU0MzM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 42980
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1D
+- auth: cce5c77a-844a-4b57-897c-a161ed9bdda6
+  name: 🇸🇬 SG-001-FREE-1E
   password: cce5c77a-844a-4b57-897c-a161ed9bdda6
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 菲律賓 2
-  password: ZTU4NGEyZTFiMmIzYzc2Njc5ODNkNzRlOGYwMmEyMmI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 38739
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇺🇸 美国 10 原生IP
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 8053
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇨🇦 加拿大 2
-  password: Mjc3ZTk5OWIwOWU4MDdmNThhYWE5N2IxNzRkNWE1ZWY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 25916
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1H
-  password: d6f23bf6-5ca2-4609-bc6c-dac9f551c49e
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇺🇸 美國 5
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 18008
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 馬來西亞 2
-  password: YTc1ZjVhMTg3YTBmZGU0OGI2N2NkNTYxNzVmZDY2ZjE=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 44106
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 泰國 2
-  password: ODk4MTlkYjRhZGMwMWE1YzkwZWRiMGE1ZmY1MDI5OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 47286
-  server: xgrr.sdnlv0.cn
-  type: ss
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
   udp: true
 proxy-groups:
 - interval: 300
   name: automatic
   proxies:
-  - NODE1-VPN-1B
-  - 法國 2
-  - 義大利 2
-  - 🇷🇺 俄羅斯 2 原生IP
-  - 🇺🇸 美国 10 原生IP
-  - NODE1-VPN-1E
-  - 🇹🇼 台灣 3 原生IP
-  - 🇫🇷 英國 2
-  - 🇨🇭 瑞士 2
-  - NODE1-VPN-1L
-  - 馬來西亞 2
-  - 🇹🇼 台灣 4
-  - 🇸🇬 新加坡 4
-  - 🇸🇬 SG-001-FREE-1C
-  - NODE1-VPN-1N
-  - 🇹🇼 台灣 5 原生IP
-  - NODE1-VPN-1M
-  - 德國 2
-  - NODE1-VPN-1A
-  - 🇦🇷 阿根廷 2
-  - 🇯🇵 日本 6 原生IP
-  - 🇨🇦 加拿大 2
-  - 🇲🇳 蒙古 2
-  - 🇺🇸 美國 4 原生IP
-  - 🇹🇼 台灣 6 原生IP
-  - 泰國 2
-  - 🇹🇼 台灣 1
-  - 🇻🇳 越南 2
-  - 🇯🇵 日本家宽 2
-  - 冰島 2
-  - 🇹🇼 台灣 2 原生IP
-  - 🇯🇵 日本 4 原生IP
-  - 🇹🇷 土耳其 2
-  - 🇸🇬 新加坡 6 原生IP
-  - 🇺🇸 美國 5
-  - 🇸🇬 SG-001-FREE-1E
-  - NODE1-VPN-1K
-  - NODE1-VPN-1H
-  - 🇭🇰 香港 6
-  - 阿聯酋 2 原生IP
-  - 🇯🇵 日本 5
-  - 🇺🇸 美國 8 原生IP
-  - NODE1-VPN-1D
-  - 🇧🇷 巴西 2
-  - 🇰🇷 韓國 3
-  - 澳門 2
-  - 🇭🇰 香港 4 原生IP
-  - NODE1-VPN-1C
-  - 菲律賓 2
-  - 荷蘭 2
-  - 澳大利亞 2
-  - 🇸🇬 SG-001-FREE-1A
-  - NODE1-VPN-1I
-  - 🇯🇵 日本原生-02
-  - 波蘭 2
-  - 烏克蘭 2
-  - 🇮🇳 印度尼西亞 2
   - 🇮🇳 印度 2
-  - NODE1-VPN-1G
-  - 🇪🇬 埃及 2
+  - 🇺🇸 美国-洛杉矶-3
+  - 菲律賓 2
+  - 🇸🇬 新加坡 4
+  - 🇮🇳 印度尼西亞 2
+  - 🇺🇸 美國 8 原生IP
+  - 🇺🇸 美國 4 原生IP
+  - 德國 2
+  - 🇯🇵 日本家宽 1
+  - 🇦🇷 阿根廷 2
+  - 🇻🇳 越南 2
+  - 🇸🇬 SG-001-FREE-1E
+  - 🇺🇸 美國 5
+  - 法國 2
+  - 🇹🇼 台灣 6 原生IP
+  - 🇯🇵 日本 4 原生IP
+  - 荷蘭 2
+  - 🇧🇷 巴西 2
+  - 🇯🇵 日本家宽 2
+  - 烏克蘭 2
+  - 🇷🇺 俄羅斯 2 原生IP
+  - 🇯🇵 日本原生-02
+  - 🇹🇼 台灣 4
+  - 馬來西亞 2
+  - 義大利 2
+  - 🇨🇦 加拿大 2
+  - 🇭🇰 香港 1 原生IP
+  - 🇯🇵 日本 5
+  - 澳門 2
   - 🇺🇸 美國 6 原生IP
-  - NODE1-VPN-1J
+  - 🇲🇳 蒙古 2
+  - 冰島 2
+  - 🇸🇬 SG-001-FREE-1A
+  - 波蘭 2
+  - 🇹🇼 台灣 3 原生IP
+  - 阿聯酋 2 原生IP
+  - AG-NIR
+  - 🇮🇪 爱尔兰-都柏林-1
+  - 🇯🇵 日本原生-01
+  - 🇹🇷 土耳其 2
+  - 🇭🇰 香港 6
   - 🇸🇬 SG-001-FREE-1D
-  - 🇸🇬 SG-001-FREE-1B
+  - 🇸🇬 SG-001-FREE-1F
+  - 🇯🇵 日本 6 原生IP
+  - 🇸🇬 SG-001-FREE-1C
+  - 🇨🇭 瑞士 2
+  - 🇸🇬 新加坡 6 原生IP
+  - 🇫🇷 英國 2
+  - 🇹🇼 台灣 5 原生IP
+  - 澳大利亞 2
+  - 🇭🇰 香港 4 原生IP
+  - 🇰🇷 韓國 3
+  - 🇪🇬 埃及 2
+  - 🇹🇼 台灣 2 原生IP
+  - 泰國 2
+  - 🇺🇸 美国 10 原生IP
   type: url-test
   url: https://www.google.com/favicon.ico
 - name: 🌐 Proxy
   proxies:
   - automatic
-  - NODE1-VPN-1B
-  - 法國 2
-  - 義大利 2
-  - 🇷🇺 俄羅斯 2 原生IP
-  - 🇺🇸 美国 10 原生IP
-  - NODE1-VPN-1E
-  - 🇹🇼 台灣 3 原生IP
-  - 🇫🇷 英國 2
-  - 🇨🇭 瑞士 2
-  - NODE1-VPN-1L
-  - 馬來西亞 2
-  - 🇹🇼 台灣 4
-  - 🇸🇬 新加坡 4
-  - 🇸🇬 SG-001-FREE-1C
-  - NODE1-VPN-1N
-  - 🇹🇼 台灣 5 原生IP
-  - NODE1-VPN-1M
-  - 德國 2
-  - NODE1-VPN-1A
-  - 🇦🇷 阿根廷 2
-  - 🇯🇵 日本 6 原生IP
-  - 🇨🇦 加拿大 2
-  - 🇲🇳 蒙古 2
-  - 🇺🇸 美國 4 原生IP
-  - 🇹🇼 台灣 6 原生IP
-  - 泰國 2
-  - 🇹🇼 台灣 1
-  - 🇻🇳 越南 2
-  - 🇯🇵 日本家宽 2
-  - 冰島 2
-  - 🇹🇼 台灣 2 原生IP
-  - 🇯🇵 日本 4 原生IP
-  - 🇹🇷 土耳其 2
-  - 🇸🇬 新加坡 6 原生IP
-  - 🇺🇸 美國 5
-  - 🇸🇬 SG-001-FREE-1E
-  - NODE1-VPN-1K
-  - NODE1-VPN-1H
-  - 🇭🇰 香港 6
-  - 阿聯酋 2 原生IP
-  - 🇯🇵 日本 5
-  - 🇺🇸 美國 8 原生IP
-  - NODE1-VPN-1D
-  - 🇧🇷 巴西 2
-  - 🇰🇷 韓國 3
-  - 澳門 2
-  - 🇭🇰 香港 4 原生IP
-  - NODE1-VPN-1C
-  - 菲律賓 2
-  - 荷蘭 2
-  - 澳大利亞 2
-  - 🇸🇬 SG-001-FREE-1A
-  - NODE1-VPN-1I
-  - 🇯🇵 日本原生-02
-  - 波蘭 2
-  - 烏克蘭 2
-  - 🇮🇳 印度尼西亞 2
   - 🇮🇳 印度 2
-  - NODE1-VPN-1G
-  - 🇪🇬 埃及 2
+  - 🇺🇸 美国-洛杉矶-3
+  - 菲律賓 2
+  - 🇸🇬 新加坡 4
+  - 🇮🇳 印度尼西亞 2
+  - 🇺🇸 美國 8 原生IP
+  - 🇺🇸 美國 4 原生IP
+  - 德國 2
+  - 🇯🇵 日本家宽 1
+  - 🇦🇷 阿根廷 2
+  - 🇻🇳 越南 2
+  - 🇸🇬 SG-001-FREE-1E
+  - 🇺🇸 美國 5
+  - 法國 2
+  - 🇹🇼 台灣 6 原生IP
+  - 🇯🇵 日本 4 原生IP
+  - 荷蘭 2
+  - 🇧🇷 巴西 2
+  - 🇯🇵 日本家宽 2
+  - 烏克蘭 2
+  - 🇷🇺 俄羅斯 2 原生IP
+  - 🇯🇵 日本原生-02
+  - 🇹🇼 台灣 4
+  - 馬來西亞 2
+  - 義大利 2
+  - 🇨🇦 加拿大 2
+  - 🇭🇰 香港 1 原生IP
+  - 🇯🇵 日本 5
+  - 澳門 2
   - 🇺🇸 美國 6 原生IP
-  - NODE1-VPN-1J
+  - 🇲🇳 蒙古 2
+  - 冰島 2
+  - 🇸🇬 SG-001-FREE-1A
+  - 波蘭 2
+  - 🇹🇼 台灣 3 原生IP
+  - 阿聯酋 2 原生IP
+  - AG-NIR
+  - 🇮🇪 爱尔兰-都柏林-1
+  - 🇯🇵 日本原生-01
+  - 🇹🇷 土耳其 2
+  - 🇭🇰 香港 6
   - 🇸🇬 SG-001-FREE-1D
-  - 🇸🇬 SG-001-FREE-1B
+  - 🇸🇬 SG-001-FREE-1F
+  - 🇯🇵 日本 6 原生IP
+  - 🇸🇬 SG-001-FREE-1C
+  - 🇨🇭 瑞士 2
+  - 🇸🇬 新加坡 6 原生IP
+  - 🇫🇷 英國 2
+  - 🇹🇼 台灣 5 原生IP
+  - 澳大利亞 2
+  - 🇭🇰 香港 4 原生IP
+  - 🇰🇷 韓國 3
+  - 🇪🇬 埃及 2
+  - 🇹🇼 台灣 2 原生IP
+  - 泰國 2
+  - 🇺🇸 美国 10 原生IP
   type: select
 rules:
 - MATCH,🌐 Proxy
