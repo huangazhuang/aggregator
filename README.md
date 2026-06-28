@@ -4,4 +4,4 @@ Subscription URL:
 
 https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
 
-Last run: 2026-06-27T19:59:53Z
+Last run: 2026-06-28T05:00:49Z

@@ -5,47 +5,211 @@ mode: Rule
 log-level: info
 external-controller: 127.0.0.1:9090
 proxies:
-  - {name: 🇹🇼 台灣 3 原生IP, server: tt.pddwdf.store, port: 8080, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: uiIkgjDc-zDF5koz0P7XkJnFTZitErljAKanKLCf2gQ, short-id: "6313ab3b" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
-  - {name: 🇭🇰 香港 1 原生IP, server: hk2.pddwdf.store, port: 36111, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: bX15T5DsxifN-n4rkqK8_JraARzFh4gXlCpOOtdMBAk, short-id: "b1bd33bd" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
-  - {name: 🇯🇵 日本原生-02, server: y2.pddwdf.store, port: 14582, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, encryption: mlkem768x25519plus.native.0rtt.FXnt5tgwJ1qR3mJ002a9l-vHCHG9kRso7gIPNiqoTGc, reality-opts: {public-key: uTwrpjTqNcBYFK07h8ToidnmS2I03t4EMPR8COAPpiQ, short-id: "03813ea2" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
+  - {name: 🇹🇼 台灣 6 原生IP, server: xgrr.sdnlv0.cn, port: 24868, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇺🇸 美国 10 原生IP, server: xgrr.sdnlv0.cn, port: 8053, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇲🇳 蒙古 2, server: xgrr.sdnlv0.cn, port: 34208, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇹🇼 台灣 4, server: xgrr.sdnlv0.cn, port: 50971, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 冰島 2, server: xgrr.sdnlv0.cn, port: 36086, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ZDFjMWY1NzRhMmI5NGRjZTY0Y2M1YzgyMzE0YWI5Zjk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇷🇺 俄羅斯 2 原生IP, server: xgrr.sdnlv0.cn, port: 12615, type: ss, cipher: 2022-blake3-aes-256-gcm, password: Y2U1NDZkZjA1NDMzMDNkNDM0YmU0NTljYTYxODc5Yjg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇺🇸 美國 5, server: xgrr.sdnlv0.cn, port: 18008, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
   - {name: 🇯🇵 日本原生-01, server: yh1.pddwdf.store, port: 17582, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, encryption: mlkem768x25519plus.native.0rtt.NQUgohqnA3eE9EVicLD6D1v7RxG2Wj-9Xn0RX4hoPEc, reality-opts: {public-key: uulaeRaS324oQzATyX8HBEzO76aXMmlZ00rvOCEnfD0, short-id: "ac89d110" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
-  - {name: 🇹🇼 台灣 1, server: tw.pddwdf.store, port: 11309, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: zlyUn3PhuPbPFfuh0fL74f9uKOXXTCNiTCNDEQzBik8, short-id: "6829946e" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
+  - {name: 🇯🇵 日本原生-02, server: y2.pddwdf.store, port: 14582, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, encryption: mlkem768x25519plus.native.0rtt.FXnt5tgwJ1qR3mJ002a9l-vHCHG9kRso7gIPNiqoTGc, reality-opts: {public-key: uTwrpjTqNcBYFK07h8ToidnmS2I03t4EMPR8COAPpiQ, short-id: "03813ea2" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
+  - {name: 荷蘭 2, server: xgrr.sdnlv0.cn, port: 14193, type: ss, cipher: 2022-blake3-aes-256-gcm, password: Y2I4MTc2ZTAzMWQ0YWY1N2QwYWZlYTBjOTBlYjg1ZGM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 德國 2, server: xgrr.sdnlv0.cn, port: 22455, type: ss, cipher: 2022-blake3-aes-256-gcm, password: YmVkMTY2MmNmZmZmYWY4YWZmZDYzNzQ1YTUyNDU5NTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 馬來西亞 2, server: xgrr.sdnlv0.cn, port: 44106, type: ss, cipher: 2022-blake3-aes-256-gcm, password: YTc1ZjVhMTg3YTBmZGU0OGI2N2NkNTYxNzVmZDY2ZjE=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇧🇷 巴西 2, server: xgrr.sdnlv0.cn, port: 11270, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 義大利 2, server: xgrr.sdnlv0.cn, port: 46253, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ZTRiZGRmZTJmZDhlZDk2MTU5ZDEzZTE3Yzc4NjI5M2E=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇹🇼 台灣 3 原生IP, server: tt.pddwdf.store, port: 8080, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: uiIkgjDc-zDF5koz0P7XkJnFTZitErljAKanKLCf2gQ, short-id: "6313ab3b" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
+  - {name: 🇮🇳 印度 2, server: xgrr.sdnlv0.cn, port: 43611, type: ss, cipher: 2022-blake3-aes-256-gcm, password: MTNjZmM1MmJiYjVjNWQwOWJlYzMyNjQyNjE5YTM1MTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇺🇸 美國 4 原生IP, server: xgrr.sdnlv0.cn, port: 11515, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 澳大利亞 2, server: xgrr.sdnlv0.cn, port: 15783, type: ss, cipher: 2022-blake3-aes-256-gcm, password: YTIyOTFhNGQ3YjEwZTU1NThiMGVlNTBmYWNiMDI1OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇯🇵 日本 4 原生IP, server: xgrr.sdnlv0.cn, port: 28485, type: ss, cipher: 2022-blake3-aes-256-gcm, password: NDNjNmQ0MGNhYjdkZmUyYmYzZDg2YzcxMGM4NzU2NWM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 波蘭 2, server: xgrr.sdnlv0.cn, port: 42295, type: ss, cipher: 2022-blake3-aes-256-gcm, password: MGMwNWM0MTk1ODJiNDg1NzBiOGYxMzQ1ZjI5ODQxMzY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇹🇼 台灣 5 原生IP, server: xgrr.sdnlv0.cn, port: 42980, type: ss, cipher: 2022-blake3-aes-256-gcm, password: NDk4NzI1ZTEwMTk3NGMyYTUxNjNkNTcwMjIxZTU0MzM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇯🇵 日本 5, server: xgrr.sdnlv0.cn, port: 47439, type: ss, cipher: 2022-blake3-aes-256-gcm, password: YzdhNDhiYTY4YTc3YWEzMGJjNTUzNjc3MWY2Y2QwYjU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 法國 2, server: xgrr.sdnlv0.cn, port: 27064, type: ss, cipher: 2022-blake3-aes-256-gcm, password: MjUwNDlkODZmMzNiODIyNmJiYTE2OTdmMmFkMjJmMjQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇨🇦 加拿大 2, server: xgrr.sdnlv0.cn, port: 25916, type: ss, cipher: 2022-blake3-aes-256-gcm, password: Mjc3ZTk5OWIwOWU4MDdmNThhYWE5N2IxNzRkNWE1ZWY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 泰國 2, server: xgrr.sdnlv0.cn, port: 47286, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ODk4MTlkYjRhZGMwMWE1YzkwZWRiMGE1ZmY1MDI5OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇭🇰 香港 4 原生IP, server: xgrr.sdnlv0.cn, port: 36137, type: ss, cipher: 2022-blake3-aes-256-gcm, password: MDM5MWZjOTFlZmNiMzBkYzE2ZmRjNmNiYzhiZjg5OGI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇨🇭 瑞士 2, server: xgrr.sdnlv0.cn, port: 55144, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ODQ1OGY3YTZlYmZiY2YwM2RjZWRmZTM3ODE0ZTMxZmE=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
   - {name: 🇹🇼 台灣 2 原生IP, server: ww.pddwdf.store, port: 19632, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: uiIkgjDc-zDF5koz0P7XkJnFTZitErljAKanKLCf2gQ, short-id: "6313ab3b" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
+  - {name: 🇫🇷 英國 2, server: xgrr.sdnlv0.cn, port: 31032, type: ss, cipher: 2022-blake3-aes-256-gcm, password: N2ZlMmQ0Y2YyOTFjNGFhZWMwMjQ1MzkxNmNlMTQ1N2U=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇹🇷 土耳其 2, server: xgrr.sdnlv0.cn, port: 33476, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇹🇼 台灣 1, server: tw.pddwdf.store, port: 11309, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: zlyUn3PhuPbPFfuh0fL74f9uKOXXTCNiTCNDEQzBik8, short-id: "6829946e" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
+  - {name: 🇦🇷 阿根廷 2, server: xgrr.sdnlv0.cn, port: 15152, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇭🇰 香港 6, server: xgrr.sdnlv0.cn, port: 14941, type: ss, cipher: 2022-blake3-aes-256-gcm, password: NGQyZjBkNmJlMmNjNWIyMTU2NDY5MTgyNjU3YzgzNTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇸🇬 新加坡 6 原生IP, server: xgrr.sdnlv0.cn, port: 20600, type: ss, cipher: 2022-blake3-aes-256-gcm, password: NWMyZWZhNjZlOWViYTU2MDVjZjcwNThlODA1YzZiMTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 烏克蘭 2, server: xgrr.sdnlv0.cn, port: 13170, type: ss, cipher: 2022-blake3-aes-256-gcm, password: NzE1YTk0MDk5NzUzZTRjY2JjZjcwNDgwNTMwODQwNDM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 阿聯酋 2 原生IP, server: xgrr.sdnlv0.cn, port: 49831, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ZTNmODgyNmZkZTBlODA3YTdmMDc2NjFlM2VhMmYzYzU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇮🇳 印度尼西亞 2, server: xgrr.sdnlv0.cn, port: 28659, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ZDI1Zjc0MDc2NDM2YTYzZjI2MDJkOWJhYzljMDFmMjA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 菲律賓 2, server: xgrr.sdnlv0.cn, port: 38739, type: ss, cipher: 2022-blake3-aes-256-gcm, password: ZTU4NGEyZTFiMmIzYzc2Njc5ODNkNzRlOGYwMmEyMmI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇺🇸 美國 8 原生IP, server: xgrr.sdnlv0.cn, port: 33144, type: ss, cipher: 2022-blake3-aes-256-gcm, password: MmZmN2MxMGUwNTNmMWQ1YWJlMmEyNjc5MzUyMTFmOTA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇻🇳 越南 2, server: xgrr.sdnlv0.cn, port: 58043, type: ss, cipher: 2022-blake3-aes-256-gcm, password: N2YxOTI4ODk3Y2M2MzkzM2QwMTcyNzNlZGQ1MjVhMmQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 澳門 2, server: xgrr.sdnlv0.cn, port: 54920, type: ss, cipher: 2022-blake3-aes-256-gcm, password: Mjc5MjVjNzMxMWVhOGNhMTljM2QwOWE3YTUyNTRkNTc=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇺🇸 美國 6 原生IP, server: xgrr.sdnlv0.cn, port: 39723, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇰🇷 韓國 3, server: xgrr.sdnlv0.cn, port: 44099, type: ss, cipher: chacha20-ietf-poly1305, password: bedb508a-e226-4bd0-a67a-414b4d8c77cd, udp: true}
+  - {name: 🇯🇵 日本 6 原生IP, server: xgrr.sdnlv0.cn, port: 48973, type: ss, cipher: 2022-blake3-aes-256-gcm, password: NDNlYjM4YzA0Zjk4NGVlMGZjMDc3MmViNGZmOGRmZGY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇸🇬 新加坡 4, server: xgrr.sdnlv0.cn, port: 39368, type: ss, cipher: 2022-blake3-aes-256-gcm, password: MTE4ODc5YzI3OTgxZDNlYzI3ZTM4MmE2NTg5NDI4YTg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇪🇬 埃及 2, server: xgrr.sdnlv0.cn, port: 56052, type: ss, cipher: 2022-blake3-aes-256-gcm, password: OThkZGFhYzE3ZDMzYjZhY2NiNTA0MGZlNDRjZDcwZTk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=, udp: true}
+  - {name: 🇭🇰 香港 1 原生IP, server: hk2.pddwdf.store, port: 36111, type: vless, uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: bX15T5DsxifN-n4rkqK8_JraARzFh4gXlCpOOtdMBAk, short-id: "b1bd33bd" }, servername: python.org, client-fingerprint: chrome, network: tcp, udp: true}
 proxy-groups:
   - name: 🔰 节点选择
     type: select
     proxies:
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: ♻️ 自动选择
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 300
     proxies:
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: 🎥 NETFLIX
     type: select
     proxies:
       - 🔰 节点选择
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: ⛔️ 广告拦截
     type: select
     proxies:
@@ -64,55 +228,224 @@ proxy-groups:
       - 🔰 节点选择
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: 🌏 国内媒体
     type: select
     proxies:
       - 🎯 全球直连
+      - 🇹🇼 台灣 6 原生IP
+      - 🇹🇼 台灣 4
       - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇹🇼 台灣 1
+      - 🇹🇼 台灣 5 原生IP
+      - 🇭🇰 香港 4 原生IP
       - 🇹🇼 台灣 2 原生IP
+      - 🇹🇼 台灣 1
+      - 🇭🇰 香港 6
+      - 🇭🇰 香港 1 原生IP
       - 🔰 节点选择
   - name: Ⓜ️ 微软服务
     type: select
     proxies:
       - 🎯 全球直连
       - 🔰 节点选择
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: 📲 电报信息
     type: select
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: 🍎 苹果服务
     type: select
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
       - ♻️ 自动选择
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
   - name: 🎯 全球直连
     type: select
     proxies:
@@ -128,12 +461,53 @@ proxy-groups:
       - 🔰 节点选择
       - 🎯 全球直连
       - ♻️ 自动选择
-      - 🇹🇼 台灣 3 原生IP
-      - 🇭🇰 香港 1 原生IP
-      - 🇯🇵 日本原生-02
+      - 🇹🇼 台灣 6 原生IP
+      - 🇺🇸 美国 10 原生IP
+      - 🇲🇳 蒙古 2
+      - 🇹🇼 台灣 4
+      - 冰島 2
+      - 🇷🇺 俄羅斯 2 原生IP
+      - 🇺🇸 美國 5
       - 🇯🇵 日本原生-01
-      - 🇹🇼 台灣 1
+      - 🇯🇵 日本原生-02
+      - 荷蘭 2
+      - 德國 2
+      - 馬來西亞 2
+      - 🇧🇷 巴西 2
+      - 義大利 2
+      - 🇹🇼 台灣 3 原生IP
+      - 🇮🇳 印度 2
+      - 🇺🇸 美國 4 原生IP
+      - 澳大利亞 2
+      - 🇯🇵 日本 4 原生IP
+      - 波蘭 2
+      - 🇹🇼 台灣 5 原生IP
+      - 🇯🇵 日本 5
+      - 法國 2
+      - 🇨🇦 加拿大 2
+      - 泰國 2
+      - 🇭🇰 香港 4 原生IP
+      - 🇨🇭 瑞士 2
       - 🇹🇼 台灣 2 原生IP
+      - 🇫🇷 英國 2
+      - 🇹🇷 土耳其 2
+      - 🇹🇼 台灣 1
+      - 🇦🇷 阿根廷 2
+      - 🇭🇰 香港 6
+      - 🇸🇬 新加坡 6 原生IP
+      - 烏克蘭 2
+      - 阿聯酋 2 原生IP
+      - 🇮🇳 印度尼西亞 2
+      - 菲律賓 2
+      - 🇺🇸 美國 8 原生IP
+      - 🇻🇳 越南 2
+      - 澳門 2
+      - 🇺🇸 美國 6 原生IP
+      - 🇰🇷 韓國 3
+      - 🇯🇵 日本 6 原生IP
+      - 🇸🇬 新加坡 4
+      - 🇪🇬 埃及 2
+      - 🇭🇰 香港 1 原生IP
 rules:
   - DOMAIN-SUFFIX,local,🎯 全球直连
   - IP-CIDR,192.168.0.0/16,🎯 全球直连,no-resolve
