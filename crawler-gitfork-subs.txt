@@ -3,7 +3,6 @@ https://adminxboardvpn.hrzy.me/api/v1/client/subscribe?token=549422a0099a621d239
 https://adminxboardvpn.hrzy.me/api/v1/client/subscribe?token=8a51e94e2945d9f3d7c339a1b83dc43b
 https://adminxboardvpn.hrzy.me/api/v1/client/subscribe?token=99c0cedf82025d9861de5d64ec06b107
 https://adminxboardvpn.hrzy.me/api/v1/client/subscribe?token=bb4c58e235d6d2882d5cac96fa15b789
-https://b.adami.icu/api/v1/client/subscribe?token=1223f703e28191b623d6e0b6893e22f1
 https://dctcc.louwangzhiyu.shop/api/v1/client/subscribe?token=3e1b27433b89c1fced30677960c078b0
 https://dctcc.louwangzhiyu.shop/api/v1/client/subscribe?token=7c990f2820443440cdea37fcf8f02b6b
 https://dctcc.louwangzhiyu.shop/api/v1/client/subscribe?token=c1b3e31f5b1577aec5a93ab3e151ef11
@@ -14,9 +13,11 @@ https://raw.githubusercontent.com/ljsshd/aggregator/main/data/clash.yaml
 https://raw.githubusercontent.com/polarxy/aggregator/main/data/clash.yaml
 https://raw.githubusercontent.com/wokaotianshi123/aggregator/main/data/clash.yaml
 https://sslpaodekuai.kuailianfn.com.cn/api/v1/client/subscribe?token=1f0f90ebd118841fb8cd96b518a41d9e
+https://sub.yfsbbb.net/s/0339330a55de5af4de9dc86c69ad02aa
 https://sub.yfsbbb.net/s/8e64b58a547fef9e53ef0a1c91b892f7
 https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=30235a9deb8832924f4dfdc8a4f867b8
 https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=39e0a692ab77c7595df5a4f6c83e291d
+https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=71ecb971a8bf32554dd0ed66ac19df74
 https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=9ade0c315dae242d9ef5d42c943818e3
 https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=9b5d65ef4be06341c0fcd9777141d712
 https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=9e646befee94a77af793479548afc742
@@ -47,5 +48,3 @@ https://www.cloudaddy.top/api/v1/client/subscribe?token=7fd7b73b69cc980bc5c91d9b
 https://www.louwangzhiyu.org/api/v1/client/subscribe?token=392014ad7cb54a15649415b4e842717f
 https://www.louwangzhiyu.org/api/v1/client/subscribe?token=5d2126ca592eb528a0e988c657b0d6ab
 https://www.louwangzhiyu.org/api/v1/client/subscribe?token=8f1ec332518cf6c410150d62a9845b5f
-https://www.yywhale.com/api/v1/client/subscribe?token=33440bf6a3955a2f659f4f4187bbf28a
-https://yywhale.com/api/v1/client/subscribe?token=af0e0ef3e5eadc09cc6d436660180043
