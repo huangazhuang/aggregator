@@ -5,40 +5,91 @@ mode: Rule
 log-level: info
 external-controller: 127.0.0.1:9090
 proxies:
-  - {name: 🇸🇬 SG-001-FREE-1D, server: 13.229.46.36, port: 8443, type: hysteria2, password: 2d9da0b8-500b-41a5-a698-ff5af97fe535, auth: 2d9da0b8-500b-41a5-a698-ff5af97fe535, skip-cert-verify: true, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1A, server: 13.229.46.36, port: 8443, type: hysteria2, password: 69668271-1b64-4541-9905-18a5cb20d86e, auth: 69668271-1b64-4541-9905-18a5cb20d86e, skip-cert-verify: true, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1E, server: 13.229.46.36, port: 8443, type: hysteria2, password: cce5c77a-844a-4b57-897c-a161ed9bdda6, auth: cce5c77a-844a-4b57-897c-a161ed9bdda6, skip-cert-verify: true, udp: true}
-  - {name: 🇺🇸 美国-洛杉矶-3, server: 82.198.246.37, port: 180, type: vmess, uuid: d13fc2f5-3e05-4795-81eb-44143a09e552, alterId: 0, cipher: auto, tls: false, skip-cert-verify: true, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1C, server: 13.229.46.36, port: 8443, type: hysteria2, password: 62229f8b-f0fe-40c2-96a0-a8b2041274d8, auth: 62229f8b-f0fe-40c2-96a0-a8b2041274d8, skip-cert-verify: true, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1E, server: 13.229.46.36, port: 8443, type: hysteria2, password: 4f2f3726-78ba-43dd-a31a-a6eb8bea3adf, auth: 4f2f3726-78ba-43dd-a31a-a6eb8bea3adf, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1E, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 2d9da0b8-500b-41a5-a698-ff5af97fe535, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1D, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 62229f8b-f0fe-40c2-96a0-a8b2041274d8, skip-cert-verify: false, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1D, server: 13.229.46.36, port: 8443, type: hysteria2, password: cce5c77a-844a-4b57-897c-a161ed9bdda6, auth: cce5c77a-844a-4b57-897c-a161ed9bdda6, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1N, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 2eedb8fa-75d3-47df-a55b-2c2b83be3495, skip-cert-verify: false, udp: true}
   - {name: 🇮🇪 爱尔兰-都柏林-1, server: 146.70.90.195, port: 57452, type: trojan, password: t1k169n5zmvvwn96r9ft, sni: api-yandex.maps.ru, skip-cert-verify: true, udp: true}
-  - {name: AG-NIR, server: traffic.iepl.a1.w76ew8ab.com, port: 64295, type: vless, uuid: 7a44b0d7-eb8f-4de8-9f0c-556e29574e97, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw, short-id: "5f1d38f2" }, servername: www.apple.com, client-fingerprint: firefox, network: tcp, udp: true}
-  - {name: 🇸🇬 SG-001-FREE-1F, server: 13.229.46.36, port: 8443, type: hysteria2, password: 17dd50bd-c9f8-436e-b908-62c5605f87ab, auth: 17dd50bd-c9f8-436e-b908-62c5605f87ab, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1F, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: cce5c77a-844a-4b57-897c-a161ed9bdda6, skip-cert-verify: false, udp: true}
+  - {name: 🇺🇸 美国-B3-1A, server: shadow.adami.icu, port: 41002, type: hysteria2, password: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, auth: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, sni: shadow.adami.icu, skip-cert-verify: true, obfs: salamander, obfs-password: ZVY8lIsu22AMT4kO, udp: true}
+  - {name: NODE1-VPN-1M, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 1b6a773f-9084-41dc-ac04-5e33f6cf49a3, skip-cert-verify: false, udp: true}
+  - {name: 🇭🇰 香港-服务器1-节点1-极速, server: hk1.adami.icu, port: 22001, type: hysteria2, password: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, auth: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, sni: hk1.adami.icu, skip-cert-verify: true, obfs: salamander, obfs-password: 2QO7xB3Sy1OwnWoD, udp: true}
+  - {name: NODE1-VPN-1H, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: e75ed3e2-a219-4919-af8b-b9fac459111c, skip-cert-verify: false, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1C, server: 13.229.46.36, port: 8443, type: hysteria2, password: 450c4f16-ed73-4675-9622-0bdc4e7482c0, auth: 450c4f16-ed73-4675-9622-0bdc4e7482c0, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1Q, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: af2f44a2-9e20-4380-bfd7-e16e168adddb, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1A, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 450c4f16-ed73-4675-9622-0bdc4e7482c0, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1I, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: a82acfdd-af07-4a28-9b9e-83599bd65744, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1P, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 98925c23-e1ea-4fee-b240-060fa927d773, skip-cert-verify: false, udp: true}
+  - {name: NODE1-VPN-1B, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 4f2f3726-78ba-43dd-a31a-a6eb8bea3adf, skip-cert-verify: false, udp: true}
+  - {name: 🇺🇸 美国-服务器2-节点1-极速, server: shadow.adami.icu, port: 40006, type: hysteria2, password: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, auth: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, sni: shadow.adami.icu, skip-cert-verify: true, obfs: salamander, obfs-password: ZVY8lIsu22AMT4kO, udp: true}
+  - {name: 🇹🇭 泰国-B1-1A, server: 130.94.23.240, port: 24001, type: hysteria2, password: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, auth: 1d1a9be4-02fe-4c9c-ac3e-00cf9c2ce24e, sni: tailand.adami.icu, skip-cert-verify: true, obfs: salamander, obfs-password: rKktEjDqju7j8JL9, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1B, server: 13.229.46.36, port: 8443, type: hysteria2, password: 62229f8b-f0fe-40c2-96a0-a8b2041274d8, auth: 62229f8b-f0fe-40c2-96a0-a8b2041274d8, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1O, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: 3228d217-788f-499b-b1fc-a75762fdc7a2, skip-cert-verify: false, udp: true}
+  - {name: AV-WCV, server: traffic.iepl.a1.w76ew8ab.com, port: 64295, type: vless, uuid: 33c1dbd4-e2e1-4be8-8881-f6d25648a6a1, tls: true, flow: xtls-rprx-vision, reality-opts: {public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw, short-id: "5f1d38f2" }, servername: www.apple.com, client-fingerprint: firefox, network: tcp, udp: true}
+  - {name: 🇺🇸 美国-洛杉矶-3, server: 82.198.246.37, port: 180, type: vmess, uuid: d13fc2f5-3e05-4795-81eb-44143a09e552, alterId: 0, cipher: auto, tls: false, skip-cert-verify: true, udp: true}
+  - {name: NODE1-VPN-1J, server: node1-vpn.hrzy.me, port: 443, type: trojan, password: f458885d-9686-46cb-8f12-8d7e4b92ce60, skip-cert-verify: false, udp: true}
+  - {name: 🇸🇬 SG-001-FREE-1F, server: 13.229.46.36, port: 8443, type: hysteria2, password: 2d9da0b8-500b-41a5-a698-ff5af97fe535, auth: 2d9da0b8-500b-41a5-a698-ff5af97fe535, skip-cert-verify: true, udp: true}
 proxy-groups:
   - name: 🔰 节点选择
     type: select
     proxies:
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: ♻️ 自动选择
     type: url-test
     url: http://www.gstatic.com/generate_204
     interval: 300
     proxies:
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: 🎥 NETFLIX
     type: select
@@ -46,13 +97,30 @@ proxy-groups:
       - 🔰 节点选择
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: ⛔️ 广告拦截
     type: select
@@ -72,44 +140,96 @@ proxy-groups:
       - 🔰 节点选择
       - ♻️ 自动选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: 🌏 国内媒体
     type: select
     proxies:
       - 🎯 全球直连
+      - 🇭🇰 香港-服务器1-节点1-极速
       - 🔰 节点选择
   - name: Ⓜ️ 微软服务
     type: select
     proxies:
       - 🎯 全球直连
       - 🔰 节点选择
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: 📲 电报信息
     type: select
     proxies:
       - 🔰 节点选择
       - 🎯 全球直连
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: 🍎 苹果服务
     type: select
@@ -117,13 +237,30 @@ proxy-groups:
       - 🔰 节点选择
       - 🎯 全球直连
       - ♻️ 自动选择
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
   - name: 🎯 全球直连
     type: select
@@ -140,13 +277,30 @@ proxy-groups:
       - 🔰 节点选择
       - 🎯 全球直连
       - ♻️ 自动选择
-      - 🇸🇬 SG-001-FREE-1D
-      - 🇸🇬 SG-001-FREE-1A
       - 🇸🇬 SG-001-FREE-1E
-      - 🇺🇸 美国-洛杉矶-3
-      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1E
+      - NODE1-VPN-1D
+      - 🇸🇬 SG-001-FREE-1D
+      - NODE1-VPN-1N
       - 🇮🇪 爱尔兰-都柏林-1
-      - AG-NIR
+      - NODE1-VPN-1F
+      - 🇺🇸 美国-B3-1A
+      - NODE1-VPN-1M
+      - 🇭🇰 香港-服务器1-节点1-极速
+      - NODE1-VPN-1H
+      - 🇸🇬 SG-001-FREE-1C
+      - NODE1-VPN-1Q
+      - NODE1-VPN-1A
+      - NODE1-VPN-1I
+      - NODE1-VPN-1P
+      - NODE1-VPN-1B
+      - 🇺🇸 美国-服务器2-节点1-极速
+      - 🇹🇭 泰国-B1-1A
+      - 🇸🇬 SG-001-FREE-1B
+      - NODE1-VPN-1O
+      - AV-WCV
+      - 🇺🇸 美国-洛杉矶-3
+      - NODE1-VPN-1J
       - 🇸🇬 SG-001-FREE-1F
 rules:
   - DOMAIN-SUFFIX,local,🎯 全球直连
