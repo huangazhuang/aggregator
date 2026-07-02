@@ -1,4 +1,1 @@
-https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=c992af258984e90aad7b3aa4352cbfd0
 https://zsewedff.kitd.online/api/v1/feima/subscribe?token=7ab6437160827c81ad1b228fb48d2863
-https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=088cb895cb242fad02e9fc3890303332
-https://ttxdb.louwangzhiyu.website/api/v1/client/subscribe?token=b486bacfdc5bfd1bb54bc469467cf982

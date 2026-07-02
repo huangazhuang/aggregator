@@ -3,59 +3,10 @@ log-level: silent
 mixed-port: 7890
 mode: Rule
 proxies:
-- name: 🇩🇪 DE德国3-1E
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40063
-  server: de3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国3-1E
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40023
-  server: us3.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇯🇵 日本 4 原生IP
-  password: NDNjNmQ0MGNhYjdkZmUyYmYzZDg2YzcxMGM4NzU2NWM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 28485
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇩🇪 DE德国2-1E
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40062
-  server: de2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国1-1C
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40081
-  server: uk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国2-1D
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40082
-  server: uk2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利3-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40093
-  server: it3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡1-1G
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40031
-  server: sg1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡2-1D
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40032
-  server: sg2.catzl.top
+- name: 🇺🇸 US美国1-1B
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40021
+  server: us1.catzl.top
   type: anytls
   udp: true
 - name: 🇬🇧 UK英国2-1C
@@ -64,56 +15,18 @@ proxies:
   server: uk2.catzl.top
   type: anytls
   udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 泰國 2
-  password: ODk4MTlkYjRhZGMwMWE1YzkwZWRiMGE1ZmY1MDI5OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 47286
-  server: xgrr.sdnlv0.cn
-  type: ss
+- name: NODE1-VPN-1F
+  password: 5d9e6669-6775-422d-b86f-49f6c9b6c0ac
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
-- name: 🇬🇧 UK英国2-1B
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40082
-  server: uk2.catzl.top
+- name: 🇬🇧 UK英国1-1A
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40081
+  server: uk1.catzl.top
   type: anytls
-  udp: true
-- name: 🇺🇸 US美国3-1B
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40023
-  server: us3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国3-1C
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40023
-  server: us3.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 澳大利亞 2
-  password: YTIyOTFhNGQ3YjEwZTU1NThiMGVlNTBmYWNiMDI1OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 15783
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇺🇸 US美国1-1G
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40021
-  server: us1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国2-1H
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40022
-  server: us2.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇸🇬 新加坡 4
-  password: MTE4ODc5YzI3OTgxZDNlYzI3ZTM4MmE2NTg5NDI4YTg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 39368
-  server: xgrr.sdnlv0.cn
-  type: ss
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
   name: 波蘭 2
@@ -122,47 +35,87 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 冰島 2
+  password: ZDFjMWY1NzRhMmI5NGRjZTY0Y2M1YzgyMzE0YWI5Zjk=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 36086
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇻🇳 VN越南2-1B
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 11682
+  server: vn2.nbjc.top
+  type: anytls
+  udp: true
 - name: 🇩🇪 DE德国2-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
   port: 40062
   server: de2.catzl.top
   type: anytls
   udp: true
-- name: 🇬🇧 UK英国1-1A
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40081
-  server: uk1.catzl.top
+- name: 🇮🇹 IT意大利3-1B
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40093
+  server: it3.nbjc.top
   type: anytls
   udp: true
-- name: 🇩🇪 DE德国1-1B
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40061
-  server: de1.catzl.top
+- name: 🇩🇪 DE德国2-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40062
+  server: de2.catzl.top
   type: anytls
   udp: true
-- name: 🇹🇼 TW台湾2-1F
-  password: d6fb7e8b-37c2-4e70-9bf5-9be89b3c5c3b
-  port: 40072
-  server: tw2.catzl.top
+- name: 🇻🇳 VN越南2-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 11682
+  server: vn2.nbjc.top
   type: anytls
   udp: true
-- name: 🇻🇳 VN越南3-1F
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 11683
-  server: vn3.nbjc.top
+- name: 🇩🇪 DE德国3-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40063
+  server: de3.catzl.top
   type: anytls
   udp: true
-- name: 🇮🇹 IT意大利1-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40091
-  server: it1.nbjc.top
+- name: 🇸🇬 SG新加坡2-1D
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40032
+  server: sg2.catzl.top
   type: anytls
   udp: true
-- name: 🇯🇵 JP日本2-1E
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40055
-  server: jp5.catzl.top
+- name: 🇻🇳 VN越南2-1D
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 11682
+  server: vn2.nbjc.top
   type: anytls
+  udp: true
+- alpn:
+  - h3
+  congestion-controller: bbr
+  disable-sni: false
+  name: TUIC GAME-1A
+  password: 5a131cc2-f184-4d08-8d72-ee430ce17246
+  port: 4500
+  reduce-rtt: false
+  request-timeout: 15000
+  server: de.fast-freeway.ru
+  sni: de.fast-freeway.ru
+  type: tuic
+  udp-relay-mode: native
+  uuid: 5a131cc2-f184-4d08-8d72-ee430ce17246
+- name: 🇯🇵 JP日本1-1D
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40054
+  server: jp4.catzl.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇫🇷 英國 2
+  password: N2ZlMmQ0Y2YyOTFjNGFhZWMwMjQ1MzkxNmNlMTQ1N2U=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 31032
+  server: xgrr.sdnlv0.cn
+  type: ss
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
   name: 法國 2
@@ -171,245 +124,16 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- name: 🇩🇪 DE德国1-1C
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40061
-  server: de1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本1-1C
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
+- name: 🇯🇵 JP日本1-1A
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
   port: 40054
   server: jp4.catzl.top
   type: anytls
   udp: true
-- name: 🇭🇰 HK香港2-1A
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40012
-  server: hk2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南1-1E
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 11681
-  server: vn1.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港4家宽-1D
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40014
-  server: hk4.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾2-1D
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40072
-  server: tw2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利3-1A
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40093
-  server: it3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南2-1B
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 11682
-  server: vn2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡2-1B
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40032
-  server: sg2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港4家宽-1C
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40014
-  server: hk4.catzl.top
-  type: anytls
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇹🇷 土耳其 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 33476
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇺🇸 美國 4 原生IP
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 11515
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇻🇳 VN越南3-1A
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 11683
-  server: vn3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡1-1H
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40031
-  server: sg1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国2-1G
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40062
-  server: de2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利2-1C
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40092
-  server: it2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利1-1D
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40091
-  server: it1.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国2-1A
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40082
-  server: uk2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡2-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40032
-  server: sg2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港2-1F
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40012
-  server: hk2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南1-1H
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 11681
-  server: vn1.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾1-1D
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40071
-  server: tw1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港2-1H
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40012
-  server: hk2.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 荷蘭 2
-  password: Y2I4MTc2ZTAzMWQ0YWY1N2QwYWZlYTBjOTBlYjg1ZGM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 14193
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇩🇪 DE德国2-1C
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40062
-  server: de2.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇹🇼 台灣 5 原生IP
-  password: NDk4NzI1ZTEwMTk3NGMyYTUxNjNkNTcwMjIxZTU0MzM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 42980
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇮🇹 IT意大利3-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40093
-  server: it3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南3-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 11683
-  server: vn3.nbjc.top
-  type: anytls
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇦🇷 阿根廷 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 15152
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇹🇼 TW台湾2-1E
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40072
-  server: tw2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利3-1H
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40093
-  server: it3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港4家宽-1G
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40014
-  server: hk4.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇭🇰 香港 4 原生IP
-  password: MDM5MWZjOTFlZmNiMzBkYzE2ZmRjNmNiYzhiZjg5OGI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 36137
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇻🇳 VN越南3-1C
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 11683
-  server: vn3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港4家宽-1H
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40014
-  server: hk4.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇷🇺 俄羅斯 2 原生IP
-  password: Y2U1NDZkZjA1NDMzMDNkNDM0YmU0NTljYTYxODc5Yjg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 12615
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇩🇪 DE德国2-1D
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40062
-  server: de2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国3-1G
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40063
-  server: de3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国1-1E
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40081
-  server: uk1.catzl.top
+- name: 🇭🇰 HK香港1-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40011
+  server: hk1.catzl.top
   type: anytls
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
@@ -420,502 +144,33 @@ proxies:
   type: ss
   udp: true
 - name: 🇯🇵 JP日本1-1B
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
   port: 40054
   server: jp4.catzl.top
   type: anytls
   udp: true
-- name: 🇮🇹 IT意大利2-1B
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40092
-  server: it2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国2-1F
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40082
-  server: uk2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国2-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40022
-  server: us2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南3-1H
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 11683
-  server: vn3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利1-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40091
-  server: it1.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港3-1D
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40013
-  server: hk3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡2-1A
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40032
-  server: sg2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国3-1H
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40063
-  server: de3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利2-1F
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40092
-  server: it2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡2-1C
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40032
-  server: sg2.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇸🇬 新加坡 6 原生IP
-  password: NWMyZWZhNjZlOWViYTU2MDVjZjcwNThlODA1YzZiMTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 20600
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇺🇸 US美国2-1C
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40022
-  server: us2.catzl.top
-  type: anytls
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇺🇸 美国 10 原生IP
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 8053
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇰🇷 KR韩国1-1C
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40041
-  server: kr1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本2-1A
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40055
-  server: jp5.catzl.top
-  type: anytls
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇲🇳 蒙古 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 34208
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇺🇸 US美国3-1D
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40023
-  server: us3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡1-1F
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40031
-  server: sg1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇰🇷 KR韩国1-1D
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40041
-  server: kr1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本1-1E
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40054
-  server: jp4.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾1-1F
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40071
-  server: tw1.catzl.top
-  type: anytls
-  udp: true
-- name: NODE1-VPN-1D
-  password: e22d6390-a065-415f-afa2-d9a03fe39ba2
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: 🇺🇸 US美国2-1A
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40022
-  server: us2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇰🇷 KR韩国1-1A
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40041
-  server: kr1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南2-1F
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 11682
-  server: vn2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国2-1E
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40082
-  server: uk2.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 德國 2
-  password: YmVkMTY2MmNmZmZmYWY4YWZmZDYzNzQ1YTUyNDU5NTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 22455
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇮🇹 IT意大利2-1G
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40092
-  server: it2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港1-1B
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40011
-  server: hk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港3-1E
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40013
-  server: hk3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本1-1F
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40054
-  server: jp4.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港3-1F
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40013
-  server: hk3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇰🇷 KR韩国1-1H
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40041
-  server: kr1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国3-1C
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40063
-  server: de3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港1-1E
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40011
-  server: hk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国2-1F
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40022
-  server: us2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本1-1H
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40054
-  server: jp4.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾2-1G
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40072
-  server: tw2.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇫🇷 英國 2
-  password: N2ZlMmQ0Y2YyOTFjNGFhZWMwMjQ1MzkxNmNlMTQ1N2U=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 31032
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇯🇵 JP日本2-1G
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40055
-  server: jp5.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾2-1A
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40072
-  server: tw2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国1-1F
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40021
-  server: us1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利2-1A
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40092
-  server: it2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾1-1B
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40071
-  server: tw1.catzl.top
-  type: anytls
-  udp: true
-- client-fingerprint: chrome
-  flow: xtls-rprx-vision
-  name: 🇹🇼 台灣 1
-  network: tcp
-  port: 11309
-  reality-opts:
-    public-key: zlyUn3PhuPbPFfuh0fL74f9uKOXXTCNiTCNDEQzBik8
-    short-id: 6829946e
-  server: tw.pddwdf.store
-  servername: python.org
-  tls: true
-  type: vless
-  udp: true
-  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- name: 🇯🇵 JP日本1-1D
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40054
-  server: jp4.catzl.top
-  type: anytls
-  udp: true
-- name: NODE1-VPN-1C
-  password: 8b408e5d-f2e7-4091-8b8a-136867da9f90
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: 🇯🇵 JP日本2-1H
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40055
-  server: jp5.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 阿聯酋 2 原生IP
-  password: ZTNmODgyNmZkZTBlODA3YTdmMDc2NjFlM2VhMmYzYzU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 49831
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇺🇸 US美国3-1G
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40023
-  server: us3.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇯🇵 日本 5
-  password: YzdhNDhiYTY4YTc3YWEzMGJjNTUzNjc3MWY2Y2QwYjU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 47439
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇩🇪 DE德国3-1B
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40063
-  server: de3.catzl.top
-  type: anytls
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇯🇵 日本家宽 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 6057
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇻🇳 VN越南2-1C
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 11682
-  server: vn2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南1-1F
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 11681
-  server: vn1.nbjc.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇮🇳 印度 2
-  password: MTNjZmM1MmJiYjVjNWQwOWJlYzMyNjQyNjE5YTM1MTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 43611
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇰🇷 韓國 3
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 44099
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇰🇷 KR韩国1-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40041
-  server: kr1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港2-1D
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40012
-  server: hk2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国3-1D
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40063
-  server: de3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国1-1A
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40021
-  server: us1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国2-1D
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40022
-  server: us2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国1-1F
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40061
-  server: de1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南2-1G
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 11682
-  server: vn2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾2-1H
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40072
-  server: tw2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡1-1A
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40031
-  server: sg1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南3-1D
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 11683
-  server: vn3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本2-1F
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40055
-  server: jp5.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利3-1D
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40093
-  server: it3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国1-1C
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40021
-  server: us1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港2-1C
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40012
-  server: hk2.catzl.top
-  type: anytls
-  udp: true
-- name: NODE1-VPN-1B
-  password: 2e7a290a-b859-49b1-8cfb-73f9538b1e17
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇧🇷 巴西 2
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 11270
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇭🇰 香港 6
-  password: NGQyZjBkNmJlMmNjNWIyMTU2NDY5MTgyNjU3YzgzNTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 14941
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇭🇰 HK香港3-1G
-  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40013
-  server: hk3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南2-1H
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 11682
-  server: vn2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港1-1A
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40011
-  server: hk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾1-1G
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40071
-  server: tw1.catzl.top
-  type: anytls
-  udp: true
+- auth: a89306c8-3219-4a7e-8a9e-dca6c1c05dda
+  name: 🇸🇬 SG-001-FREE-1F
+  password: a89306c8-3219-4a7e-8a9e-dca6c1c05dda
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- alpn:
+  - h3
+  congestion-controller: bbr
+  disable-sni: false
+  name: TUIC GAME 2
+  password: 5a131cc2-f184-4d08-8d72-ee430ce17246
+  port: 4500
+  reduce-rtt: false
+  request-timeout: 15000
+  server: fin.fast-freeway.ru
+  sni: fin.fast-freeway.ru
+  type: tuic
+  udp-relay-mode: native
+  uuid: 5a131cc2-f184-4d08-8d72-ee430ce17246
 - client-fingerprint: chrome
   flow: xtls-rprx-vision
   name: 🇹🇼 台灣 2 原生IP
@@ -930,60 +185,550 @@ proxies:
   type: vless
   udp: true
   uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- name: 🇻🇳 VN越南2-1A
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 11682
-  server: vn2.nbjc.top
+- auth: 5d9e6669-6775-422d-b86f-49f6c9b6c0ac
+  name: 🇸🇬 SG-001-FREE-1D
+  password: 5d9e6669-6775-422d-b86f-49f6c9b6c0ac
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- name: 🇺🇸 US美国1-1A
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40021
+  server: us1.catzl.top
   type: anytls
   udp: true
-- name: 🇭🇰 HK香港2-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40012
-  server: hk2.catzl.top
+- name: 🇯🇵 JP日本2-1A
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40055
+  server: jp5.catzl.top
   type: anytls
   udp: true
-- name: 🇭🇰 HK香港1-1G
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40011
-  server: hk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡1-1B
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
+- name: 🇸🇬 SG新加坡1-1C
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
   port: 40031
   server: sg1.catzl.top
   type: anytls
   udp: true
-- name: 🇬🇧 UK英国1-1G
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
+- cipher: chacha20-ietf-poly1305
+  name: 🇰🇷 韓國 3
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 44099
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇮🇳 印度 2
+  password: MTNjZmM1MmJiYjVjNWQwOWJlYzMyNjQyNjE5YTM1MTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 43611
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇯🇵 JP日本2-1C
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40055
+  server: jp5.catzl.top
+  type: anytls
+  udp: true
+- name: 🇹🇼 TW台湾2-1B
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40072
+  server: tw2.catzl.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 泰國 2
+  password: ODk4MTlkYjRhZGMwMWE1YzkwZWRiMGE1ZmY1MDI5OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 47286
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇺🇸 US美国1-1C
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40021
+  server: us1.catzl.top
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1J
+  password: efb9fafa-fdf1-4978-9e0f-45742552d2ab
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇻🇳 VN越南3-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 11683
+  server: vn3.nbjc.top
+  type: anytls
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇧🇷 巴西 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 11270
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇺🇸 US美国2-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40022
+  server: us2.catzl.top
+  type: anytls
+  udp: true
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港01AVLESS
+  network: tcp
+  port: 59406
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- alpn:
+  - h3
+  congestion-controller: bbr
+  disable-sni: false
+  name: TUIC GAME-1C
+  password: 032361cd-7959-458c-a7eb-534017e8d141
+  port: 4500
+  reduce-rtt: false
+  request-timeout: 0
+  server: fin.fast-freeway.ru
+  skip-cert-verify: false
+  sni: fin.fast-freeway.ru
+  type: tuic
+  udp-relay-mode: native
+  uuid: 032361cd-7959-458c-a7eb-534017e8d141
+- cipher: chacha20-ietf-poly1305
+  name: 🇹🇼 台灣 4
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 50971
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇩🇪 DE德国3-1B
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40063
+  server: de3.catzl.top
+  type: anytls
+  udp: true
+- name: 🇭🇰 HK香港1-1C
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40011
+  server: hk1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇮🇹 IT意大利1-1C
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40091
+  server: it1.nbjc.top
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1E
+  password: f1b93053-e366-4330-8cfc-abc31bd40c7c
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇭🇰 HK香港4家宽-1C
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40014
+  server: hk4.catzl.top
+  type: anytls
+  udp: true
+- name: 🇰🇷 KR韩国1-1A
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40041
+  server: kr1.catzl.top
+  type: anytls
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇦🇷 阿根廷 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 15152
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇸🇬 SG新加坡2-1B
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40032
+  server: sg2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇻🇳 VN越南1-1B
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 11681
+  server: vn1.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇩🇪 DE德国2-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40062
+  server: de2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇩🇪 DE德国2-1C
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40062
+  server: de2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇬🇧 UK英国1-1B
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
   port: 40081
   server: uk1.catzl.top
   type: anytls
   udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇺🇸 美國 6 原生IP
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 39723
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇩🇪 DE德国1-1E
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
+- name: 🇩🇪 DE德国1-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
   port: 40061
   server: de1.catzl.top
   type: anytls
   udp: true
-- name: 🇮🇹 IT意大利1-1C
+- name: 🇸🇬 SG新加坡2-1A
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40032
+  server: sg2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇬🇧 UK英国2-1A
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40082
+  server: uk2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇮🇹 IT意大利1-1A
   password: b84a9cbb-7da7-4591-b1d7-96efe1985334
   port: 40091
   server: it1.nbjc.top
   type: anytls
   udp: true
-- name: 🇹🇼 TW台湾2-1C
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40072
-  server: tw2.catzl.top
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇸🇬 新加坡 4
+  password: MTE4ODc5YzI3OTgxZDNlYzI3ZTM4MmE2NTg5NDI4YTg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 39368
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇭🇰 HK香港1-1B
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40011
+  server: hk1.catzl.top
   type: anytls
+  udp: true
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港02CVLESS
+  network: tcp
+  port: 24801
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1test1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- name: 🇮🇹 IT意大利3-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40093
+  server: it3.nbjc.top
+  type: anytls
+  udp: true
+- auth: 2ef67c15-9da9-4b59-97bb-a3e11fb3f3e2
+  name: 🇸🇬 SG-001-FREE-1B
+  password: 2ef67c15-9da9-4b59-97bb-a3e11fb3f3e2
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 澳大利亞 2
+  password: YTIyOTFhNGQ3YjEwZTU1NThiMGVlNTBmYWNiMDI1OTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 15783
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇸🇬 SG新加坡2-1C
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40032
+  server: sg2.catzl.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 烏克蘭 2
+  password: NzE1YTk0MDk5NzUzZTRjY2JjZjcwNDgwNTMwODQwNDM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 13170
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- alpn:
+  - h3
+  congestion-controller: bbr
+  disable-sni: false
+  name: TUIC GAME-1B
+  password: 032361cd-7959-458c-a7eb-534017e8d141
+  port: 4500
+  reduce-rtt: false
+  request-timeout: 0
+  server: de.fast-freeway.ru
+  skip-cert-verify: false
+  sni: de.fast-freeway.ru
+  type: tuic
+  udp-relay-mode: native
+  uuid: 032361cd-7959-458c-a7eb-534017e8d141
+- name: 🇰🇷 KR韩国1-1B
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40041
+  server: kr1.catzl.top
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1H
+  password: a8013552-e3ae-4d70-bc56-cc0bfd56b7c9
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 阿聯酋 2 原生IP
+  password: ZTNmODgyNmZkZTBlODA3YTdmMDc2NjFlM2VhMmYzYzU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 49831
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇺🇸 US美国1-1D
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40021
+  server: us1.catzl.top
+  type: anytls
+  udp: true
+- auth: 5a131cc2-f184-4d08-8d72-ee430ce17246
+  name: HYSTERIA GAME 2
+  obfs: salamander
+  obfs-password: JflrYFN6aCA1tyqV
+  password: 5a131cc2-f184-4d08-8d72-ee430ce17246
+  port: 500
+  server: fin.fast-freeway.ru
+  skip-cert-verify: false
+  sni: fin.fast-freeway.ru
+  type: hysteria2
+  udp: true
+- name: 🇻🇳 VN越南2-1C
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 11682
+  server: vn2.nbjc.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇷🇺 俄羅斯 2 原生IP
+  password: Y2U1NDZkZjA1NDMzMDNkNDM0YmU0NTljYTYxODc5Yjg=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 12615
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港02AVLESS
+  network: tcp
+  port: 49390
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇨🇦 加拿大 2
+  password: Mjc3ZTk5OWIwOWU4MDdmNThhYWE5N2IxNzRkNWE1ZWY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 25916
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 招代理有门槛
+  network: tcp
+  port: 37137
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇭🇰 香港 4 原生IP
+  password: MDM5MWZjOTFlZmNiMzBkYzE2ZmRjNmNiYzhiZjg5OGI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 36137
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇺🇸 美国 10 原生IP
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 8053
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇯🇵 日本 5
+  password: YzdhNDhiYTY4YTc3YWEzMGJjNTUzNjc3MWY2Y2QwYjU=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 47439
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇩🇪 DE德国1-1D
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40061
+  server: de1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇮🇹 IT意大利1-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40091
+  server: it1.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇻🇳 VN越南3-1C
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 11683
+  server: vn3.nbjc.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇯🇵 日本 4 原生IP
+  password: NDNjNmQ0MGNhYjdkZmUyYmYzZDg2YzcxMGM4NzU2NWM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 28485
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: NODE1-VPN-1C
+  password: 2ef67c15-9da9-4b59-97bb-a3e11fb3f3e2
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇯🇵 JP日本2-1D
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40055
+  server: jp5.catzl.top
+  type: anytls
+  udp: true
+- name: 🇩🇪 DE德国3-1C
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40063
+  server: de3.catzl.top
+  type: anytls
+  udp: true
+- name: 🇭🇰 HK香港2-1C
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40012
+  server: hk2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇮🇹 IT意大利3-1D
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40093
+  server: it3.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇻🇳 VN越南1-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 11681
+  server: vn1.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇩🇪 DE德国3-1A
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40063
+  server: de3.catzl.top
+  type: anytls
+  udp: true
+- name: 🇰🇷 KR韩国1-1C
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40041
+  server: kr1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇬🇧 UK英国2-1B
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40082
+  server: uk2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇻🇳 VN越南1-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 11681
+  server: vn1.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇺🇸 US美国2-1B
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40022
+  server: us2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇸🇬 SG新加坡1-1B
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40031
+  server: sg1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇬🇧 UK英国1-1D
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40081
+  server: uk1.catzl.top
+  type: anytls
+  udp: true
+- auth: a262d30c-551f-4123-a198-b5a831a43b85
+  name: 🇸🇬 SG-001-FREE-1E
+  password: a262d30c-551f-4123-a198-b5a831a43b85
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 荷蘭 2
+  password: Y2I4MTc2ZTAzMWQ0YWY1N2QwYWZlYTBjOTBlYjg1ZGM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 14193
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇰🇷 KR韩国1-1D
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40041
+  server: kr1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇭🇰 HK香港4家宽-1A
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40014
+  server: hk4.catzl.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 德國 2
+  password: YmVkMTY2MmNmZmZmYWY4YWZmZDYzNzQ1YTUyNDU5NTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 22455
+  server: xgrr.sdnlv0.cn
+  type: ss
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
   name: 🇪🇬 埃及 2
@@ -992,58 +737,24 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- name: 🇻🇳 VN越南1-1C
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 11681
-  server: vn1.nbjc.top
-  type: anytls
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港01BVLESS
+  network: tcp
+  port: 19751
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.a1acjhgbn.w76ew8ab.com
+  servername: www.apple.com
+  tls: true
+  type: vless
   udp: true
-- name: 🇬🇧 UK英国1-1H
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40081
-  server: uk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港1-1H
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40011
-  server: hk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港3-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40013
-  server: hk3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇰🇷 KR韩国1-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40041
-  server: kr1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港1-1F
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40011
-  server: hk1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇺🇸 US美国1-1H
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40021
-  server: us1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾1-1C
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40071
-  server: tw1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇹🇼 TW台湾1-1E
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40071
-  server: tw1.catzl.top
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- name: 🇩🇪 DE德国1-1C
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40061
+  server: de1.catzl.top
   type: anytls
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
@@ -1053,23 +764,262 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- name: 🇺🇸 US美国3-1H
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40023
-  server: us3.catzl.top
-  type: anytls
+- name: NODE1-VPN-1O
+  password: 8cc50aff-e1f4-4ca3-abc2-b2434b6724cf
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
-- name: 🇭🇰 HK香港4家宽-1A
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
+- cipher: chacha20-ietf-poly1305
+  name: 🇹🇷 土耳其 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 33476
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: NODE1-VPN-1L
+  password: 8b408e5d-f2e7-4091-8b8a-136867da9f90
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇭🇰 HK香港4家宽-1B
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
   port: 40014
   server: hk4.catzl.top
   type: anytls
   udp: true
-- name: 🇩🇪 DE德国1-1D
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40061
-  server: de1.catzl.top
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港01CVLESS
+  network: tcp
+  port: 3475
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇹🇼 台灣 5 原生IP
+  password: NDk4NzI1ZTEwMTk3NGMyYTUxNjNkNTcwMjIxZTU0MzM=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 42980
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇭🇰 香港 6
+  password: NGQyZjBkNmJlMmNjNWIyMTU2NDY5MTgyNjU3YzgzNTI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 14941
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇺🇸 US美国2-1D
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40022
+  server: us2.catzl.top
   type: anytls
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇺🇸 美國 4 原生IP
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 11515
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇸🇬 SG新加坡1-1A
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40031
+  server: sg1.catzl.top
+  type: anytls
+  udp: true
+- auth: 5a131cc2-f184-4d08-8d72-ee430ce17246
+  name: HYSTERIA GAME
+  obfs: salamander
+  obfs-password: JflrYFN6aCA1tyqV
+  password: 5a131cc2-f184-4d08-8d72-ee430ce17246
+  port: 500
+  server: de.fast-freeway.ru
+  skip-cert-verify: false
+  sni: de.fast-freeway.ru
+  type: hysteria2
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇯🇵 日本家宽 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 6057
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇬🇧 UK英国1-1C
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40081
+  server: uk1.catzl.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇯🇵 日本 6 原生IP
+  password: NDNlYjM4YzA0Zjk4NGVlMGZjMDc3MmViNGZmOGRmZGY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 48973
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: NODE1-VPN-1A
+  password: a89306c8-3219-4a7e-8a9e-dca6c1c05dda
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇮🇹 IT意大利1-1B
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40091
+  server: it1.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇸🇬 SG新加坡1-1D
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40031
+  server: sg1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇮🇹 IT意大利3-1C
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40093
+  server: it3.nbjc.top
+  type: anytls
+  udp: true
+- name: 🇯🇵 JP日本2-1B
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40055
+  server: jp5.catzl.top
+  type: anytls
+  udp: true
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: AC-KGM
+  network: tcp
+  port: 64295
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- client-fingerprint: chrome
+  flow: xtls-rprx-vision
+  name: 🇹🇼 台灣 1
+  network: tcp
+  port: 11309
+  reality-opts:
+    public-key: zlyUn3PhuPbPFfuh0fL74f9uKOXXTCNiTCNDEQzBik8
+    short-id: 6829946e
+  server: tw.pddwdf.store
+  servername: python.org
+  tls: true
+  type: vless
+  udp: true
+  uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+- name: 🇬🇧 UK英国2-1D
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40082
+  server: uk2.catzl.top
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1I
+  password: 0e37572f-8fcb-435d-a7ea-01843846ce2b
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: 🇹🇼 TW台湾2-1C
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40072
+  server: tw2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇭🇰 HK香港2-1B
+  password: 7b91331f-daeb-4b77-9de3-1285c10808a7
+  port: 40012
+  server: hk2.catzl.top
+  type: anytls
+  udp: true
+- cipher: chacha20-ietf-poly1305
+  name: 🇲🇳 蒙古 2
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 34208
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇭🇰 HK香港2-1D
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40012
+  server: hk2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇺🇸 US美国2-1C
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40022
+  server: us2.catzl.top
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1P
+  password: 2e7a290a-b859-49b1-8cfb-73f9538b1e17
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1M
+  password: 913031c2-b3d6-427b-950a-7c025763b89e
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- name: NODE1-VPN-1N
+  password: 464914b5-1173-42b6-9f18-69ec9aee91dc
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇺🇸 美國 8 原生IP
+  password: MmZmN2MxMGUwNTNmMWQ1YWJlMmEyNjc5MzUyMTFmOTA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 33144
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- auth: f1b93053-e366-4330-8cfc-abc31bd40c7c
+  name: 🇸🇬 SG-001-FREE-1A
+  password: f1b93053-e366-4330-8cfc-abc31bd40c7c
+  port: 8443
+  server: 13.229.46.36
+  skip-cert-verify: true
+  type: hysteria2
+  udp: true
+- name: 🇻🇳 VN越南1-1C
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 11681
+  server: vn1.nbjc.top
+  type: anytls
+  udp: true
+- name: NODE1-VPN-1K
+  password: 6f95f427-3305-4ac0-83ca-acffe47b1235
+  port: 443
+  server: node1-vpn.hrzy.me
+  skip-cert-verify: false
+  type: trojan
   udp: true
 - client-fingerprint: chrome
   flow: xtls-rprx-vision
@@ -1085,18 +1035,6 @@ proxies:
   type: vless
   udp: true
   uuid: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-- name: 🇩🇪 DE德国1-1A
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 40061
-  server: de1.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡2-1G
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40032
-  server: sg2.catzl.top
-  type: anytls
-  udp: true
 - cipher: 2022-blake3-aes-256-gcm
   name: 菲律賓 2
   password: ZTU4NGEyZTFiMmIzYzc2Njc5ODNkNzRlOGYwMmEyMmI=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
@@ -1104,119 +1042,43 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- name: 🇮🇹 IT意大利1-1H
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40091
-  server: it1.nbjc.top
+- name: 🇭🇰 HK香港2-1A
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40012
+  server: hk2.catzl.top
   type: anytls
   udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇺🇸 美國 8 原生IP
-  password: MmZmN2MxMGUwNTNmMWQ1YWJlMmEyNjc5MzUyMTFmOTA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 33144
-  server: xgrr.sdnlv0.cn
-  type: ss
+- name: 🇻🇳 VN越南3-1B
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 11683
+  server: vn3.nbjc.top
+  type: anytls
   udp: true
-- name: NODE1-VPN-1A
-  password: 913031c2-b3d6-427b-950a-7c025763b89e
+- name: NODE1-VPN-1B
+  password: a262d30c-551f-4123-a198-b5a831a43b85
   port: 443
   server: node1-vpn.hrzy.me
   skip-cert-verify: false
   type: trojan
   udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇨🇦 加拿大 2
-  password: Mjc3ZTk5OWIwOWU4MDdmNThhYWE5N2IxNzRkNWE1ZWY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 25916
-  server: xgrr.sdnlv0.cn
-  type: ss
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港02BVLESS
+  network: tcp
+  port: 53813
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.a1acjhgbn.w76ew8ab.com
+  servername: www.apple.com
+  tls: true
+  type: vless
   udp: true
-- name: 🇮🇹 IT意大利3-1G
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40093
-  server: it3.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇻🇳 VN越南1-1B
-  password: 753b2e07-da7d-4012-b64f-45f76be5c0be
-  port: 11681
-  server: vn1.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇯🇵 JP日本2-1C
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40055
-  server: jp5.catzl.top
-  type: anytls
-  udp: true
-- name: 🇮🇹 IT意大利1-1F
-  password: ffc81148-d12a-49bd-b049-bdd4a54c580c
-  port: 40091
-  server: it1.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇩🇪 DE德国2-1H
-  password: 7e6e06a2-de0f-4797-8628-bd2517ece79f
-  port: 40062
-  server: de2.catzl.top
-  type: anytls
-  udp: true
-- name: 🇬🇧 UK英国1-1F
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40081
-  server: uk1.catzl.top
-  type: anytls
-  udp: true
-- cipher: chacha20-ietf-poly1305
-  name: 🇹🇼 台灣 4
-  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
-  port: 50971
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: 🇭🇰 HK香港3-1H
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40013
-  server: hk3.catzl.top
-  type: anytls
-  udp: true
-- name: 🇸🇬 SG新加坡1-1D
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- name: 🇹🇼 TW台湾1-1B
   password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
-  port: 40031
-  server: sg1.catzl.top
-  type: anytls
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇮🇳 印度尼西亞 2
-  password: ZDI1Zjc0MDc2NDM2YTYzZjI2MDJkOWJhYzljMDFmMjA=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 28659
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- cipher: 2022-blake3-aes-256-gcm
-  name: 🇯🇵 日本 6 原生IP
-  password: NDNlYjM4YzA0Zjk4NGVlMGZjMDc3MmViNGZmOGRmZGY=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
-  port: 48973
-  server: xgrr.sdnlv0.cn
-  type: ss
-  udp: true
-- name: NODE1-VPN-1E
-  password: 6f95f427-3305-4ac0-83ca-acffe47b1235
-  port: 443
-  server: node1-vpn.hrzy.me
-  skip-cert-verify: false
-  type: trojan
-  udp: true
-- name: 🇮🇹 IT意大利2-1E
-  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40092
-  server: it2.nbjc.top
-  type: anytls
-  udp: true
-- name: 🇭🇰 HK香港4家宽-1F
-  password: c9c2d27d-cbbf-4435-a0af-b8063ccb1a5c
-  port: 40014
-  server: hk4.catzl.top
+  port: 40071
+  server: tw1.catzl.top
   type: anytls
   udp: true
 - cipher: 2022-blake3-aes-256-gcm
@@ -1226,409 +1088,395 @@ proxies:
   server: xgrr.sdnlv0.cn
   type: ss
   udp: true
-- name: 🇺🇸 US美国1-1E
+- name: 🇯🇵 JP日本1-1C
   password: b84a9cbb-7da7-4591-b1d7-96efe1985334
-  port: 40021
-  server: us1.catzl.top
+  port: 40054
+  server: jp4.catzl.top
+  type: anytls
+  udp: true
+- name: 🇭🇰 HK香港1-1A
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40011
+  server: hk1.catzl.top
+  type: anytls
+  udp: true
+- name: 🇹🇼 TW台湾2-1D
+  password: 4d8a0bd7-945a-4fb2-a2e2-f6bbb3ac159b
+  port: 40072
+  server: tw2.catzl.top
+  type: anytls
+  udp: true
+- name: 🇭🇰 HK香港4家宽-1D
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40014
+  server: hk4.catzl.top
+  type: anytls
+  udp: true
+- cipher: 2022-blake3-aes-256-gcm
+  name: 🇸🇬 新加坡 6 原生IP
+  password: NWMyZWZhNjZlOWViYTU2MDVjZjcwNThlODA1YzZiMTQ=:YmVkYjUwOGEtZTIyNi00YmQwLWE2N2EtNDE0YjRkOGM=
+  port: 20600
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇹🇼 TW台湾1-1D
+  password: 7d83a33d-6b0f-464c-876a-8feeed7635b9
+  port: 40071
+  server: tw1.catzl.top
+  type: anytls
+  udp: true
+- client-fingerprint: firefox
+  flow: xtls-rprx-vision
+  name: 🇭🇰 香港03VLESS
+  network: tcp
+  port: 22167
+  reality-opts:
+    public-key: 2908sLAOTkc2d46M0fiPKwLZBzQgx5s9Vx7VFzmpYmw
+    short-id: 5f1d38f2
+  server: traffic.iepl.h1.9527gym0boy.com
+  servername: www.apple.com
+  tls: true
+  type: vless
+  udp: true
+  uuid: b5f86f91-d0a4-44ae-9c6d-40874c9528c6
+- cipher: chacha20-ietf-poly1305
+  name: 🇺🇸 美國 6 原生IP
+  password: bedb508a-e226-4bd0-a67a-414b4d8c77cd
+  port: 39723
+  server: xgrr.sdnlv0.cn
+  type: ss
+  udp: true
+- name: 🇹🇼 TW台湾1-1A
+  password: b84a9cbb-7da7-4591-b1d7-96efe1985334
+  port: 40071
+  server: tw1.catzl.top
   type: anytls
   udp: true
 proxy-groups:
 - interval: 300
   name: automatic
   proxies:
-  - 🇮🇹 IT意大利3-1B
-  - 🇺🇸 US美国1-1E
-  - 🇺🇸 US美国1-1H
-  - 🇯🇵 JP日本1-1C
-  - 🇩🇪 DE德国3-1E
-  - 🇯🇵 JP日本1-1D
-  - 🇻🇳 VN越南2-1C
-  - 🇯🇵 JP日本2-1A
-  - 🇹🇼 TW台湾1-1D
-  - 🇻🇳 VN越南3-1E
-  - 🇮🇹 IT意大利1-1C
-  - 🇯🇵 JP日本1-1F
-  - 🇹🇼 TW台湾2-1E
-  - 🇮🇹 IT意大利3-1A
-  - 🇸🇬 SG新加坡1-1F
-  - 🇩🇪 DE德国1-1E
-  - 🇻🇳 VN越南2-1H
-  - 🇹🇼 台灣 1
-  - 🇨🇦 加拿大 2
-  - 阿聯酋 2 原生IP
-  - 🇩🇪 DE德国2-1E
-  - 🇹🇼 台灣 4
-  - 🇬🇧 UK英国2-1B
-  - 🇭🇰 HK香港2-1H
-  - 🇯🇵 日本家宽 2
-  - 🇮🇹 IT意大利2-1G
-  - 🇪🇬 埃及 2
-  - 🇩🇪 DE德国2-1G
-  - 🇺🇸 US美国1-1G
-  - 🇭🇰 HK香港3-1H
-  - 🇮🇹 IT意大利3-1G
-  - 法國 2
-  - 🇸🇬 SG新加坡2-1C
-  - 🇺🇸 US美国3-1C
-  - 🇯🇵 JP日本2-1H
-  - 🇹🇼 TW台湾2-1G
-  - 🇺🇸 美国 10 原生IP
-  - 🇺🇸 美國 4 原生IP
-  - 🇰🇷 KR韩国1-1B
-  - 🇭🇰 HK香港2-1D
-  - 🇸🇬 SG新加坡2-1E
-  - 🇹🇼 TW台湾2-1F
-  - 🇹🇼 台灣 5 原生IP
-  - 🇺🇸 US美国2-1C
-  - 🇩🇪 DE德国2-1D
-  - 🇬🇧 UK英国2-1C
-  - 🇸🇬 新加坡 4
-  - 🇭🇰 HK香港1-1F
-  - 🇻🇳 VN越南3-1H
-  - NODE1-VPN-1C
-  - 🇺🇸 US美国3-1B
-  - 🇮🇹 IT意大利2-1E
-  - NODE1-VPN-1D
-  - 🇩🇪 DE德国3-1D
-  - 🇺🇸 US美国2-1F
-  - 🇺🇸 US美国1-1F
-  - 🇻🇳 越南 2
-  - 🇸🇬 新加坡 6 原生IP
-  - 🇯🇵 日本家宽 1
-  - 🇰🇷 KR韩国1-1A
-  - 🇮🇹 IT意大利2-1F
-  - 🇺🇸 US美国3-1D
-  - 🇺🇸 US美国3-1H
-  - 🇭🇰 HK香港1-1H
-  - 荷蘭 2
-  - 🇮🇹 IT意大利1-1E
-  - 🇭🇰 HK香港3-1F
-  - 🇬🇧 UK英国1-1E
-  - 🇹🇼 TW台湾2-1H
-  - 🇯🇵 JP日本1-1B
-  - 🇺🇸 US美国1-1A
-  - 🇺🇸 US美国2-1D
-  - 🇬🇧 UK英国2-1E
-  - 🇭🇰 HK香港1-1B
-  - 🇹🇷 土耳其 2
-  - 🇩🇪 DE德国3-1G
-  - 🇭🇰 HK香港3-1E
-  - 🇭🇰 HK香港1-1E
-  - 🇹🇼 TW台湾2-1D
-  - NODE1-VPN-1E
-  - 🇭🇰 HK香港4家宽-1C
-  - 🇩🇪 DE德国1-1B
-  - 🇬🇧 UK英国1-1F
-  - 🇬🇧 UK英国1-1H
-  - 🇩🇪 DE德国2-1B
-  - 🇭🇰 HK香港2-1C
-  - 🇩🇪 DE德国2-1H
-  - 🇯🇵 JP日本2-1G
-  - 🇮🇹 IT意大利2-1A
-  - 🇯🇵 JP日本2-1F
-  - NODE1-VPN-1A
-  - 🇭🇰 HK香港3-1B
   - 🇻🇳 VN越南2-1B
-  - 🇸🇬 SG新加坡1-1B
-  - 🇹🇼 TW台湾1-1F
-  - 德國 2
-  - 🇰🇷 KR韩国1-1D
-  - 🇻🇳 VN越南3-1A
-  - 🇮🇹 IT意大利2-1C
-  - 🇫🇷 英國 2
-  - 🇭🇰 香港 6
-  - 🇸🇬 SG新加坡2-1A
-  - 🇹🇼 TW台湾1-1C
-  - 🇺🇸 US美国2-1B
-  - 🇩🇪 DE德国1-1D
-  - 🇰🇷 韓國 3
-  - 🇮🇳 印度 2
-  - 🇻🇳 VN越南1-1F
-  - NODE1-VPN-1B
-  - 🇻🇳 VN越南1-1H
-  - 🇻🇳 VN越南3-1C
-  - 🇭🇰 HK香港1-1G
-  - 🇩🇪 DE德国1-1F
-  - 🇯🇵 日本 5
-  - 🇻🇳 VN越南2-1A
-  - 🇲🇳 蒙古 2
-  - 🇺🇸 US美国2-1A
-  - 🇺🇸 US美国3-1G
-  - 波蘭 2
-  - 🇭🇰 HK香港4家宽-1F
-  - 🇹🇼 台灣 2 原生IP
-  - 🇻🇳 VN越南1-1B
-  - 🇮🇹 IT意大利2-1B
-  - 🇯🇵 JP日本1-1E
-  - 🇭🇰 HK香港4家宽-1D
-  - 🇭🇰 HK香港2-1A
-  - 🇯🇵 JP日本1-1H
-  - 菲律賓 2
-  - 🇮🇹 IT意大利3-1H
-  - 🇸🇬 SG新加坡2-1G
   - 🇻🇳 VN越南3-1D
-  - 澳門 2
-  - 🇬🇧 UK英国2-1A
-  - 🇸🇬 SG新加坡2-1B
-  - 🇩🇪 DE德国3-1C
-  - 🇭🇰 HK香港3-1G
-  - 🇰🇷 KR韩国1-1E
-  - 🇰🇷 KR韩国1-1H
-  - 🇸🇬 SG新加坡1-1D
-  - 🇸🇬 SG新加坡1-1H
-  - 🇩🇪 DE德国2-1C
-  - 🇻🇳 VN越南2-1F
-  - 🇻🇳 VN越南2-1G
-  - 🇩🇪 DE德国3-1H
-  - 🇭🇰 HK香港2-1E
-  - 🇬🇧 UK英国1-1G
-  - 🇬🇧 UK英国1-1A
-  - 🇩🇪 DE德国3-1B
-  - 🇯🇵 日本 6 原生IP
-  - 🇺🇸 美國 6 原生IP
-  - 🇰🇷 KR韩国1-1C
-  - 🇮🇳 印度尼西亞 2
-  - 泰國 2
-  - 🇯🇵 日本 4 原生IP
-  - 🇺🇸 US美国1-1C
-  - 🇮🇹 IT意大利1-1H
-  - 🇺🇸 US美国3-1E
-  - 🇭🇰 HK香港3-1D
-  - 🇹🇼 TW台湾1-1B
-  - 🇮🇹 IT意大利1-1B
-  - 🇮🇹 IT意大利1-1D
-  - 🇷🇺 俄羅斯 2 原生IP
-  - 🇭🇰 HK香港4家宽-1G
-  - 🇩🇪 DE德国1-1C
-  - 🇹🇼 TW台湾2-1A
-  - 🇭🇰 HK香港4家宽-1A
-  - 🇮🇹 IT意大利3-1D
-  - 🇧🇷 巴西 2
+  - 🇯🇵 日本家宽 1
+  - 🇰🇷 韓國 3
+  - 🇰🇷 KR韩国1-1A
   - 🇸🇬 SG新加坡2-1D
-  - 🇮🇹 IT意大利3-1E
-  - 🇭🇰 HK香港2-1F
-  - 🇹🇼 TW台湾2-1C
+  - 🇭🇰 HK香港4家宽-1B
+  - 🇬🇧 UK英国2-1C
+  - 🇭🇰 HK香港1-1B
+  - 🇸🇬 SG新加坡2-1C
+  - 🇯🇵 JP日本1-1D
+  - 烏克蘭 2
+  - 🇩🇪 DE德国1-1C
+  - 🇮🇳 印度 2
+  - 🇻🇳 VN越南1-1B
+  - 🇨🇦 加拿大 2
+  - 🇭🇰 HK香港2-1B
+  - 🇯🇵 JP日本2-1B
+  - 🇭🇰 香港01AVLESS
+  - 🇩🇪 DE德国3-1D
   - 🇬🇧 UK英国1-1C
-  - 🇨🇭 瑞士 2
-  - 🇭🇰 香港 4 原生IP
-  - 🇩🇪 DE德国1-1A
-  - 🇸🇬 SG新加坡1-1G
-  - 🇺🇸 美國 8 原生IP
-  - 🇻🇳 VN越南1-1C
-  - 🇬🇧 UK英国2-1D
-  - 🇦🇷 阿根廷 2
-  - 🇯🇵 JP日本2-1C
-  - 🇮🇹 IT意大利1-1F
-  - 🇻🇳 VN越南3-1F
-  - 🇬🇧 UK英国2-1F
-  - 🇺🇸 US美国2-1H
-  - 🇹🇼 TW台湾1-1G
-  - 🇻🇳 VN越南1-1E
-  - 🇯🇵 JP日本2-1E
-  - 🇸🇬 SG新加坡1-1A
-  - 🇭🇰 HK香港4家宽-1H
-  - 🇹🇼 TW台湾1-1E
+  - 🇺🇸 US美国2-1B
+  - 🇮🇹 IT意大利1-1A
   - 澳大利亞 2
+  - 🇯🇵 JP日本2-1D
+  - NODE1-VPN-1J
+  - 🇲🇳 蒙古 2
+  - 🇭🇰 香港01CVLESS
+  - 🇦🇷 阿根廷 2
+  - 🇭🇰 HK香港2-1A
+  - TUIC GAME-1A
+  - 🇻🇳 VN越南3-1C
+  - 🇺🇸 US美国1-1A
+  - 🇭🇰 HK香港4家宽-1C
+  - AC-KGM
+  - 🇭🇰 香港02BVLESS
+  - NODE1-VPN-1A
+  - 🇺🇸 US美国2-1D
+  - 🇩🇪 DE德国3-1A
+  - 🇸🇬 SG新加坡1-1C
+  - 招代理有门槛
+  - 🇩🇪 DE德国2-1B
+  - 🇭🇰 HK香港1-1D
+  - 🇺🇸 美國 4 原生IP
+  - 荷蘭 2
+  - 🇷🇺 俄羅斯 2 原生IP
+  - 🇸🇬 SG-001-FREE-1D
+  - 🇭🇰 HK香港2-1D
+  - 🇺🇸 美國 6 原生IP
+  - 冰島 2
+  - 🇭🇰 香港03VLESS
+  - 🇹🇼 TW台湾2-1B
+  - 🇻🇳 VN越南1-1A
   - 🇭🇰 HK香港1-1A
+  - 🇬🇧 UK英国2-1D
+  - 🇹🇼 台灣 4
+  - NODE1-VPN-1O
+  - NODE1-VPN-1K
+  - NODE1-VPN-1C
+  - 🇹🇼 TW台湾1-1D
+  - 🇹🇼 TW台湾1-1B
+  - 🇻🇳 VN越南1-1D
+  - 🇸🇬 新加坡 6 原生IP
+  - 🇯🇵 JP日本2-1A
+  - 🇮🇹 IT意大利3-1A
+  - 🇺🇸 US美国1-1C
+  - TUIC GAME-1B
+  - 🇩🇪 DE德国3-1B
+  - HYSTERIA GAME 2
+  - 🇺🇸 US美国1-1D
+  - NODE1-VPN-1H
+  - 🇩🇪 DE德国2-1C
+  - 🇸🇬 SG-001-FREE-1F
+  - 🇭🇰 HK香港4家宽-1A
+  - 🇭🇰 香港 4 原生IP
+  - 🇨🇭 瑞士 2
+  - 🇸🇬 新加坡 4
+  - 德國 2
+  - 🇸🇬 SG-001-FREE-1A
+  - 🇪🇬 埃及 2
+  - NODE1-VPN-1E
+  - 🇺🇸 美国 10 原生IP
+  - 🇮🇹 IT意大利1-1B
+  - 🇸🇬 SG新加坡1-1A
+  - 🇬🇧 UK英国1-1A
+  - 菲律賓 2
+  - 🇯🇵 JP日本1-1A
+  - HYSTERIA GAME
+  - 🇭🇰 香港02CVLESS
+  - 🇻🇳 VN越南3-1B
+  - 🇻🇳 VN越南2-1A
+  - 🇩🇪 DE德国2-1A
+  - NODE1-VPN-1I
+  - 🇯🇵 日本 6 原生IP
+  - 🇯🇵 JP日本1-1C
+  - 🇮🇹 IT意大利3-1B
+  - 🇫🇷 英國 2
+  - 🇬🇧 UK英国1-1D
+  - 🇮🇹 IT意大利1-1C
+  - 🇭🇰 HK香港4家宽-1D
+  - 🇸🇬 SG-001-FREE-1B
+  - 🇸🇬 SG新加坡1-1B
+  - NODE1-VPN-1P
+  - 🇬🇧 UK英国1-1B
+  - 🇸🇬 SG新加坡2-1B
+  - TUIC GAME 2
+  - 🇭🇰 HK香港1-1C
+  - 🇧🇷 巴西 2
+  - 🇮🇹 IT意大利3-1D
+  - 🇩🇪 DE德国2-1D
+  - 🇬🇧 UK英国2-1A
+  - 🇺🇸 美國 8 原生IP
+  - 🇯🇵 日本家宽 2
+  - NODE1-VPN-1N
+  - 🇹🇼 台灣 2 原生IP
+  - 🇹🇼 TW台湾2-1C
+  - 🇰🇷 KR韩国1-1D
+  - 🇸🇬 SG-001-FREE-1E
+  - 🇻🇳 VN越南2-1C
+  - 🇭🇰 HK香港2-1C
+  - NODE1-VPN-1L
+  - NODE1-VPN-1F
+  - 🇸🇬 SG新加坡2-1A
+  - NODE1-VPN-1B
+  - 🇩🇪 DE德国1-1D
+  - 🇯🇵 JP日本2-1C
+  - TUIC GAME-1C
+  - 法國 2
+  - 🇬🇧 UK英国2-1B
+  - 🇹🇼 TW台湾2-1D
+  - NODE1-VPN-1M
+  - 波蘭 2
+  - 🇭🇰 香港01BVLESS
+  - 🇩🇪 DE德国3-1C
+  - 🇯🇵 JP日本1-1B
+  - 🇰🇷 KR韩国1-1B
+  - 🇺🇸 US美国2-1C
+  - 🇭🇰 香港02AVLESS
+  - 澳門 2
+  - 🇺🇸 US美国1-1B
+  - 🇻🇳 越南 2
+  - 🇻🇳 VN越南2-1D
+  - 🇩🇪 DE德国1-1A
+  - 🇹🇼 TW台湾1-1A
+  - 🇯🇵 日本 4 原生IP
+  - 🇰🇷 KR韩国1-1C
+  - 🇻🇳 VN越南1-1C
+  - 🇹🇼 台灣 1
+  - 🇭🇰 香港 6
+  - 🇹🇼 台灣 5 原生IP
+  - 🇹🇷 土耳其 2
+  - 🇮🇹 IT意大利3-1C
+  - 阿聯酋 2 原生IP
+  - 泰國 2
+  - 🇸🇬 SG新加坡1-1D
+  - 🇯🇵 日本 5
+  - 🇺🇸 US美国2-1A
+  - 🇮🇹 IT意大利1-1D
   type: url-test
   url: https://www.google.com/favicon.ico
 - name: 🌐 Proxy
   proxies:
   - automatic
-  - 🇮🇹 IT意大利3-1B
-  - 🇺🇸 US美国1-1E
-  - 🇺🇸 US美国1-1H
-  - 🇯🇵 JP日本1-1C
-  - 🇩🇪 DE德国3-1E
-  - 🇯🇵 JP日本1-1D
-  - 🇻🇳 VN越南2-1C
-  - 🇯🇵 JP日本2-1A
-  - 🇹🇼 TW台湾1-1D
-  - 🇻🇳 VN越南3-1E
-  - 🇮🇹 IT意大利1-1C
-  - 🇯🇵 JP日本1-1F
-  - 🇹🇼 TW台湾2-1E
-  - 🇮🇹 IT意大利3-1A
-  - 🇸🇬 SG新加坡1-1F
-  - 🇩🇪 DE德国1-1E
-  - 🇻🇳 VN越南2-1H
-  - 🇹🇼 台灣 1
-  - 🇨🇦 加拿大 2
-  - 阿聯酋 2 原生IP
-  - 🇩🇪 DE德国2-1E
-  - 🇹🇼 台灣 4
-  - 🇬🇧 UK英国2-1B
-  - 🇭🇰 HK香港2-1H
-  - 🇯🇵 日本家宽 2
-  - 🇮🇹 IT意大利2-1G
-  - 🇪🇬 埃及 2
-  - 🇩🇪 DE德国2-1G
-  - 🇺🇸 US美国1-1G
-  - 🇭🇰 HK香港3-1H
-  - 🇮🇹 IT意大利3-1G
-  - 法國 2
-  - 🇸🇬 SG新加坡2-1C
-  - 🇺🇸 US美国3-1C
-  - 🇯🇵 JP日本2-1H
-  - 🇹🇼 TW台湾2-1G
-  - 🇺🇸 美国 10 原生IP
-  - 🇺🇸 美國 4 原生IP
-  - 🇰🇷 KR韩国1-1B
-  - 🇭🇰 HK香港2-1D
-  - 🇸🇬 SG新加坡2-1E
-  - 🇹🇼 TW台湾2-1F
-  - 🇹🇼 台灣 5 原生IP
-  - 🇺🇸 US美国2-1C
-  - 🇩🇪 DE德国2-1D
-  - 🇬🇧 UK英国2-1C
-  - 🇸🇬 新加坡 4
-  - 🇭🇰 HK香港1-1F
-  - 🇻🇳 VN越南3-1H
-  - NODE1-VPN-1C
-  - 🇺🇸 US美国3-1B
-  - 🇮🇹 IT意大利2-1E
-  - NODE1-VPN-1D
-  - 🇩🇪 DE德国3-1D
-  - 🇺🇸 US美国2-1F
-  - 🇺🇸 US美国1-1F
-  - 🇻🇳 越南 2
-  - 🇸🇬 新加坡 6 原生IP
-  - 🇯🇵 日本家宽 1
-  - 🇰🇷 KR韩国1-1A
-  - 🇮🇹 IT意大利2-1F
-  - 🇺🇸 US美国3-1D
-  - 🇺🇸 US美国3-1H
-  - 🇭🇰 HK香港1-1H
-  - 荷蘭 2
-  - 🇮🇹 IT意大利1-1E
-  - 🇭🇰 HK香港3-1F
-  - 🇬🇧 UK英国1-1E
-  - 🇹🇼 TW台湾2-1H
-  - 🇯🇵 JP日本1-1B
-  - 🇺🇸 US美国1-1A
-  - 🇺🇸 US美国2-1D
-  - 🇬🇧 UK英国2-1E
-  - 🇭🇰 HK香港1-1B
-  - 🇹🇷 土耳其 2
-  - 🇩🇪 DE德国3-1G
-  - 🇭🇰 HK香港3-1E
-  - 🇭🇰 HK香港1-1E
-  - 🇹🇼 TW台湾2-1D
-  - NODE1-VPN-1E
-  - 🇭🇰 HK香港4家宽-1C
-  - 🇩🇪 DE德国1-1B
-  - 🇬🇧 UK英国1-1F
-  - 🇬🇧 UK英国1-1H
-  - 🇩🇪 DE德国2-1B
-  - 🇭🇰 HK香港2-1C
-  - 🇩🇪 DE德国2-1H
-  - 🇯🇵 JP日本2-1G
-  - 🇮🇹 IT意大利2-1A
-  - 🇯🇵 JP日本2-1F
-  - NODE1-VPN-1A
-  - 🇭🇰 HK香港3-1B
   - 🇻🇳 VN越南2-1B
-  - 🇸🇬 SG新加坡1-1B
-  - 🇹🇼 TW台湾1-1F
-  - 德國 2
-  - 🇰🇷 KR韩国1-1D
-  - 🇻🇳 VN越南3-1A
-  - 🇮🇹 IT意大利2-1C
-  - 🇫🇷 英國 2
-  - 🇭🇰 香港 6
-  - 🇸🇬 SG新加坡2-1A
-  - 🇹🇼 TW台湾1-1C
-  - 🇺🇸 US美国2-1B
-  - 🇩🇪 DE德国1-1D
-  - 🇰🇷 韓國 3
-  - 🇮🇳 印度 2
-  - 🇻🇳 VN越南1-1F
-  - NODE1-VPN-1B
-  - 🇻🇳 VN越南1-1H
-  - 🇻🇳 VN越南3-1C
-  - 🇭🇰 HK香港1-1G
-  - 🇩🇪 DE德国1-1F
-  - 🇯🇵 日本 5
-  - 🇻🇳 VN越南2-1A
-  - 🇲🇳 蒙古 2
-  - 🇺🇸 US美国2-1A
-  - 🇺🇸 US美国3-1G
-  - 波蘭 2
-  - 🇭🇰 HK香港4家宽-1F
-  - 🇹🇼 台灣 2 原生IP
-  - 🇻🇳 VN越南1-1B
-  - 🇮🇹 IT意大利2-1B
-  - 🇯🇵 JP日本1-1E
-  - 🇭🇰 HK香港4家宽-1D
-  - 🇭🇰 HK香港2-1A
-  - 🇯🇵 JP日本1-1H
-  - 菲律賓 2
-  - 🇮🇹 IT意大利3-1H
-  - 🇸🇬 SG新加坡2-1G
   - 🇻🇳 VN越南3-1D
-  - 澳門 2
-  - 🇬🇧 UK英国2-1A
-  - 🇸🇬 SG新加坡2-1B
-  - 🇩🇪 DE德国3-1C
-  - 🇭🇰 HK香港3-1G
-  - 🇰🇷 KR韩国1-1E
-  - 🇰🇷 KR韩国1-1H
-  - 🇸🇬 SG新加坡1-1D
-  - 🇸🇬 SG新加坡1-1H
-  - 🇩🇪 DE德国2-1C
-  - 🇻🇳 VN越南2-1F
-  - 🇻🇳 VN越南2-1G
-  - 🇩🇪 DE德国3-1H
-  - 🇭🇰 HK香港2-1E
-  - 🇬🇧 UK英国1-1G
-  - 🇬🇧 UK英国1-1A
-  - 🇩🇪 DE德国3-1B
-  - 🇯🇵 日本 6 原生IP
-  - 🇺🇸 美國 6 原生IP
-  - 🇰🇷 KR韩国1-1C
-  - 🇮🇳 印度尼西亞 2
-  - 泰國 2
-  - 🇯🇵 日本 4 原生IP
-  - 🇺🇸 US美国1-1C
-  - 🇮🇹 IT意大利1-1H
-  - 🇺🇸 US美国3-1E
-  - 🇭🇰 HK香港3-1D
-  - 🇹🇼 TW台湾1-1B
-  - 🇮🇹 IT意大利1-1B
-  - 🇮🇹 IT意大利1-1D
-  - 🇷🇺 俄羅斯 2 原生IP
-  - 🇭🇰 HK香港4家宽-1G
-  - 🇩🇪 DE德国1-1C
-  - 🇹🇼 TW台湾2-1A
-  - 🇭🇰 HK香港4家宽-1A
-  - 🇮🇹 IT意大利3-1D
-  - 🇧🇷 巴西 2
+  - 🇯🇵 日本家宽 1
+  - 🇰🇷 韓國 3
+  - 🇰🇷 KR韩国1-1A
   - 🇸🇬 SG新加坡2-1D
-  - 🇮🇹 IT意大利3-1E
-  - 🇭🇰 HK香港2-1F
-  - 🇹🇼 TW台湾2-1C
+  - 🇭🇰 HK香港4家宽-1B
+  - 🇬🇧 UK英国2-1C
+  - 🇭🇰 HK香港1-1B
+  - 🇸🇬 SG新加坡2-1C
+  - 🇯🇵 JP日本1-1D
+  - 烏克蘭 2
+  - 🇩🇪 DE德国1-1C
+  - 🇮🇳 印度 2
+  - 🇻🇳 VN越南1-1B
+  - 🇨🇦 加拿大 2
+  - 🇭🇰 HK香港2-1B
+  - 🇯🇵 JP日本2-1B
+  - 🇭🇰 香港01AVLESS
+  - 🇩🇪 DE德国3-1D
   - 🇬🇧 UK英国1-1C
-  - 🇨🇭 瑞士 2
-  - 🇭🇰 香港 4 原生IP
-  - 🇩🇪 DE德国1-1A
-  - 🇸🇬 SG新加坡1-1G
-  - 🇺🇸 美國 8 原生IP
-  - 🇻🇳 VN越南1-1C
-  - 🇬🇧 UK英国2-1D
-  - 🇦🇷 阿根廷 2
-  - 🇯🇵 JP日本2-1C
-  - 🇮🇹 IT意大利1-1F
-  - 🇻🇳 VN越南3-1F
-  - 🇬🇧 UK英国2-1F
-  - 🇺🇸 US美国2-1H
-  - 🇹🇼 TW台湾1-1G
-  - 🇻🇳 VN越南1-1E
-  - 🇯🇵 JP日本2-1E
-  - 🇸🇬 SG新加坡1-1A
-  - 🇭🇰 HK香港4家宽-1H
-  - 🇹🇼 TW台湾1-1E
+  - 🇺🇸 US美国2-1B
+  - 🇮🇹 IT意大利1-1A
   - 澳大利亞 2
+  - 🇯🇵 JP日本2-1D
+  - NODE1-VPN-1J
+  - 🇲🇳 蒙古 2
+  - 🇭🇰 香港01CVLESS
+  - 🇦🇷 阿根廷 2
+  - 🇭🇰 HK香港2-1A
+  - TUIC GAME-1A
+  - 🇻🇳 VN越南3-1C
+  - 🇺🇸 US美国1-1A
+  - 🇭🇰 HK香港4家宽-1C
+  - AC-KGM
+  - 🇭🇰 香港02BVLESS
+  - NODE1-VPN-1A
+  - 🇺🇸 US美国2-1D
+  - 🇩🇪 DE德国3-1A
+  - 🇸🇬 SG新加坡1-1C
+  - 招代理有门槛
+  - 🇩🇪 DE德国2-1B
+  - 🇭🇰 HK香港1-1D
+  - 🇺🇸 美國 4 原生IP
+  - 荷蘭 2
+  - 🇷🇺 俄羅斯 2 原生IP
+  - 🇸🇬 SG-001-FREE-1D
+  - 🇭🇰 HK香港2-1D
+  - 🇺🇸 美國 6 原生IP
+  - 冰島 2
+  - 🇭🇰 香港03VLESS
+  - 🇹🇼 TW台湾2-1B
+  - 🇻🇳 VN越南1-1A
   - 🇭🇰 HK香港1-1A
+  - 🇬🇧 UK英国2-1D
+  - 🇹🇼 台灣 4
+  - NODE1-VPN-1O
+  - NODE1-VPN-1K
+  - NODE1-VPN-1C
+  - 🇹🇼 TW台湾1-1D
+  - 🇹🇼 TW台湾1-1B
+  - 🇻🇳 VN越南1-1D
+  - 🇸🇬 新加坡 6 原生IP
+  - 🇯🇵 JP日本2-1A
+  - 🇮🇹 IT意大利3-1A
+  - 🇺🇸 US美国1-1C
+  - TUIC GAME-1B
+  - 🇩🇪 DE德国3-1B
+  - HYSTERIA GAME 2
+  - 🇺🇸 US美国1-1D
+  - NODE1-VPN-1H
+  - 🇩🇪 DE德国2-1C
+  - 🇸🇬 SG-001-FREE-1F
+  - 🇭🇰 HK香港4家宽-1A
+  - 🇭🇰 香港 4 原生IP
+  - 🇨🇭 瑞士 2
+  - 🇸🇬 新加坡 4
+  - 德國 2
+  - 🇸🇬 SG-001-FREE-1A
+  - 🇪🇬 埃及 2
+  - NODE1-VPN-1E
+  - 🇺🇸 美国 10 原生IP
+  - 🇮🇹 IT意大利1-1B
+  - 🇸🇬 SG新加坡1-1A
+  - 🇬🇧 UK英国1-1A
+  - 菲律賓 2
+  - 🇯🇵 JP日本1-1A
+  - HYSTERIA GAME
+  - 🇭🇰 香港02CVLESS
+  - 🇻🇳 VN越南3-1B
+  - 🇻🇳 VN越南2-1A
+  - 🇩🇪 DE德国2-1A
+  - NODE1-VPN-1I
+  - 🇯🇵 日本 6 原生IP
+  - 🇯🇵 JP日本1-1C
+  - 🇮🇹 IT意大利3-1B
+  - 🇫🇷 英國 2
+  - 🇬🇧 UK英国1-1D
+  - 🇮🇹 IT意大利1-1C
+  - 🇭🇰 HK香港4家宽-1D
+  - 🇸🇬 SG-001-FREE-1B
+  - 🇸🇬 SG新加坡1-1B
+  - NODE1-VPN-1P
+  - 🇬🇧 UK英国1-1B
+  - 🇸🇬 SG新加坡2-1B
+  - TUIC GAME 2
+  - 🇭🇰 HK香港1-1C
+  - 🇧🇷 巴西 2
+  - 🇮🇹 IT意大利3-1D
+  - 🇩🇪 DE德国2-1D
+  - 🇬🇧 UK英国2-1A
+  - 🇺🇸 美國 8 原生IP
+  - 🇯🇵 日本家宽 2
+  - NODE1-VPN-1N
+  - 🇹🇼 台灣 2 原生IP
+  - 🇹🇼 TW台湾2-1C
+  - 🇰🇷 KR韩国1-1D
+  - 🇸🇬 SG-001-FREE-1E
+  - 🇻🇳 VN越南2-1C
+  - 🇭🇰 HK香港2-1C
+  - NODE1-VPN-1L
+  - NODE1-VPN-1F
+  - 🇸🇬 SG新加坡2-1A
+  - NODE1-VPN-1B
+  - 🇩🇪 DE德国1-1D
+  - 🇯🇵 JP日本2-1C
+  - TUIC GAME-1C
+  - 法國 2
+  - 🇬🇧 UK英国2-1B
+  - 🇹🇼 TW台湾2-1D
+  - NODE1-VPN-1M
+  - 波蘭 2
+  - 🇭🇰 香港01BVLESS
+  - 🇩🇪 DE德国3-1C
+  - 🇯🇵 JP日本1-1B
+  - 🇰🇷 KR韩国1-1B
+  - 🇺🇸 US美国2-1C
+  - 🇭🇰 香港02AVLESS
+  - 澳門 2
+  - 🇺🇸 US美国1-1B
+  - 🇻🇳 越南 2
+  - 🇻🇳 VN越南2-1D
+  - 🇩🇪 DE德国1-1A
+  - 🇹🇼 TW台湾1-1A
+  - 🇯🇵 日本 4 原生IP
+  - 🇰🇷 KR韩国1-1C
+  - 🇻🇳 VN越南1-1C
+  - 🇹🇼 台灣 1
+  - 🇭🇰 香港 6
+  - 🇹🇼 台灣 5 原生IP
+  - 🇹🇷 土耳其 2
+  - 🇮🇹 IT意大利3-1C
+  - 阿聯酋 2 原生IP
+  - 泰國 2
+  - 🇸🇬 SG新加坡1-1D
+  - 🇯🇵 日本 5
+  - 🇺🇸 US美国2-1A
+  - 🇮🇹 IT意大利1-1D
   type: select
 rules:
 - MATCH,🌐 Proxy
