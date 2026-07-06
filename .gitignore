@@ -134,3 +134,6 @@ config.yaml
 generate.ini
 subscribe/config/config.json
 config.local.json
+
+# local dev workspace
+docs/
