@@ -4,6 +4,9 @@ on:
     - cron: "45 02 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CHECKIN_CONFIG_JSON: ${{ secrets.CHECKIN_CONFIG_JSON }}
 

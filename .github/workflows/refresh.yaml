@@ -2,6 +2,9 @@ name: Refresh
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.repository }}
   cancel-in-progress: true

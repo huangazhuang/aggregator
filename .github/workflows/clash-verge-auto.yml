@@ -2,14 +2,16 @@ name: Clash Verge Auto
 
 on:
   schedule:
-    # Refresh existing subscriptions every 6 hours.
-    - cron: "17 */6 * * *"
-    # Rebuild the source list every Monday 00:47 UTC / 08:47 Asia-Shanghai.
-    - cron: "47 0 * * 1"
+    # Refresh existing subscriptions at 06:17 / 12:17 / 18:17 UTC.
+    - cron: "17 6-23/6 * * *"
+    # Rebuild the source list daily at 00:17 UTC / 08:17 Asia-Shanghai.
+    # Free airport trials usually expire within 1-3 days, so re-register every day.
+    # NOTE: keep this cron string in sync with the check in the "Choose run mode" step.
+    - cron: "17 0 * * *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto chooses refresh normally and collect on the weekly run."
+        description: "auto chooses refresh normally and collect on the daily 00:17 UTC run."
         required: true
         default: "auto"
         type: choice
@@ -50,7 +52,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 150
 
     steps:
       - name: Checkout
@@ -74,7 +76,9 @@ jobs:
           mkdir -p data
           git fetch origin "${OUTPUT_BRANCH}:refs/remotes/origin/${OUTPUT_BRANCH}" --depth=1 || true
 
-          for name in subscribes.txt domains.txt valid-domains.txt; do
+          # crawler-subs.json / crawler-proxies.txt carry the crawler's accumulated
+          # subscription pool across runs; without them every run starts cold.
+          for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt; do
             if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/${name}" 2>/dev/null; then
               cp "/tmp/${name}" "data/${name}"
               echo "Restored ${name} from ${OUTPUT_BRANCH}."
@@ -176,7 +180,7 @@ jobs:
         run: |
           mode="${REQUESTED_MODE}"
           if [ "${mode}" = "auto" ]; then
-            if [ "${SCHEDULE_NAME}" = "47 0 * * 1" ]; then
+            if [ "${SCHEDULE_NAME}" = "17 0 * * *" ]; then
               mode="collect"
             else
               mode="refresh"
@@ -261,8 +265,35 @@ jobs:
           import json
           import os
 
+          # Daily-updated community aggregator feeds (plain/base64 subscription files).
+          # Verified alive on 2026-07-06; drop entries that start returning 404.
+          COMMUNITY_SUBS = [
+              "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+              "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
+              "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
+              "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
+              "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt",
+              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Sub1.txt",
+              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Sub2.txt",
+          ]
+
           config = {
-              "domains": [],
+              "domains": [
+                  {
+                      "name": "community-aggregators",
+                      "sub": COMMUNITY_SUBS,
+                      "enable": True,
+                      "rename": "",
+                      "include": "",
+                      "exclude": "",
+                      "push_to": ["crawler"],
+                      "ignorede": True,
+                      "liveness": True,
+                      "rate": 20.0,
+                      "secure": False,
+                  }
+              ],
               "crawl": {
                   "enable": True,
                   "threshold": 10,
@@ -476,7 +507,7 @@ jobs:
           fi
 
           set +e
-          python -u subscribe/process.py -s subscribe/config/clash-verge-crawler.generated.json --overwrite --flexible --invisible --timeout 10000
+          python -u subscribe/process.py -s subscribe/config/clash-verge-crawler.generated.json --overwrite --flexible --invisible --timeout 10000 --num 128
           status=$?
           set -e
 
@@ -547,6 +578,11 @@ jobs:
           cp "data/${PROFILE_FILE}" "public/${PROFILE_FILE}"
 
           for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
+            # Never publish manual subscription URLs: they may embed private tokens.
+            if [ "${name}" = "subscribes.txt" ] && [ "${{ steps.mode.outputs.mode }}" = "manual" ]; then
+              echo "Skip publishing subscribes.txt in manual mode."
+              continue
+            fi
             if [ -f "data/${name}" ]; then
               cp "data/${name}" "public/${name}"
             fi
@@ -585,16 +621,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Rebuild the branch as a single orphan commit each run: the profile is
+          # ~1MB per publish and an append-only history would grow the repo by
+          # gigabytes per year. Raw URLs always resolve to the branch tip, so
+          # consumers are unaffected by the force push.
           publish_dir="$(mktemp -d)"
-          if git show-ref --verify --quiet "refs/remotes/origin/${OUTPUT_BRANCH}"; then
-            git worktree add -B "${OUTPUT_BRANCH}" "${publish_dir}" "origin/${OUTPUT_BRANCH}"
-          else
-            git worktree add --detach "${publish_dir}"
-            cd "${publish_dir}"
-            git switch --orphan "${OUTPUT_BRANCH}"
-            git reset
-            cd "${GITHUB_WORKSPACE}"
-          fi
+          git worktree add --detach "${publish_dir}"
+          cd "${publish_dir}"
+          git switch --orphan "${OUTPUT_BRANCH}"
+          git reset
+          cd "${GITHUB_WORKSPACE}"
 
           cp public/README.md "${publish_dir}/README.md"
           cp "public/${PROFILE_FILE}" "${publish_dir}/${PROFILE_FILE}"
@@ -615,7 +651,7 @@ jobs:
             fi
           done
           git commit -m "Update Clash Verge profile" --allow-empty
-          git push origin "HEAD:${OUTPUT_BRANCH}"
+          git push --force origin "HEAD:${OUTPUT_BRANCH}"
 
       - name: Summary
         shell: bash

@@ -2,6 +2,9 @@ name: Process
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   # time zone
   TZ: Asia/Shanghai

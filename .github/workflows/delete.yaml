@@ -3,12 +3,16 @@ on:
   schedule:
     - cron: "0 0 * * SUN"
 
+permissions:
+  actions: write
+
 jobs:
   del_runs:
     runs-on: ubuntu-latest
     steps:
       - name: Delete
-        uses: GitRML/delete-workflow-runs@main
+        # GitRML/delete-workflow-runs@main, pinned to commit
+        uses: GitRML/delete-workflow-runs@6c7cf4852e73c46502ee79494d99f5b504cacc6d
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}
