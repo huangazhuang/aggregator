@@ -575,7 +575,7 @@ jobs:
           print(f"merged {len(proxies)} source proxies into {len(config.get('proxies', []))} unique proxies")
           PY
 
-      - name: Filter proxies by gmgn.ai reachability
+      - name: Filter proxies by required site reachability
         if: env.GMGN_FILTER == 'true'
         shell: bash
         run: |
@@ -594,7 +594,14 @@ jobs:
           import executable
           import utils
 
-          check_url = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
+          # Every published proxy must reach ALL of these targets with the
+          # expected status code (Cloudflare rejects dirty IPs with 403).
+          TARGETS = [
+              (os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"), 200),
+              ("https://www.google.com/generate_204", 204),
+              ("https://www.youtube.com/generate_204", 204),
+          ]
+
           profile = os.path.join("data", os.environ.get("PROFILE_FILE", "clash.yaml"))
 
           with open(profile, "r", encoding="utf-8", errors="ignore") as f:
@@ -602,7 +609,7 @@ jobs:
 
           proxies = [p for p in data.get("proxies", []) if isinstance(p, dict)]
           if not proxies:
-              print("No proxies found; skip gmgn filter.")
+              print("No proxies found; skip reachability filter.")
               sys.exit(0)
 
           workspace = os.path.join(os.getcwd(), "clash")
@@ -612,47 +619,59 @@ jobs:
 
           # generate_config dedupes and renames proxies; use its returned list so
           # the names we query through the REST API match the running config.
-          checks = clash.generate_config(workspace, proxies, "gmgn-check.yaml")
+          checks = clash.generate_config(workspace, proxies, "reach-check.yaml")
 
           process = subprocess.Popen(
-              [binpath, "-d", workspace, "-f", os.path.join(workspace, "gmgn-check.yaml")]
+              [binpath, "-d", workspace, "-f", os.path.join(workspace, "reach-check.yaml")]
           )
           time.sleep(8)
 
-          target = urllib.parse.quote(check_url)
-
-          def reachable(proxy):
+          def reachable(proxy, target, expected):
               name = urllib.parse.quote(proxy.get("name", ""), safe="")
-              url = f"http://{clash.EXTERNAL_CONTROLLER}/proxies/{name}/delay?timeout=8000&url={target}&expected=200"
+              quoted = urllib.parse.quote(target)
+              url = f"http://{clash.EXTERNAL_CONTROLLER}/proxies/{name}/delay?timeout=8000&url={quoted}&expected={expected}"
               content = utils.http_get(url=url, retry=2, interval=0.1)
               try:
                   return json.loads(content).get("delay", -1) > 0
               except Exception:
                   return False
 
-          masks = utils.multi_thread_run(
-              func=reachable,
-              tasks=[[p] for p in checks],
-              num_threads=128,
-              show_progress=False,
-          )
+          lines, valid_masks = [], []
+          for target, expected in TARGETS:
+              masks = utils.multi_thread_run(
+                  func=reachable,
+                  tasks=[[p, target, expected] for p in checks],
+                  num_threads=128,
+                  show_progress=False,
+              )
+              count = sum(1 for m in masks if m)
+              lines.append(f"{target}: {count}/{len(checks)} proxies reachable")
+              print(lines[-1])
+              if count > 0:
+                  valid_masks.append(masks)
+              else:
+                  # A target that no proxy passes means the check itself is broken
+                  # (e.g. bot-blocked for headless clients); ignore it instead of
+                  # wiping the whole profile.
+                  print(f"::warning::{target} passed by 0 proxies; ignoring this target")
 
           try:
               process.terminate()
           except Exception:
               pass
 
-          passed = [checks[i] for i in range(len(checks)) if masks[i]]
-          print(f"gmgn filter: {len(passed)}/{len(checks)} proxies can reach {check_url}")
+          passed = [checks[i] for i in range(len(checks)) if all(m[i] for m in valid_masks)]
+          lines.append(f"kept {len(passed)}/{len(checks)} proxies")
+          print(f"reachability filter: kept {len(passed)}/{len(checks)} proxies")
 
           summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
           if summary:
               with open(summary, "a", encoding="utf-8") as f:
-                  f.write(f"gmgn filter: {len(passed)}/{len(checks)} proxies reach {check_url}\n")
+                  f.write("### Reachability filter\n" + "".join(f"- {l}\n" for l in lines))
 
-          if not passed:
+          if not valid_masks or not passed:
               # Fail-safe: publishing an empty profile is worse than an unfiltered one.
-              print("::warning::no proxy passed the gmgn.ai check; keeping unfiltered profile")
+              print("::warning::reachability filter kept nothing; keeping unfiltered profile")
               sys.exit(0)
 
           config = {
