@@ -48,6 +48,10 @@ env:
   CLASH_SUBSCRIPTION_URL_SECRET: ${{ secrets.CLASH_SUBSCRIPTION_URL }}
   CLASH_SUBSCRIPTION_URL_VAR: ${{ vars.CLASH_SUBSCRIPTION_URL }}
   ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS || 'true' }}
+  # Drop proxies that cannot reach this site (Cloudflare-guarded, blocks dirty IPs).
+  # Set repository variable GMGN_FILTER=false to disable the filter.
+  GMGN_FILTER: ${{ vars.GMGN_FILTER || 'true' }}
+  GMGN_CHECK_URL: ${{ vars.GMGN_CHECK_URL || 'https://gmgn.ai/' }}
 
 jobs:
   build:
@@ -569,6 +573,99 @@ jobs:
               yaml.dump(config, f, allow_unicode=True)
 
           print(f"merged {len(proxies)} source proxies into {len(config.get('proxies', []))} unique proxies")
+          PY
+
+      - name: Filter proxies by gmgn.ai reachability
+        if: env.GMGN_FILTER == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+          import urllib.parse
+
+          sys.path.insert(0, os.path.abspath("subscribe"))
+
+          import yaml
+          import clash
+          import executable
+          import utils
+
+          check_url = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
+          profile = os.path.join("data", os.environ.get("PROFILE_FILE", "clash.yaml"))
+
+          with open(profile, "r", encoding="utf-8", errors="ignore") as f:
+              data = yaml.load(f, Loader=yaml.SafeLoader) or {}
+
+          proxies = [p for p in data.get("proxies", []) if isinstance(p, dict)]
+          if not proxies:
+              print("No proxies found; skip gmgn filter.")
+              sys.exit(0)
+
+          workspace = os.path.join(os.getcwd(), "clash")
+          clash_bin, _ = executable.which_bin()
+          binpath = os.path.join(workspace, clash_bin)
+          utils.chmod(binpath)
+
+          # generate_config dedupes and renames proxies; use its returned list so
+          # the names we query through the REST API match the running config.
+          checks = clash.generate_config(workspace, proxies, "gmgn-check.yaml")
+
+          process = subprocess.Popen(
+              [binpath, "-d", workspace, "-f", os.path.join(workspace, "gmgn-check.yaml")]
+          )
+          time.sleep(8)
+
+          target = urllib.parse.quote(check_url)
+
+          def reachable(proxy):
+              name = urllib.parse.quote(proxy.get("name", ""), safe="")
+              url = f"http://{clash.EXTERNAL_CONTROLLER}/proxies/{name}/delay?timeout=8000&url={target}&expected=200"
+              content = utils.http_get(url=url, retry=2, interval=0.1)
+              try:
+                  return json.loads(content).get("delay", -1) > 0
+              except Exception:
+                  return False
+
+          masks = utils.multi_thread_run(
+              func=reachable,
+              tasks=[[p] for p in checks],
+              num_threads=128,
+              show_progress=False,
+          )
+
+          try:
+              process.terminate()
+          except Exception:
+              pass
+
+          passed = [checks[i] for i in range(len(checks)) if masks[i]]
+          print(f"gmgn filter: {len(passed)}/{len(checks)} proxies can reach {check_url}")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write(f"gmgn filter: {len(passed)}/{len(checks)} proxies reach {check_url}\n")
+
+          if not passed:
+              # Fail-safe: publishing an empty profile is worse than an unfiltered one.
+              print("::warning::no proxy passed the gmgn.ai check; keeping unfiltered profile")
+              sys.exit(0)
+
+          config = {
+              "mixed-port": 7890,
+              "external-controller": clash.EXTERNAL_CONTROLLER,
+              "mode": "Rule",
+              "log-level": "silent",
+          }
+          config.update(clash.filter_proxies(passed))
+
+          with open(profile, "w", encoding="utf-8") as f:
+              yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
+              yaml.dump(config, f, allow_unicode=True)
           PY
 
       - name: Prepare publish files
