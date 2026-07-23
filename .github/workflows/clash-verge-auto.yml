@@ -52,6 +52,12 @@ env:
   # Set repository variable GMGN_FILTER=false to disable the filter.
   GMGN_FILTER: ${{ vars.GMGN_FILTER || 'true' }}
   GMGN_CHECK_URL: ${{ vars.GMGN_CHECK_URL || 'https://gmgn.ai/' }}
+  # Self-hosted mainland-China TCP probe (Aliyun FC). When set, it replaces the
+  # Globalping fallback: full-batch, no third-party quota. GLOBALPING_TOKEN is
+  # only used when PROBE_URL is empty.
+  PROBE_URL: ${{ secrets.PROBE_URL }}
+  PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
+  GLOBALPING_TOKEN: ${{ secrets.GLOBALPING_TOKEN }}
 
 jobs:
   build:
@@ -680,53 +686,79 @@ jobs:
               key = f"{p.get('server')}:{p.get('port')}"
               endpoints.setdefault(key, (str(p.get("server")), int(p.get("port", 0))))
 
-          todo = [k for k in endpoints if k not in cache][:MAX_TESTS]
-          print(f"cn-check: {len(endpoints)} checkable endpoints, {len(todo)} new to probe, cache {len(cache)}")
+          PROBE_URL = os.environ.get("PROBE_URL", "")
+          PROBE_TOKEN = os.environ.get("PROBE_TOKEN", "")
 
-          pending = {}
-          for key in todo:
-              server, port = endpoints[key]
-              payload = {
-                  "type": "http",
-                  "target": server,
-                  "locations": [{"country": "CN"}],
-                  "limit": 1,
-                  "measurementOptions": {
-                      "port": port,
-                      "protocol": "http",
-                      "request": {"method": "HEAD", "path": "/"},
-                  },
-              }
-              try:
-                  pending[req(API, payload)["id"]] = key
-              except urllib.error.HTTPError as e:
-                  if e.code in (403, 422, 429):
-                      print(f"::warning::globalping unavailable ({e.code}); stop scheduling new probes")
+          if PROBE_URL:
+              # Self-hosted Aliyun FC probe: mainland-China datacenter view, no
+              # third-party quota, full synchronous batch TCP handshake.
+              todo = [k for k in endpoints if k not in cache]
+              print(f"cn-check(FC): {len(endpoints)} endpoints, {len(todo)} new to probe, cache {len(cache)}")
+              CHUNK = 500
+              for i in range(0, len(todo), CHUNK):
+                  batch = todo[i:i + CHUNK]
+                  r = urllib.request.Request(
+                      PROBE_URL,
+                      data=json.dumps({"endpoints": batch, "timeout": 3.0}).encode(),
+                      headers={"Content-Type": "application/json", "X-Probe-Token": PROBE_TOKEN},
+                  )
+                  try:
+                      with urllib.request.urlopen(r, timeout=120) as resp:
+                          res = json.loads(resp.read().decode())
+                  except Exception as e:
+                      print(f"::warning::FC probe failed ({e}); keeping unprobed endpoints this round")
                       break
-              except Exception:
-                  pass
-              time.sleep(0.2)
+                  for ep, ok in (res.get("ok") or {}).items():
+                      cache[ep] = {"ok": bool(ok), "ts": now}
+          else:
+              # Fallback: Globalping free probes (incremental, 250 tests/hour cap).
+              todo = [k for k in endpoints if k not in cache][:MAX_TESTS]
+              print(f"cn-check(globalping): {len(endpoints)} endpoints, {len(todo)} new to probe, cache {len(cache)}")
 
-          deadline = time.time() + POLL_DEADLINE
-          while pending and time.time() < deadline:
-              time.sleep(3)
-              for mid in list(pending):
+              pending = {}
+              for key in todo:
+                  server, port = endpoints[key]
+                  payload = {
+                      "type": "http",
+                      "target": server,
+                      "locations": [{"country": "CN"}],
+                      "limit": 1,
+                      "measurementOptions": {
+                          "port": port,
+                          "protocol": "http",
+                          "request": {"method": "HEAD", "path": "/"},
+                      },
+                  }
                   try:
-                      res = req(f"{API}/{mid}")
-                  except Exception:
-                      continue
-                  if res.get("status") == "in-progress":
-                      continue
-                  key = pending.pop(mid)
-                  out = ""
-                  try:
-                      r0 = res["results"][0]["result"]
-                      out = f"{r0.get('rawOutput') or ''} {r0.get('status') or ''}"
+                      pending[req(API, payload)["id"]] = key
+                  except urllib.error.HTTPError as e:
+                      if e.code in (403, 422, 429):
+                          print(f"::warning::globalping unavailable ({e.code}); stop scheduling new probes")
+                          break
                   except Exception:
                       pass
-                  cache[key] = {"ok": "timeout" not in out.lower(), "ts": now}
-          if pending:
-              print(f"cn-check: {len(pending)} probes unresolved before deadline; they stay unknown")
+                  time.sleep(0.2)
+
+              deadline = time.time() + POLL_DEADLINE
+              while pending and time.time() < deadline:
+                  time.sleep(3)
+                  for mid in list(pending):
+                      try:
+                          res = req(f"{API}/{mid}")
+                      except Exception:
+                          continue
+                      if res.get("status") == "in-progress":
+                          continue
+                      key = pending.pop(mid)
+                      out = ""
+                      try:
+                          r0 = res["results"][0]["result"]
+                          out = f"{r0.get('rawOutput') or ''} {r0.get('status') or ''}"
+                      except Exception:
+                          pass
+                      cache[key] = {"ok": "timeout" not in out.lower(), "ts": now}
+              if pending:
+                  print(f"cn-check: {len(pending)} probes unresolved before deadline; they stay unknown")
 
           os.makedirs("data", exist_ok=True)
           with open(CACHE_FILE, "w", encoding="utf-8") as f:
