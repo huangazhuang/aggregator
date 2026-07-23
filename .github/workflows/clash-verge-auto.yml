@@ -281,6 +281,13 @@ jobs:
               "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
               "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
               "https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.txt",
+              # Added 2026-07-23 (active Chinese-community projects, files verified via API):
+              "https://raw.githubusercontent.com/anaer/Sub/main/clash.yaml",
+              "https://raw.githubusercontent.com/Jsnzkpg/Jsnzkpg/Jsnzkpg/Jsnzkpg",
+              "https://raw.githubusercontent.com/free18/v2ray/main/v.txt",
+              "https://raw.githubusercontent.com/Ruk1ng001/freeSub/main/v2ray",
+              "https://raw.githubusercontent.com/shaoyouvip/free/main/base64.txt",
+              "https://raw.githubusercontent.com/go4sharing/sub/main/sub.yaml",
           ]
 
           config = {
