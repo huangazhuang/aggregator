@@ -56,7 +56,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 210
 
     steps:
       - name: Checkout
@@ -288,7 +288,34 @@ jobs:
               "https://raw.githubusercontent.com/Ruk1ng001/freeSub/main/v2ray",
               "https://raw.githubusercontent.com/shaoyouvip/free/main/base64.txt",
               "https://raw.githubusercontent.com/go4sharing/sub/main/sub.yaml",
+              # Added 2026-07-23 round 2 (outputs live outside the repo root):
+              # NOTE: Barabama publishes on a feature branch; drop if it starts 404ing.
+              "https://raw.githubusercontent.com/Barabama/FreeNodes/refs/heads/feat/ai-crawler-v2/nodes/merged.yaml",
+              "https://raw.githubusercontent.com/Leon406/SubCrawler/master/sub/share/v2",
+              "https://raw.githubusercontent.com/snakem982/proxypool/main/source/clash-meta-2.yaml",
           ]
+
+          # aiboboxx/clashfree (16k stars) rotates its file name daily
+          # (clashYYYYMMDD.yml), so resolve the newest one at run time.
+          try:
+              import re
+              import urllib.request
+
+              req = urllib.request.Request(
+                  "https://api.github.com/repos/aiboboxx/clashfree/contents/",
+                  headers={
+                      "User-Agent": "aggregator",
+                      "Authorization": f"Bearer {os.environ.get('GH_TOKEN', '')}",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  entries = json.load(resp)
+              names = sorted(e["name"] for e in entries if re.match(r"^clash\d{8}\.ya?ml$", e.get("name", "")))
+              if names:
+                  COMMUNITY_SUBS.append(f"https://raw.githubusercontent.com/aiboboxx/clashfree/main/{names[-1]}")
+                  print(f"aiboboxx/clashfree latest file: {names[-1]}")
+          except Exception as exc:
+              print(f"skip aiboboxx/clashfree: {exc}")
 
           config = {
               "domains": [
