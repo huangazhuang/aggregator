@@ -270,16 +270,17 @@ jobs:
           import os
 
           # Daily-updated community aggregator feeds (plain/base64 subscription files).
-          # Verified alive on 2026-07-06; drop entries that start returning 404.
+          # Prefer China-tested projects: the workflow runs on a US runner, which
+          # cannot detect GFW-blocked entry IPs, so Iran-oriented feeds (barry-far,
+          # Epodonios) look alive here but time out from China — they were removed
+          # on 2026-07-23 after real-world testing. Drop entries that return 404.
           COMMUNITY_SUBS = [
               "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
               "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
               "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
               "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
               "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt",
-              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Sub1.txt",
-              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Sub2.txt",
+              "https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.txt",
           ]
 
           config = {
@@ -568,6 +569,11 @@ jobs:
           }
           config.update(clash.filter_proxies(proxies))
 
+          # Align the auto-select group's probe with what the user actually needs.
+          for group in config.get("proxy-groups", []):
+              if group.get("type") == "url-test":
+                  group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
+
           with open(output, "w", encoding="utf-8") as f:
               yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
               yaml.dump(config, f, allow_unicode=True)
@@ -681,6 +687,11 @@ jobs:
               "log-level": "silent",
           }
           config.update(clash.filter_proxies(passed))
+
+          # Align the auto-select group's probe with what the user actually needs.
+          for group in config.get("proxy-groups", []):
+              if group.get("type") == "url-test":
+                  group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
 
           with open(profile, "w", encoding="utf-8") as f:
               yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
