@@ -82,7 +82,7 @@ jobs:
 
           # crawler-subs.json / crawler-proxies.txt carry the crawler's accumulated
           # subscription pool across runs; without them every run starts cold.
-          for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt; do
+          for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt cn-check.json; do
             if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/${name}" 2>/dev/null; then
               cp "/tmp/${name}" "data/${name}"
               echo "Restored ${name} from ${OUTPUT_BRANCH}."
@@ -615,6 +615,158 @@ jobs:
           print(f"merged {len(proxies)} source proxies into {len(config.get('proxies', []))} unique proxies")
           PY
 
+      - name: Drop GFW-blocked entries via China-side probe
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          sys.path.insert(0, os.path.abspath("subscribe"))
+
+          import yaml
+          import clash
+
+          # Probe each proxy entry (server:port) from a Globalping probe inside
+          # mainland China. A TCP SYN timeout there means the entry is
+          # GFW-blocked even though it looks alive from this US runner.
+          # ECONNRESET/ECONNREFUSED/HTTP errors mean the TCP handshake reached
+          # the target, so the entry is usable.
+          API = "https://api.globalping.io/v1/measurements"
+          TOKEN = os.environ.get("GLOBALPING_TOKEN", "")
+          CACHE_FILE = os.path.join("data", "cn-check.json")
+          MAX_TESTS = 200      # free tier: 250 tests/hour per IP
+          CACHE_DAYS = 7
+          POLL_DEADLINE = 900
+          # UDP-based protocols and shadowsocks do not answer plain HTTP probes,
+          # so a timeout would be a false positive; leave them unchecked.
+          SKIP_TYPES = {"ss", "ssr", "tuic", "hysteria", "hysteria2", "snell", "http", "socks5"}
+
+          profile = os.path.join("data", os.environ.get("PROFILE_FILE", "clash.yaml"))
+          now = time.time()
+
+          with open(profile, "r", encoding="utf-8", errors="ignore") as f:
+              data = yaml.load(f, Loader=yaml.SafeLoader) or {}
+          proxies = [p for p in data.get("proxies", []) if isinstance(p, dict)]
+          if not proxies:
+              print("No proxies found; skip China-side probe.")
+              sys.exit(0)
+
+          cache = {}
+          if os.path.exists(CACHE_FILE):
+              try:
+                  with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                      cache = json.load(f)
+              except Exception:
+                  cache = {}
+          cache = {k: v for k, v in cache.items() if now - v.get("ts", 0) < CACHE_DAYS * 86400}
+
+          def req(url, payload=None):
+              headers = {"Content-Type": "application/json", "User-Agent": "aggregator-cn-check"}
+              if TOKEN:
+                  headers["Authorization"] = f"Bearer {TOKEN}"
+              r = urllib.request.Request(url, data=json.dumps(payload).encode() if payload else None, headers=headers)
+              with urllib.request.urlopen(r, timeout=30) as resp:
+                  return json.loads(resp.read().decode())
+
+          endpoints = {}
+          for p in proxies:
+              if str(p.get("type", "")).lower() in SKIP_TYPES:
+                  continue
+              key = f"{p.get('server')}:{p.get('port')}"
+              endpoints.setdefault(key, (str(p.get("server")), int(p.get("port", 0))))
+
+          todo = [k for k in endpoints if k not in cache][:MAX_TESTS]
+          print(f"cn-check: {len(endpoints)} checkable endpoints, {len(todo)} new to probe, cache {len(cache)}")
+
+          pending = {}
+          for key in todo:
+              server, port = endpoints[key]
+              payload = {
+                  "type": "http",
+                  "target": server,
+                  "locations": [{"country": "CN"}],
+                  "limit": 1,
+                  "measurementOptions": {
+                      "port": port,
+                      "protocol": "http",
+                      "request": {"method": "HEAD", "path": "/"},
+                  },
+              }
+              try:
+                  pending[req(API, payload)["id"]] = key
+              except urllib.error.HTTPError as e:
+                  if e.code in (403, 422, 429):
+                      print(f"::warning::globalping unavailable ({e.code}); stop scheduling new probes")
+                      break
+              except Exception:
+                  pass
+              time.sleep(0.2)
+
+          deadline = time.time() + POLL_DEADLINE
+          while pending and time.time() < deadline:
+              time.sleep(3)
+              for mid in list(pending):
+                  try:
+                      res = req(f"{API}/{mid}")
+                  except Exception:
+                      continue
+                  if res.get("status") == "in-progress":
+                      continue
+                  key = pending.pop(mid)
+                  out = ""
+                  try:
+                      r0 = res["results"][0]["result"]
+                      out = f"{r0.get('rawOutput') or ''} {r0.get('status') or ''}"
+                  except Exception:
+                      pass
+                  cache[key] = {"ok": "timeout" not in out.lower(), "ts": now}
+          if pending:
+              print(f"cn-check: {len(pending)} probes unresolved before deadline; they stay unknown")
+
+          os.makedirs("data", exist_ok=True)
+          with open(CACHE_FILE, "w", encoding="utf-8") as f:
+              json.dump(cache, f, indent=1, sort_keys=True)
+
+          blocked = {k for k, v in cache.items() if not v.get("ok")}
+          kept, dropped = [], 0
+          for p in proxies:
+              key = f"{p.get('server')}:{p.get('port')}"
+              if str(p.get("type", "")).lower() not in SKIP_TYPES and key in blocked:
+                  dropped += 1
+                  continue
+              kept.append(p)
+
+          line = f"cn-check: dropped {dropped} GFW-blocked, kept {len(kept)}/{len(proxies)} (blocked cache {len(blocked)})"
+          print(line)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write(f"### China-side probe\n- {line}\n")
+
+          if not dropped or not kept:
+              sys.exit(0)
+
+          config = {
+              "mixed-port": 7890,
+              "external-controller": clash.EXTERNAL_CONTROLLER,
+              "mode": "Rule",
+              "log-level": "silent",
+          }
+          config.update(clash.filter_proxies(kept))
+          for group in config.get("proxy-groups", []):
+              if group.get("type") == "url-test":
+                  group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
+
+          with open(profile, "w", encoding="utf-8") as f:
+              yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
+              yaml.dump(config, f, allow_unicode=True)
+          PY
+
       - name: Filter proxies by required site reachability
         if: env.GMGN_FILTER == 'true'
         shell: bash
@@ -669,7 +821,7 @@ jobs:
           def reachable(proxy, target, expected):
               name = urllib.parse.quote(proxy.get("name", ""), safe="")
               quoted = urllib.parse.quote(target)
-              url = f"http://{clash.EXTERNAL_CONTROLLER}/proxies/{name}/delay?timeout=8000&url={quoted}&expected={expected}"
+              url = f"http://{clash.EXTERNAL_CONTROLLER}/proxies/{name}/delay?timeout=3000&url={quoted}&expected={expected}"
               content = utils.http_get(url=url, retry=2, interval=0.1)
               try:
                   return json.loads(content).get("delay", -1) > 0
@@ -738,7 +890,7 @@ jobs:
           mkdir -p public
           cp "data/${PROFILE_FILE}" "public/${PROFILE_FILE}"
 
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json cn-check.json; do
             # Never publish manual subscription URLs: they may embed private tokens.
             if [ "${name}" = "subscribes.txt" ] && [ "${{ steps.mode.outputs.mode }}" = "manual" ]; then
               echo "Skip publishing subscribes.txt in manual mode."
@@ -798,7 +950,7 @@ jobs:
           cp public/last-run.txt "${publish_dir}/last-run.txt"
           cp public/status.json "${publish_dir}/status.json"
 
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json cn-check.json; do
             if [ -f "public/${name}" ]; then
               cp "public/${name}" "${publish_dir}/${name}"
             fi
@@ -806,7 +958,7 @@ jobs:
 
           cd "${publish_dir}"
           git add README.md "${PROFILE_FILE}" last-run.txt status.json
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json cn-check.json; do
             if [ -f "${name}" ]; then
               git add "${name}"
             fi
