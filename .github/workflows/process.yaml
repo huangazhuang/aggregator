@@ -43,12 +43,13 @@ jobs:
       - name: Prepare
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.12"
           architecture: "x64"
           cache: "pip"
+          cache-dependency-path: requirements.lock
 
       - name: Install
-        run: pip3 install -r requirements.txt
+        run: pip3 install -r requirements.lock
 
       - name: Process
         run: python -u subscribe/process.py --overwrite

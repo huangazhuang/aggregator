@@ -19,7 +19,7 @@ ARG PIP_INDEX_URL="https://pypi.org/simple"
 WORKDIR /aggregator
 
 # copy files, only linux related files are needed
-COPY requirements.txt /aggregator
+COPY requirements.txt requirements.lock /aggregator/
 COPY subscribe /aggregator/subscribe 
 COPY clash/clash-linux-amd clash/Country.mmdb /aggregator/clash
 
@@ -30,7 +30,7 @@ RUN rm -rf subconverter/subconverter-darwin-amd \
     && rm -rf subconverter/subconverter-windows.exe
 
 # install dependencies
-RUN pip install -i ${PIP_INDEX_URL} --no-cache-dir -r requirements.txt
+RUN pip install -i ${PIP_INDEX_URL} --no-cache-dir -r requirements.lock
 
 # start and run
 CMD ["python", "-u", "subscribe/collect.py", "--all", "--overwrite", "--skip"]

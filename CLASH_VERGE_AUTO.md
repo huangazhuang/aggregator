@@ -25,6 +25,8 @@ Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址�
 - `CLASH_SUBSCRIPTION_URL`：一个远程文本文件 URL，文件中一行一个订阅 URL。
 - `CHECKIN_CONFIG_JSON`：可选，用于机场每日签到保流量。
 
+订阅 URL 只能保存在 `Secrets` 中，不要使用 `Variables`。GitHub 会自动遮盖 Secret，普通变量则可能在 Actions 日志中显示明文。
+
 `CHECKIN_CONFIG_JSON` 示例：
 
 ```json
@@ -57,16 +59,18 @@ Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址�
 没有配置 `CLASH_SUBSCRIPTIONS` 时，`Clash Verge Auto` 会使用双模式：
 
 - `collect.py`：从原项目所有机场来源收集候选站点，自动注册、购买免费套餐并提取订阅。
-- `process.py`：同时启用爬虫聚合，默认包含 GitHub、Google、Yandex、Twitter、GitHub forks 和 v2rayse 公开分享来源。
+- `process.py`：同时启用爬虫聚合，默认包含 GitHub、Google、DuckDuckGo、Yahoo、Twitter、Telegram 和 GitHub forks 等公开来源。
 
-两部分结果会合并到同一个 `clash.yaml`。`alive_check=true` 是默认值，会在 GitHub Actions runner 上用 Mihomo/Clash 测活后再发布。这个测活环境不是中国大陆电信网络，因此仍可能和你本地 Clash Verge 的连通性有差异，但它能避免明显死节点直接发布。
+两部分结果会合并到同一个 `clash.yaml`。`alive_check=true` 是默认值，会在 GitHub Actions runner 上用 Mihomo/Clash 测活。最终发布前还会强制检查 GMGN、Google 和 YouTube，只有同时通过三个目标的节点才会进入严格版。
+
+严格筛选采用失败关闭策略：任一目标检测异常，或最终通过数少于 20，或少于上一版的 25% 时，本次任务停止发布，`clash-verge-output` 保持上一版。可通过仓库变量 `STRICT_MIN_NODES` 和 `STRICT_MIN_RETAIN_RATIO` 调整门槛。
 
 为提高自动注册成功率，已增加多临时邮箱服务商轮换，包括 `tempmail.lol`、`mail.tm`、`moakt`、`snapmail`、`linshiyouxiang` 等。遇到发信失败、收信超时或验证码提取失败时，会换邮箱服务商重试。
 
 ## 自动运行策略
 
-- 每 6 小时自动刷新已有订阅。
-- 每周一 08:47（Asia/Shanghai）自动重新收集来源。
+- 每天 02:17、14:17、20:17（Asia/Shanghai）刷新已有订阅。
+- 每天 08:17（Asia/Shanghai）重新收集来源。
 - 每天 10:45（Asia/Shanghai）自动执行签到；只有配置 `CHECKIN_CONFIG_JSON` 时才会实际签到。
 - 每次运行都会更新 `clash-verge-output` 分支的 `last-run.txt`，用于保活 Actions 和确认最近运行时间。
 - 没有 `CLASH_SUBSCRIPTIONS` 时，会按双模式尽可能多收集来源；这个方式不保证每次都有可用节点，且耗时可能很长。

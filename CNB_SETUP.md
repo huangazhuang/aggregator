@@ -17,7 +17,18 @@ https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-output/clash.yaml
 
 ## 自动运行
 
-CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 自动将 GitHub `main` 快进同步到 CNB，`10:30` 和 `22:30` 再运行大陆节点实测。临时需要同步代码时，可在 `main` 分支详情页点击“立即同步 GitHub main”。
+配置 `CNB_MIRROR_TOKEN` 后，GitHub `main` 每次收到新提交都会运行 `Sync GitHub main to CNB`，通常会在几十秒到几分钟内将同一提交快进推送到 CNB。
+
+启用近实时同步只需操作一次：
+
+1. 在 CNB 创建一个具有当前仓库 Git 写入权限的新访问令牌。
+2. 打开 GitHub 仓库的 `Settings > Secrets and variables > Actions`。
+3. 新建 Repository secret，名称填写 `CNB_MIRROR_TOKEN`，值填写刚创建的 CNB 令牌。
+4. 再次向 GitHub `main` 推送提交，或在 GitHub Actions 中手动运行 `Sync GitHub main to CNB`。
+
+请勿使用 Repository variable 保存令牌，变量不会像 Secret 一样自动脱敏。
+
+CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub 同步一次，作为实时推送失败时的兜底；`10:30` 和 `22:30` 运行大陆节点实测。临时需要同步代码时，也可在 CNB `main` 分支详情页点击“立即同步 GitHub main”。
 
 同步只允许正常的快进更新。如果有人直接修改 CNB 的 `main` 导致它与 GitHub 分叉，任务会失败而不是强制覆盖；此项目应始终在 GitHub 修改代码。节点数据本身始终从 GitHub 最新的 `clash-verge-output` 下载，不依赖代码同步时间。
 

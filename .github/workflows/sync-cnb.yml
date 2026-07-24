@@ -1,0 +1,61 @@
+name: Sync GitHub main to CNB
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-cnb-main
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CNB_REPO_URL: https://cnb.cool/ASD12321_446/aggregator.git
+      CNB_TOKEN_USER_NAME: cnb
+      CNB_TOKEN: ${{ secrets.CNB_MIRROR_TOKEN }}
+
+    steps:
+      - name: Checkout GitHub main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check mirror credentials
+        id: credentials
+        shell: bash
+        run: |
+          if [ -z "${CNB_TOKEN}" ]; then
+            echo "::warning::CNB_MIRROR_TOKEN is not configured; skip the CNB mirror."
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "enabled=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Fast-forward CNB main
+        if: steps.credentials.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          chmod +x scripts/cnb_git_askpass.sh
+          remote_sha="$(
+            GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+              GIT_TERMINAL_PROMPT=0 \
+              git ls-remote "${CNB_REPO_URL}" refs/heads/main | awk '{print $1}'
+          )"
+
+          if [ "${remote_sha}" = "${GITHUB_SHA}" ]; then
+            echo "CNB main is already up to date: ${GITHUB_SHA}"
+            exit 0
+          fi
+
+          GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+            GIT_TERMINAL_PROMPT=0 \
+            git push "${CNB_REPO_URL}" "HEAD:refs/heads/main"
+          echo "CNB main fast-forwarded to ${GITHUB_SHA}"
