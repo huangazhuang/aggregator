@@ -1713,6 +1713,7 @@ def collect_airport(
     filepath: str = "",
     delimiter: str = "",
     chuck: bool = False,
+    include_candidates: bool = False,
 ) -> dict:
     def crawl_channel(channel: str, page_num: int, fun: typing.Callable) -> list[str]:
         """crawl from telegram channel"""
@@ -2075,7 +2076,50 @@ def collect_airport(
 
     # merge
     candidates.update(materials)
-    domains = list(candidates.keys())
+    discovered = {
+        domain: {"coupon": coupon if isinstance(coupon, str) else "", "validated": False}
+        for domain, coupon in candidates.items()
+        if domain
+    }
+    domains = list(discovered.keys())
+
+    # Persist every discovered domain through the caller, but only run the
+    # expensive backend and registration-requirement checks on a rotating batch.
+    try:
+        discovery_limit = max(int(os.environ.get("AIRPORT_DISCOVERY_MAX_DOMAINS", "0") or 0), 0)
+    except Exception:
+        discovery_limit = 0
+    discovery_keys = {f"airport-discovery:{domain}": domain for domain in domains}
+    now = time.time()
+    untried = sorted([key for key in discovery_keys if key not in health])
+    due = sorted(
+        [
+            key
+            for key in discovery_keys
+            if key in health and float(health.get(key, {}).get("retry_after", 0) or 0) <= now
+        ],
+        key=lambda key: float(health.get(key, {}).get("last_checked", 0) or 0),
+    )
+    selected_keys = untried + due
+    if discovery_limit > 0:
+        selected_keys = selected_keys[:discovery_limit]
+    domains = [discovery_keys[key] for key in selected_keys]
+    if len(domains) < len(discovered):
+        logger.info(
+            f"[AirPortCollector] discovery rotation selected {len(domains)}/{len(discovered)} domains "
+            f"for backend validation"
+        )
+
+    def update_discovery_health(domain: str, success: bool) -> None:
+        key = f"airport-discovery:{domain}"
+        update_source_health(health, key, 1 if success else 0, now=now)
+        item = health.get(key, {})
+        if success:
+            item["retry_after"] = now + 7 * 86400
+        else:
+            failures = int(item.get("failures", 1) or 1)
+            item["retry_after"] = now + [3, 7, 14, 30][min(failures - 1, 3)] * 86400
+        health[key] = item
 
     # extract real routing base url
     logger.info(f"[AirPortCollector] fetched {len(domains)} airport, start extracting real routing addresses")
@@ -2085,9 +2129,13 @@ def collect_airport(
         num_threads=num_thread,
         show_progress=display,
     )
+    for i, site in enumerate(sites):
+        if not site:
+            update_discovery_health(domains[i], success=False)
 
-    tasks = [[site, rigid, chuck] for site in sites if site]
-    records = {sites[i]: candidates.get(domains[i], "") for i in range(len(sites)) if sites[i]}
+    task_domains = [(domains[i], site) for i, site in enumerate(sites) if site]
+    tasks = [[site, rigid, chuck] for _, site in task_domains]
+    records = {sites[i]: discovered.get(domains[i], {}).get("coupon", "") for i in range(len(sites)) if sites[i]}
 
     # check website availability
     logger.info(f"[AirPortCollector] extract real base url finished, start to check it now")
@@ -2095,15 +2143,22 @@ def collect_airport(
 
     availables = dict()
     for i in range(len(tasks)):
-        if not result[i][0]:
+        raw_domain = task_domains[i][0]
+        success = bool(result[i][0])
+        update_discovery_health(raw_domain, success=success)
+
+        if not success:
             continue
 
         site = tasks[i][0]
         coupon = records.get(site, "")
-        availables[site] = {"coupon": coupon, "api_prefix": result[i][1]}
+        availables[site] = {"coupon": coupon, "api_prefix": result[i][1], "validated": True}
+
+    save_source_health(health)
+    discovered.update(availables)
 
     logger.info(f"[AirPortCollector] finished collect airport, availables: {len(availables)}")
-    return availables
+    return discovered if include_candidates else availables
 
 
 def save_candidates(candidates: dict, filepath: str, delimiter: str) -> None:
@@ -2125,8 +2180,12 @@ def save_candidates(candidates: dict, filepath: str, delimiter: str) -> None:
             coupon = utils.trim(v.get("coupon", ""))
             invite_code = utils.trim(v.get("invite_code", ""))
             api_prefix = utils.trim(v.get("api_prefix", ""))
+            validated = str(v.get("validated", True)).lower()
 
-            text = f"{text}\t{delimiter}\t{coupon}\t{delimiter}\t{invite_code}\t{delimiter}\t{api_prefix}"
+            text = (
+                f"{text}\t{delimiter}\t{coupon}\t{delimiter}\t{invite_code}\t{delimiter}\t{api_prefix}"
+                f"\t{delimiter}\t{validated}"
+            )
         lines.append(text)
 
     utils.write_file(filename=filepath, lines=lines)

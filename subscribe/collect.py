@@ -172,13 +172,19 @@ def assign(
             if not line or line.startswith("#"):
                 continue
 
-            words = line.rsplit(delimiter, maxsplit=3)
+            words = line.rsplit(delimiter, maxsplit=4)
             address = utils.trim(words[0])
             coupon = utils.trim(words[1]) if len(words) > 1 else ""
             invite_code = utils.trim(words[2]) if len(words) > 2 else ""
             api_prefix = utils.trim(words[3]) if len(words) > 3 else ""
+            validated = utils.trim(words[4]).lower() != "false" if len(words) > 4 else True
 
-            records[address] = {"coupon": coupon, "invite_code": invite_code, "api_prefix": api_prefix}
+            records[address] = {
+                "coupon": coupon,
+                "invite_code": invite_code,
+                "api_prefix": api_prefix,
+                "validated": validated,
+            }
 
         return records
 
@@ -232,12 +238,16 @@ def assign(
             filepath=os.path.join(DATA_BASE, "coupons.txt"),
             delimiter=delimiter,
             chuck=chuck,
+            include_candidates=True,
         )
 
         if candidates:
             for k, v in candidates.items():
                 item = domains.get(k, {})
+                was_validated = item.get("validated", True) if item else False
                 item.update(v)
+                if was_validated and not v.get("validated", False):
+                    item["validated"] = True
 
                 domains[k] = item
 
@@ -275,12 +285,16 @@ def assign(
         max_domains = max(int(os.environ.get("AIRPORT_MAX_DOMAINS", "0") or 0), 0)
     except Exception:
         max_domains = 0
-    total_domains = len(domains)
-    domains = select_airport_domains(domains=domains, health=health, known_good=known_good, limit=max_domains)
+    total_pool = len(domains)
+    runnable_domains = {domain: params for domain, params in domains.items() if params.get("validated", True)}
+    total_domains = len(runnable_domains)
+    domains = select_airport_domains(
+        domains=runnable_domains, health=health, known_good=known_good, limit=max_domains
+    )
     if len(domains) < total_domains:
         logger.info(
-            f"airport domain rotation selected {len(domains)}/{total_domains} sites "
-            f"(known good first, then untried and cooldown-expired)"
+            f"airport domain rotation selected {len(domains)}/{total_domains} validated sites "
+            f"from a {total_pool}-site discovery pool (known good first, then untried and cooldown-expired)"
         )
 
     for domain, param in domains.items():

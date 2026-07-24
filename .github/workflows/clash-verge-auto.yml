@@ -60,7 +60,8 @@ env:
   ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS || 'true' }}
   # Rotate through the large airport pool instead of re-registering all ~2000
   # historical domains every day. Successful sites are always prioritized.
-  AIRPORT_MAX_DOMAINS: ${{ vars.AIRPORT_MAX_DOMAINS || '300' }}
+  AIRPORT_MAX_DOMAINS: ${{ vars.AIRPORT_MAX_DOMAINS || '128' }}
+  AIRPORT_DISCOVERY_MAX_DOMAINS: ${{ vars.AIRPORT_DISCOVERY_MAX_DOMAINS || '128' }}
   # Drop proxies that cannot reach this site (Cloudflare-guarded, blocks dirty IPs).
   # Set repository variable GMGN_FILTER=false to disable the filter.
   GMGN_FILTER: ${{ vars.GMGN_FILTER || 'true' }}
@@ -242,7 +243,7 @@ jobs:
         shell: bash
         run: |
           export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
-          base_args=(--all --targets clash --num 64 --delay 10000 --easygoing)
+          base_args=(--all --targets clash --num 64 --delay 10000 --easygoing --pages 3)
           fallback_args=(--all --targets clash --num 64 --delay 10000 --easygoing --skip --overwrite)
 
           if [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
