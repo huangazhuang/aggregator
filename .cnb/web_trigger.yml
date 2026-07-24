@@ -1,0 +1,7 @@
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 立即筛选中国可用节点
+        description: 从中国大陆 CNB 节点运行 Mihomo 实测并更新独立订阅
+        event: web_trigger_china_probe
+        isDefault: true

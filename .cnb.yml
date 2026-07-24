@@ -1,0 +1,85 @@
+main:
+  "crontab: 30 10,22 * * *":
+    - &china_probe
+      name: Mainland China Mihomo probe
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 2
+      env:
+        SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
+        TARGET_URL: https://www.gstatic.com/generate_204
+        OUTPUT_BRANCH: clash-cn-output
+        MAX_NODES: "80"
+        MIN_SUCCESS: "5"
+        TIMEOUT_MS: "3000"
+      stages:
+        - name: Test proxies from the CNB runner
+          timeout: 20m
+          script: |
+            set -eu
+            python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
+            chmod +x clash/clash-linux-amd
+            mkdir -p .cnb-runtime public-cn
+            python3 scripts/cnb_mihomo_filter.py \
+              --source "${SOURCE_PROFILE_URL}" \
+              --mihomo clash/clash-linux-amd \
+              --work-dir .cnb-runtime \
+              --output-dir public-cn \
+              --target-url "${TARGET_URL}" \
+              --timeout-ms "${TIMEOUT_MS}" \
+              --attempts 2 \
+              --workers 48 \
+              --max-nodes "${MAX_NODES}" \
+              --min-success "${MIN_SUCCESS}"
+
+        - name: Publish the filtered profile to CNB
+          timeout: 5m
+          script: |
+            set -eu
+            test -n "${CNB_TOKEN:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            profile_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${OUTPUT_BRANCH}/clash.yaml"
+            export PROFILE_URL="${profile_url}"
+            python3 - <<'PY'
+            import json
+            import os
+            from pathlib import Path
+
+            public = Path("public-cn")
+            status_path = public / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["profile_url"] = os.environ["PROFILE_URL"]
+            status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            (public / "README.md").write_text(
+                "# 中国大陆实测 Clash 订阅\n\n"
+                f"订阅地址：{os.environ['PROFILE_URL']}\n\n"
+                f"本次从 {status['source_count']} 个节点中实测通过 {status['passed_count']} 个，"
+                f"发布 {status['published_count']} 个。\n",
+                encoding="utf-8",
+            )
+            PY
+
+            mkdir -p .cnb-runtime/publish
+            cp public-cn/clash.yaml .cnb-runtime/publish/clash.yaml
+            cp public-cn/status.json .cnb-runtime/publish/status.json
+            cp public-cn/probe-results.json .cnb-runtime/publish/probe-results.json
+            cp public-cn/README.md .cnb-runtime/publish/README.md
+
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            cd .cnb-runtime/publish
+            git init
+            git checkout -b "${OUTPUT_BRANCH}"
+            git config user.name "cnb-probe[bot]"
+            git config user.email "cnb-probe@users.noreply.cnb.cool"
+            git add README.md clash.yaml status.json probe-results.json
+            git commit -m "Update mainland-China tested Clash profile"
+
+            GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${OUTPUT_BRANCH}"
+            printf 'Subscription URL: %s\n' "${profile_url}"
+
+  web_trigger_china_probe:
+    - *china_probe
