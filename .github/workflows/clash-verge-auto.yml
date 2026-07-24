@@ -768,6 +768,23 @@ jobs:
               print("No proxies found; skip reachability filter.")
               sys.exit(0)
 
+          # Re-validate after merging YAML files. This also restores quoted
+          # scalar types for numeric-looking REALITY short IDs such as "08";
+          # without it, Mihomo rejects the entire generated test config.
+          validated = []
+          for proxy in proxies:
+              try:
+                  if clash.verify(proxy, mihomo=True):
+                      validated.append(proxy)
+              except Exception:
+                  pass
+          invalid_count = len(proxies) - len(validated)
+          if invalid_count:
+              print(f"config validation: dropped {invalid_count} malformed proxies")
+          if not validated:
+              print("::warning::all proxies failed config validation; keeping the source profile")
+              sys.exit(0)
+
           workspace = os.path.join(os.getcwd(), "clash")
           clash_bin, _ = executable.which_bin()
           binpath = os.path.join(workspace, clash_bin)
@@ -775,7 +792,7 @@ jobs:
 
           # generate_config dedupes and renames proxies; use its returned list so
           # the names we query through the REST API match the running config.
-          checks = clash.generate_config(workspace, proxies, "reach-check.yaml")
+          checks = clash.generate_config(workspace, validated, "reach-check.yaml")
 
           process = subprocess.Popen(
               [binpath, "-d", workspace, "-f", os.path.join(workspace, "reach-check.yaml")]
