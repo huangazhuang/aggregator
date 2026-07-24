@@ -52,7 +52,8 @@
 仓库「Actions」→「Clash Verge Auto」→「Run workflow」手动跑一次。
 跑完在这次运行的 Summary 里应看到:
 `cn-check(FC): N endpoints, ... ` 且 `dropped X GFW-blocked, kept Y/Z`。
-看到 `(FC)` 字样就说明已切到你的自建探针,不再用 Globalping。
+看到 `(FC)` 字样就说明 GitHub 已启用你的自建探针。未配置 `PROBE_URL`
+时会直接跳过中国侧预筛选，不会调用 Globalping。
 
 ## 成本
 
@@ -65,4 +66,5 @@ FC 每月有免费额度(约 100 万次调用 + 一定 CU 资源),本探针每�
 - Summary 显示 `FC probe failed (...)`: 检查 PROBE_URL 是否可公网访问、
   PROBE_TOKEN 两边是否一致、触发器是否允许 POST。失败会自动回退到不剔除
   (fail-open),订阅不会被清空。
-- 想临时停用自建探针: 删掉仓库的 `PROBE_URL` secret 即可自动回退 Globalping。
+- 想临时停用自建探针: 删掉仓库的 `PROBE_URL` secret，GitHub 会跳过中国侧
+  预筛选，后续 GMGN、Google、YouTube 三站点严格筛选仍会照常执行。
