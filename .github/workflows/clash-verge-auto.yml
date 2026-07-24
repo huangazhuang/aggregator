@@ -56,8 +56,8 @@ env:
   ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS || 'true' }}
   # Rotate through the large airport pool instead of re-registering all ~2000
   # historical domains every day. Successful sites are always prioritized.
-  AIRPORT_MAX_DOMAINS: ${{ vars.AIRPORT_MAX_DOMAINS || '128' }}
-  AIRPORT_DISCOVERY_MAX_DOMAINS: ${{ vars.AIRPORT_DISCOVERY_MAX_DOMAINS || '128' }}
+  AIRPORT_MAX_DOMAINS: ${{ vars.AIRPORT_MAX_DOMAINS || '192' }}
+  AIRPORT_DISCOVERY_MAX_DOMAINS: ${{ vars.AIRPORT_DISCOVERY_MAX_DOMAINS || '256' }}
   # The final profile is never published unless every retained proxy passes all
   # required sites and the result remains above this safety floor.
   GMGN_CHECK_URL: ${{ vars.GMGN_CHECK_URL || 'https://gmgn.ai/' }}
@@ -399,7 +399,7 @@ jobs:
                       "notinurl": ["github.com", "githubusercontent.com"],
                   },
                   "yandex": {
-                      "enable": False,
+                      "enable": True,
                       "pages": 1,
                       "within": 30,
                       "push_to": ["crawler"],
@@ -524,10 +524,12 @@ jobs:
                           },
                       },
                       {
-                          "enable": False,
+                          "enable": True,
                           "script": "v2rayse#fetch",
                           "params": {
-                              "url": "https://v2rayse.com",
+                              "url": "https://s3.v2rayse.com",
+                              "nodebuf_url": "https://nodebuf.com/api/public/proxy-cache",
+                              "nodebuf_max_nodes": 100,
                               "nopublic": True,
                               "types": ["ss", "ssr", "vmess", "trojan", "tuic", "snell", "vless", "hysteria2", "hysteria", "http", "socks5", "anytls"],
                               "persist": {

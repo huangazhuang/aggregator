@@ -243,6 +243,54 @@ def fetchone(
     return proxies, list(set(subscriptions)) if subscriptions else []
 
 
+def fetch_nodebuf(url: str, support: set, max_nodes: int = 100) -> list:
+    """Read NodeBuf's public, short-lived v2rayse-compatible proxy cache."""
+    url = utils.trim(url)
+    if not url:
+        return []
+
+    content = utils.http_get(
+        url=url,
+        headers={"User-Agent": utils.USER_AGENT, "Accept": "application/json"},
+        retry=2,
+        timeout=15,
+    )
+    if not content:
+        return []
+
+    try:
+        payload = json.loads(content)
+        nodes = payload.get("nodes", []) if isinstance(payload, dict) else []
+        max_nodes = min(max(int(max_nodes), 1), 500)
+        uris, seen = [], set()
+        for item in nodes[:max_nodes]:
+            if not isinstance(item, dict) or utils.trim(item.get("type", "")).lower() not in support:
+                continue
+            uri = utils.trim(item.get("uri", ""))
+            if not uri or uri in seen or not AirPort.check_protocol(uri):
+                continue
+            seen.add(uri)
+            uris.append(uri)
+
+        if not uris:
+            return []
+
+        _, program = which_bin()
+        proxies = AirPort.decode(
+            text="\n".join(uris),
+            program=program,
+            artifact=f"nodebuf-{utils.random_chars(6)}",
+            special=SPECIAL_PROTOCOLS,
+            throw=True,
+        )
+        proxies = [p for p in proxies if p and p.get("name", "") and p.get("type", "") in support]
+        logger.info(f"[V2RaySE] NodeBuf public cache returned {len(proxies)}/{len(uris)} parsed proxies")
+        return proxies
+    except Exception:
+        logger.error(f"[V2RaySE] parse NodeBuf public cache failed: \n{traceback.format_exc()}")
+        return []
+
+
 def fetch(params: dict) -> list:
     if not params or type(params) != dict:
         return []
@@ -296,18 +344,38 @@ def fetch(params: dict) -> list:
     files = list(set(itertools.chain.from_iterable(links)))
     array = [[x, nopublic, exclude, ignore, repeat, noproxies] for x in files if x]
 
-    if not array:
-        logger.error(f"[V2RaySE] cannot found any valid shared file, dates: {dates}")
-        return []
-
-    logger.info(f"[V2RaySE] start to fetch shared files, count: {len(array)}")
-
     tasks, proxies, subscriptions = [], [], set()
+    if array:
+        logger.info(f"[V2RaySE] start to fetch shared files, count: {len(array)}")
+    else:
+        logger.warning(f"[V2RaySE] legacy object listing is unavailable, dates: {dates}")
+
     results = utils.multi_thread_run(func=fetchone, tasks=array, show_progress=display, description="FetchSub")
 
     for result in results:
+        if not result:
+            continue
         proxies.extend([p for p in result[0] if p and p.get("name", "") and p.get("type", "") in support])
         subscriptions.update([x for x in result[1] if x])
+
+    nodebuf_url = utils.trim(params.get("nodebuf_url", "https://nodebuf.com/api/public/proxy-cache"))
+    if nodebuf_url:
+        proxies.extend(fetch_nodebuf(url=nodebuf_url, support=support, max_nodes=params.get("nodebuf_max_nodes", 100)))
+
+    # The cache can overlap GitHub sources heavily; deduplicate the decoded
+    # proxy dictionaries before handing them to the normal liveness pipeline.
+    unique, fingerprints = [], set()
+    for proxy in proxies:
+        fingerprint = json.dumps(proxy, ensure_ascii=False, sort_keys=True)
+        if fingerprint in fingerprints:
+            continue
+        fingerprints.add(fingerprint)
+        unique.append(proxy)
+    proxies = unique
+
+    if not proxies and not subscriptions:
+        logger.error(f"[V2RaySE] no data returned by legacy storage or NodeBuf public cache")
+        return []
 
     cost = "{:.2f}s".format(time.time() - starttime)
     logger.info(

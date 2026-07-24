@@ -854,36 +854,91 @@ def crawl_yandex(
     starttime = time.time()
 
     headers = {
-        "User-Agent": utils.USER_AGENT,
+        # Yandex currently challenges Chromium version-like user agents from
+        # CI while its public search page accepts the generic browser token.
+        "User-Agent": "Mozilla/5.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "gzip",
     }
 
     collections, pages = {}, max(1, pages)
+    # Yandex serves different anti-bot policies by region. Keep the fallback
+    # list public and rotate only when the response is a challenge/empty page.
+    engines = ["yandex.uz", "yandex.kz", "yandex.ru", "yandex.com"]
+
+    def challenged(document: str) -> bool:
+        return bool(
+            not document
+            or re.search(
+                r"captcha|smartcaptcha|showcaptcha|are you (?:a )?robot|verify you are human|Подтвердите, что вы не робот|необходимо подтвердить",
+                document[:200000],
+                flags=re.I,
+            )
+        )
+
+    def result_links(document: str) -> list[str]:
+        """Extract direct modern Yandex organic links from any HTML revision."""
+        if not document:
+            return []
+
+        decoded = html.unescape(document).replace("\\/", "/").replace("\\u003d", "=")
+        links = re.findall(r'<a\b[^>]*?href=["\'](https?://[^"\'<>]+)["\']', decoded, flags=re.I)
+        # Older pages put the token URL in text with <b> tags; retain that
+        # path independently of the organic-result markup.
+        links.extend(
+            re.findall(
+                r"https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/[^\s\"'<>]*",
+                decoded,
+                flags=re.I,
+            )
+        )
+        result = []
+        for link in links:
+            link = utils.trim(link).rstrip(".,;)")
+            if not link or re.search(r"(?:yandex\.(?:ru|com|uz|kz)|ya\.ru)/", link, flags=re.I):
+                continue
+            if reject and re.search(reject, link, flags=re.I):
+                continue
+            if exclude and re.search(exclude, link, flags=re.I):
+                continue
+            if link not in result:
+                result.append(link)
+        return result
 
     for q in queries:
-        query = urllib.parse.quote(q)
-        url = f'https://yandex.com/search/?text="{query}"&lr=10599&cee=1'
-        if within > 0:
-            url = f"{url}&within={within}"
+        query_pages, base_url, content = pages, "", ""
+        for engine in engines:
+            params = {"text": f'"{q}"', "lr": "10599", "cee": "1"}
+            if within > 0:
+                params["within"] = str(within)
+            candidate = f"https://{engine}/search/"
+            content = utils.http_get(url=candidate, params=params, headers=headers, retry=1, timeout=15)
+            if not challenged(content) and (result_links(content) or "serp-item" in content):
+                base_url = candidate
+                break
+            logger.warning(f"[YandexCrawl] {engine} returned a challenge/empty result for query: {q}")
 
-        # get total pages
-        content = utils.http_get(url=url, headers=headers)
-        query_pages = pages
-        if content:
-            regex = r'<a class="VanillaReact Pager-Item Pager-Item_type_page" href=".*?" aria-label="Page \d+".*?>(\d+)</a>'
-            groups = re.findall(regex, content, flags=re.I)
-            if groups:
-                query_pages = min(pages, max([int(x) for x in groups]))
+        if not base_url:
+            continue
+
+        regex = r'<a class="VanillaReact Pager-Item Pager-Item_type_page" href=".*?" aria-label="Page \d+".*?>(\d+)</a>'
+        groups = re.findall(regex, content, flags=re.I)
+        if groups:
+            query_pages = min(pages, max([int(x) for x in groups]))
 
         for page in range(0, query_pages):
-            content = utils.http_get(url=f"{url}&p={page}", headers=headers)
-            if not content:
+            document = content
+            if page > 0:
+                params = {"text": f'"{q}"', "lr": "10599", "cee": "1", "p": str(page)}
+                if within > 0:
+                    params["within"] = str(within)
+                document = utils.http_get(url=base_url, params=params, headers=headers, retry=1, timeout=15)
+            if not document or challenged(document):
                 logger.error(f"[YandexCrawl] cannot get content from query: {q}, page: {page}")
                 continue
 
-            fallback = html.unescape(content).replace("<b>", "").replace("</b>", "")
+            fallback = html.unescape(document).replace("<b>", "").replace("</b>", "")
             collections.update(
                 extract_subscribes(
                     content=fallback,
@@ -894,40 +949,30 @@ def crawl_yandex(
                 )
             )
 
-            groups = re.findall(r"<li class=\"serp-item\s+serp-item_card\s?\".*?>([\s\S]*?)</li>", content)
-            if not groups:
-                logger.error(f"[YandexCrawl] cannot get any search result from query: {q}, page: {page}")
-                continue
-
-            for group in groups:
-                try:
-                    if reject:
-                        regex = r'<div class="Path Organic-Path path organic__path"><a .*?href="(.*?)".*?>.*?</a></div>'
-                        link = re.findall(regex, group, flags=re.I)[0]
-                        if re.search(reject, link):
-                            continue
-                except:
-                    logger.error(f"[YandexCrawl] invalid regex pattern: {reject}")
+            # Modern Yandex no longer exposes stable serp-item/Organic-Path
+            # markup. Feed direct organic URLs through the existing subscription
+            # parser so both old and new result layouts work.
+            links = result_links(document)[:12]
+            documents = utils.multi_thread_run(
+                func=utils.http_get,
+                tasks=[[link, headers, None, 1, "", 0, 8] for link in links],
+                num_threads=min(len(links), 8),
+            )
+            for linked in documents:
+                if not linked:
                     continue
-
-                regex = r"https?://(?:[a-zA-Z0-9_\u4e00-\u9fa5\-]+\.)+[a-zA-Z0-9_\u4e00-\u9fa5\-]+(?::\d+)?/<b>api</b>/<b>v</b><b>1</b>/<b>client</b>/<b>subscribe</b>\?<b>token</b>=[a-zA-Z0-9]{16,32}"
-                links = re.findall(regex, group, flags=re.I)
-                for link in links:
-                    try:
-                        link = re.sub(r"<b>|</b>", "", link).replace("http://", "https://")
-                        if exclude and re.search(exclude, link):
-                            continue
-                        collections[link] = {
-                            "push_to": push_to,
-                            "origin": Origin.YANDEX.name,
-                            "nocache": True,
-                        }
-                    except:
-                        continue
+                collections.update(
+                    extract_subscribes(
+                        content=html.unescape(linked),
+                        push_to=push_to,
+                        exclude=exclude,
+                        source=Origin.YANDEX.name,
+                        nocache=True,
+                    )
+                )
 
             if len(collections) >= pages * 100:
                 break
-
             time.sleep(interval)
 
         if len(collections) >= pages * 100:
@@ -1274,23 +1319,76 @@ def extract_twitter_syndication(content: str, config: dict) -> dict:
     )
 
 
+def extract_twitter_rss(content: str, config: dict) -> dict:
+    """Parse public RSS mirrors without requiring a Twitter login or token."""
+    if not content or not isinstance(config, dict):
+        return {}
+
+    # xcancel/nitter return RSS with descriptions that may contain HTML or
+    # escaped entities. Removing the wrapper is enough because the existing
+    # protocol/subscription extractor handles both plain text and links.
+    if not re.search(r"<rss\b|<feed\b|<item\b", content, flags=re.I):
+        return {}
+    if re.search(r"not yet whitelisted|temporarily unavailable|error", content[:5000], flags=re.I):
+        return {}
+
+    text = html.unescape(
+        re.sub(
+            r"<\/?(?:rss|channel|item|title|link|guid|pubDate|author|creator|description|content:[a-z]+)[^>]*>",
+            "\n",
+            content,
+            flags=re.I,
+        )
+    )
+    return extract_subscribes(
+        content=text,
+        push_to=config.get("push_to", []),
+        include=config.get("include", ""),
+        exclude=config.get("exclude", ""),
+        config=config.get("config", {}),
+        source=Origin.TWITTER.name,
+        nocache=True,
+    )
+
+
 def crawl_twitter_account(username: str, config: dict) -> dict:
     username = utils.trim(username).lstrip("@")
     if not username or not config or not isinstance(config, dict):
         return {}
 
-    url = f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{urllib.parse.quote(username)}"
-    content = utils.http_get(
-        url=url,
-        headers={
-            "User-Agent": utils.USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.8",
-        },
-        retry=1,
-        timeout=10,
-    )
-    return extract_twitter_syndication(content=content, config=config)
+    account = urllib.parse.quote(username)
+    mirrors = config.get("mirrors", [])
+    if not isinstance(mirrors, list) or not mirrors:
+        mirrors = [
+            "https://syndication.twitter.com/srv/timeline-profile/screen-name/{username}",
+            "https://xcancel.com/{username}/rss",
+            "https://rss.xcancel.com/{username}/rss",
+            "https://nitter.tiekoetter.com/{username}/rss",
+            "https://nitter.poast.org/{username}/rss",
+            "https://nitter.space/{username}/rss",
+        ]
+
+    headers = {
+        "User-Agent": utils.USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/rss+xml;q=0.8",
+        "Accept-Language": "en-US,en;q=0.8",
+    }
+    for template in mirrors:
+        if not isinstance(template, str) or not template.strip():
+            continue
+        url = template.replace("{username}", account).replace("{user}", account)
+        content = utils.http_get(url=url, headers=headers, retry=1, timeout=10)
+        if not content:
+            continue
+
+        result = extract_twitter_syndication(content=content, config=config)
+        if result:
+            return result
+        result = extract_twitter_rss(content=content, config=config)
+        if result:
+            return result
+
+    return {}
 
 
 def crawl_twitter(tasks: dict) -> dict:
@@ -1334,7 +1432,7 @@ def crawl_twitter(tasks: dict) -> dict:
 
     save_source_health(health)
     logger.info(
-        f"[TwitterCrawl] finished crawl through public Syndication, found {len(records)} subscriptions, "
+        f"[TwitterCrawl] finished crawl through public Syndication/RSS mirrors, found {len(records)} subscriptions, "
         f"cost: {time.time()-starttime:.2f}s"
     )
     return records
@@ -1881,6 +1979,59 @@ def collect_airport(
             logger.error(f"[AirPortCollector] occur error when crawl from [{url}], message: \n{traceback.format_exc()}")
             return {}
 
+    def crawl_github_airport_list(repository: str, branch: str = "main", limit: int = 160) -> dict:
+        """Extract direct airport panel links from a public GitHub README."""
+        repository = utils.trim(repository)
+        if not repository or "/" not in repository:
+            return {}
+
+        url = f"https://raw.githubusercontent.com/{repository}/refs/heads/{branch}/README.md"
+        content = utils.http_get(url=url, max_size=1024 * 1024)
+        if not content:
+            return {}
+
+        blocked = (
+            "github.com",
+            "githubusercontent.com",
+            "githubassets.com",
+            "user-images.githubusercontent.com",
+            "t.me",
+            "telegram.me",
+            "twitter.com",
+            "x.com",
+            "youtube.com",
+            "youtu.be",
+            "google.com",
+            "googleapis.com",
+            "imgur.com",
+            "shields.io",
+            "bit.ly",
+            "cutt.ly",
+            "tinyurl.com",
+        )
+        links = re.findall(r"https?://[^\s\]<>\"'`]+", html.unescape(content), flags=re.I)
+        candidates = {}
+        for link in links:
+            link = utils.trim(link).rstrip(".,;:)]}>")
+            if not link:
+                continue
+            try:
+                host = urllib.parse.urlsplit(link).hostname or ""
+            except ValueError:
+                continue
+            host = host.lower().removeprefix("www.")
+            if not host or any(host == item or host.endswith("." + item) for item in blocked):
+                continue
+            if re.search(r"\.(?:png|jpe?g|gif|webp|svg|css|js)(?:[?#]|$)", link, flags=re.I):
+                continue
+            domain = utils.extract_domain(url=link, include_protocal=True)
+            if domain:
+                candidates[domain] = ""
+
+        result = dict(list(candidates.items())[: max(1, int(limit))])
+        logger.info(f"[AirPortCollector] finished crawl from [{repository}], found {len(result)} domains")
+        return result
+
     def get_redirect_url(url: str, retry: int = 3) -> str:
         if not url or retry <= 0:
             return ""
@@ -2056,6 +2207,18 @@ def collect_airport(
     jctj = run_source("github:hwanz", lambda: crawl_jctj(convert=False))
     if jctj:
         materials.update(jctj)
+
+    for repository, branch in [
+        ("VPN-tuijian/jichangtuijian", "main"),
+        ("OpenNetCN/clash", "main"),
+        ("029danio/fly", "master"),
+    ]:
+        directory = run_source(
+            f"github:{repository}",
+            lambda repository=repository, branch=branch: crawl_github_airport_list(repository, branch),
+        )
+        if directory:
+            materials.update(directory)
 
     ccbh = run_source("ccbaohe", crawl_ccbh)
     if ccbh:
