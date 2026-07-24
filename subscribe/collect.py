@@ -5,6 +5,7 @@
 
 import argparse
 import itertools
+import json
 import os
 import random
 import re
@@ -30,6 +31,88 @@ import subconverter
 PATH = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
 DATA_BASE = os.path.join(PATH, "data")
+DOMAIN_HEALTH_FILE = "domain-health.json"
+
+
+def load_domain_health() -> dict:
+    filepath = os.path.join(DATA_BASE, DOMAIN_HEALTH_FILE)
+    try:
+        if os.path.isfile(filepath):
+            with open(filepath, "r", encoding="utf8") as f:
+                state = json.load(f)
+                return state if isinstance(state, dict) else {}
+    except Exception:
+        logger.warning(f"cannot read airport domain health state: {filepath}")
+    return {}
+
+
+def save_domain_health(state: dict) -> None:
+    if not isinstance(state, dict):
+        return
+
+    filepath = os.path.join(DATA_BASE, DOMAIN_HEALTH_FILE)
+    try:
+        os.makedirs(DATA_BASE, exist_ok=True)
+        with open(filepath, "w", encoding="utf8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:
+        logger.warning(f"cannot save airport domain health state: {filepath}")
+
+
+def update_domain_health(state: dict, domain: str, success: bool, now: float = None) -> None:
+    if not isinstance(state, dict) or not domain:
+        return
+
+    current = time.time() if now is None else now
+    item = state.get(domain, {}) if isinstance(state.get(domain, {}), dict) else {}
+    if success:
+        item.update(
+            {
+                "failures": 0,
+                "last_checked": current,
+                "last_success": current,
+                "retry_after": 0,
+            }
+        )
+    else:
+        failures = int(item.get("failures", 0) or 0) + 1
+        cooldown_days = [3, 7, 14, 30][min(failures - 1, 3)]
+        item.update(
+            {
+                "failures": failures,
+                "last_checked": current,
+                "retry_after": current + cooldown_days * 86400,
+            }
+        )
+    state[domain] = item
+
+
+def select_airport_domains(domains: dict, health: dict, known_good: set, limit: int) -> dict:
+    if limit <= 0 or len(domains) <= limit:
+        return domains
+
+    now = time.time()
+    known = sorted([domain for domain in domains if domain in known_good])
+    untried = sorted([domain for domain in domains if domain not in health and domain not in known_good])
+    due = sorted(
+        [
+            domain
+            for domain in domains
+            if domain in health
+            and domain not in known_good
+            and float(health.get(domain, {}).get("retry_after", 0) or 0) <= now
+        ],
+        key=lambda domain: float(health.get(domain, {}).get("last_checked", 0) or 0),
+    )
+
+    selected = []
+    for domain in known + untried + due:
+        if domain not in selected:
+            selected.append(domain)
+        if len(selected) >= limit:
+            break
+
+    return {domain: domains[domain] for domain in selected}
 
 
 def assign(
@@ -178,6 +261,28 @@ def assign(
     if overwrite:
         crawl.save_candidates(candidates=domains, filepath=fullpath, delimiter=delimiter)
 
+    health = load_domain_health()
+    known_good = set()
+    valid_domains_file = os.path.join(DATA_BASE, "valid-domains.txt")
+    if os.path.isfile(valid_domains_file):
+        try:
+            with open(valid_domains_file, "r", encoding="utf8") as f:
+                known_good = {utils.trim(line) for line in f if utils.trim(line)}
+        except Exception:
+            known_good = set()
+
+    try:
+        max_domains = max(int(os.environ.get("AIRPORT_MAX_DOMAINS", "0") or 0), 0)
+    except Exception:
+        max_domains = 0
+    total_domains = len(domains)
+    domains = select_airport_domains(domains=domains, health=health, known_good=known_good, limit=max_domains)
+    if len(domains) < total_domains:
+        logger.info(
+            f"airport domain rotation selected {len(domains)}/{total_domains} sites "
+            f"(known good first, then untried and cooldown-expired)"
+        )
+
     for domain, param in domains.items():
         name = crawl.naming_task(url=domain)
         tasks.append(
@@ -244,6 +349,15 @@ def aggregate(args: argparse.Namespace) -> None:
         os.remove(generate_conf)
 
     results = utils.multi_thread_run(func=workflow.executewrapper, tasks=tasks, num_threads=args.num)
+    domain_health = load_domain_health()
+    for index, task in enumerate(tasks):
+        if not task.domain:
+            continue
+        result = results[index] if index < len(results) else None
+        task_proxies = result[1] if result and len(result) > 1 and isinstance(result[1], list) else []
+        update_domain_health(state=domain_health, domain=task.domain, success=bool(task_proxies))
+    save_domain_health(domain_health)
+
     proxies = list(itertools.chain.from_iterable([x[1] for x in results if x]))
 
     if len(proxies) == 0:

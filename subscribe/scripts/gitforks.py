@@ -5,6 +5,7 @@
 
 import json
 import math
+import os
 import re
 import time
 from copy import deepcopy
@@ -39,6 +40,19 @@ DEFAULT_HEADERS = {
 }
 
 
+def github_headers() -> dict:
+    headers = dict(DEFAULT_HEADERS)
+    token = utils.trim(os.environ.get("GH_TOKEN", ""))
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def scan_page_count(total: int, max_pages: int = 0, full_scan: bool = False) -> int:
+    total, max_pages = max(int(total), 0), max(int(max_pages), 0)
+    return total if full_scan or max_pages <= 0 else min(total, max_pages)
+
+
 def query_forks_count(username: str, repository: str, retry: int = 3) -> int:
     username = utils.trim(username)
     repository = utils.trim(repository)
@@ -47,7 +61,7 @@ def query_forks_count(username: str, repository: str, retry: int = 3) -> int:
         return -1
 
     url = f"{GITHUB_API}/repos/{username}/{repository}"
-    content = utils.http_get(url=url, headers=DEFAULT_HEADERS, retry=retry)
+    content = utils.http_get(url=url, headers=github_headers(), retry=retry)
     if not content:
         logger.error(f"[GithubFork] failed to query forks count")
         return -1
@@ -79,7 +93,7 @@ def query_forks(username: str, repository: str, page: int, peer: int = 100, sort
 
     content, retry = "", 5
     while not content and retry > 0:
-        content = utils.http_get(url=url, headers=DEFAULT_HEADERS, interval=1.0)
+        content = utils.http_get(url=url, headers=github_headers(), interval=1.0)
         retry -= 1
         if not content:
             time.sleep(2)
@@ -186,17 +200,28 @@ def collect_subs(params: dict) -> list[dict]:
     else:
         # query fork list
         count, peer = query_forks_count(username=username, repository=repository, retry=3), 100
-        total = int(math.ceil(count / peer))
+        total = max(int(math.ceil(count / peer)), 0)
         sort = params.get("sort", "") or "newest"
 
-        logger.info(f"[GithubFork] fetch github forks via full scan, count: {total}")
+        full_scan = params.get("full_scan", False)
+        try:
+            max_pages = max(int(params.get("max_pages", 0)), 0)
+        except Exception:
+            max_pages = 0
+        scan_pages = scan_page_count(total=total, max_pages=max_pages, full_scan=full_scan)
+
+        mode = "full" if scan_pages == total else "incremental"
+        logger.info(
+            f"[GithubFork] fetch github forks via {mode} scan, pages: {scan_pages}/{total}; "
+            f"persisted subscriptions remain in validation"
+        )
 
         # see: https://docs.github.com/en/rest/repos/forks?apiVersion=2022-11-28
         if sort not in ["newest", "oldest", "stargazers", "watchers"]:
             sort = "newest"
 
         # concurrent fetch
-        pages = [[username, repository, x, peer, sort] for x in range(1, total + 1)]
+        pages = [[username, repository, x, peer, sort] for x in range(1, scan_pages + 1)]
         results = utils.multi_thread_run(func=query_forks, tasks=pages)
 
     include = utils.trim(params.get("include", ""))
@@ -229,7 +254,7 @@ def collect_subs(params: dict) -> list[dict]:
                 tasks.append([sub, push_to, include, exclude, config, None, Origin.PAGE])
 
     # crawl all subscriptions from subscriptions.txt
-    results = utils.multi_thread_run(func=crawl.crawl_single_page, tasks=tasks)
+    results = utils.multi_thread_run(func=crawl.crawl_single_page, tasks=tasks, num_threads=32)
     for result in results:
         if not result or not isinstance(result, dict):
             continue
@@ -244,7 +269,7 @@ def collect_subs(params: dict) -> list[dict]:
     # check availability
     candidates = list(materials.keys())
     tasks = [[x, 2, remain, life] for x in candidates]
-    masks = utils.multi_thread_run(func=crawl.is_available, tasks=tasks)
+    masks = utils.multi_thread_run(func=crawl.is_available, tasks=tasks, num_threads=32)
 
     # filter available subscriptions
     effective_subs = sorted([candidates[i] for i in range(len(masks)) if masks[i]])

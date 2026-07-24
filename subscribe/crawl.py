@@ -27,6 +27,7 @@ import urllib.request
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cache
+from html.parser import HTMLParser
 from multiprocessing.managers import ListProxy
 from multiprocessing.synchronize import Semaphore
 
@@ -63,6 +64,17 @@ SINGLE_LINK_FLAG = "singlelink://"
 # environment key
 SINGLE_PROXIES_ENV_NAME = "ALLOW_SINGLE_LINK"
 
+FREE_SEARCH_QUERIES = [
+    '"/api/v1/client/subscribe?token="',
+    '"/link/" "clash="',
+    '"vless://" "trojan://"',
+    '"hysteria2://" OR "hy2://"',
+    '"proxies:" "type: vless"',
+    '"anytls://"',
+]
+
+SOURCE_HEALTH_FILE = "source-health.json"
+
 
 @cache
 def allow_single_link() -> bool:
@@ -70,12 +82,83 @@ def allow_single_link() -> bool:
     return os.environ.get(SINGLE_PROXIES_ENV_NAME, "").lower() == "true"
 
 
-def multi_thread_crawl(func: typing.Callable, params: list) -> dict:
+def _source_health_path(filename: str = SOURCE_HEALTH_FILE) -> str:
+    filename = utils.trim(filename) or SOURCE_HEALTH_FILE
+    if os.path.isabs(filename):
+        return filename
+
+    basedir = os.path.abspath(os.environ.get("LOCAL_BASEDIR", ""))
+    return os.path.join(basedir, filename)
+
+
+def load_source_health(filename: str = SOURCE_HEALTH_FILE) -> dict:
+    filepath = _source_health_path(filename)
+    try:
+        if os.path.isfile(filepath):
+            with open(filepath, "r", encoding="utf8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        logger.warning(f"[SourceHealth] cannot read health state: {filepath}")
+    return {}
+
+
+def save_source_health(state: dict, filename: str = SOURCE_HEALTH_FILE) -> None:
+    if not isinstance(state, dict):
+        return
+
+    filepath = _source_health_path(filename)
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:
+        logger.warning(f"[SourceHealth] cannot save health state: {filepath}")
+
+
+def source_in_cooldown(state: dict, name: str, now: float = None) -> bool:
+    item = state.get(name, {}) if isinstance(state, dict) else {}
+    current = time.time() if now is None else now
+    return float(item.get("retry_after", 0) or 0) > current
+
+
+def update_source_health(state: dict, name: str, count: int, now: float = None) -> None:
+    if not isinstance(state, dict) or not name:
+        return
+
+    current = time.time() if now is None else now
+    previous = state.get(name, {}) if isinstance(state.get(name, {}), dict) else {}
+    if count > 0:
+        state[name] = {
+            "failures": 0,
+            "last_checked": current,
+            "last_success": current,
+            "last_count": count,
+            "retry_after": 0,
+        }
+        return
+
+    failures = int(previous.get("failures", 0) or 0) + 1
+    # Empty or broken public sources are retried daily at first, then back off
+    # gradually. A seven-day cap ensures they are never abandoned permanently.
+    cooldown = 0 if failures < 3 else min(7 * 86400, 86400 * (2 ** (failures - 3)))
+    previous.update(
+        {
+            "failures": failures,
+            "last_checked": current,
+            "last_count": 0,
+            "retry_after": current + cooldown,
+        }
+    )
+    state[name] = previous
+
+
+def multi_thread_crawl(func: typing.Callable, params: list, num_threads: int = None) -> dict:
     if not func or not params or type(params) != list:
         return {}
 
     # concurrent run
-    results = utils.multi_thread_run(func=func, tasks=params)
+    results = utils.multi_thread_run(func=func, tasks=params, num_threads=num_threads)
 
     funcname = getattr(func, "__name__", repr(func)).replace("_", "-")
     tasks, uri = {}, f"{SINGLE_LINK_FLAG}{funcname}"
@@ -134,14 +217,39 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
 
         # allow if persistence configuration is valid
         enable = conf.get("singlelink", False)
-        allow = enable and pushtool.validate(config=linkspushconf)
+        allow = bool(enable and pushtool.validate(config=linkspushconf))
 
         # save it to environment
         os.environ[SINGLE_PROXIES_ENV_NAME] = str(allow).lower()
+        allow_single_link.cache_clear()
 
         records, threshold = {}, conf.get("threshold", 1)
 
         if connectable:
+            # DuckDuckGo Lite and Yahoo provide server-rendered public results
+            # without API keys. Keep Google as a lightweight extra attempt.
+            duckduckgo_spider = conf.get("duckduckgo", {})
+            if duckduckgo_spider:
+                records.update(
+                    crawl_duckduckgo(
+                        push_to=duckduckgo_spider.get("push_to", []),
+                        exclude=duckduckgo_spider.get("exclude", ""),
+                        limits=int(duckduckgo_spider.get("limits", 30)),
+                        notinurl=duckduckgo_spider.get("notinurl", []),
+                    )
+                )
+
+            yahoo_spider = conf.get("yahoo", {})
+            if yahoo_spider:
+                records.update(
+                    crawl_yahoo(
+                        push_to=yahoo_spider.get("push_to", []),
+                        exclude=yahoo_spider.get("exclude", ""),
+                        limits=int(yahoo_spider.get("limits", 30)),
+                        notinurl=yahoo_spider.get("notinurl", []),
+                    )
+                )
+
             # Google
             google_spider = conf.get("google", {})
             if google_spider:
@@ -189,7 +297,8 @@ def batch_crawl(conf: dict, num_threads: int = 50, display: bool = True) -> list
             # Twitter
             twitter_spider = conf.get("twitter", {})
             if twitter_spider:
-                records.update(crawl_twitter(tasks=twitter_spider))
+                users = twitter_spider.get("users", twitter_spider)
+                records.update(crawl_twitter(tasks=users))
 
         # skip crawl if mode == 2
         if mode != 2:
@@ -498,6 +607,144 @@ def crawl_github_repo(repos: dict) -> list[dict]:
     return subscribes
 
 
+class SearchResultParser(HTMLParser):
+    def __init__(self, engine: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.engine = engine
+        self.links = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
+        if tag.lower() != "a":
+            return
+
+        attributes = {k.lower(): v or "" for k, v in attrs}
+        href = attributes.get("href", "")
+        classes = attributes.get("class", "").split()
+        if self.engine == "duckduckgo" and not {"result-link", "result__a"}.intersection(classes):
+            return
+        if self.engine == "yahoo" and "/RU=" not in href:
+            return
+        if href:
+            self.links.append(href)
+
+
+def extract_search_result_urls(content: str, engine: str, notinurl: list = []) -> list[str]:
+    if not content or engine not in {"duckduckgo", "yahoo"}:
+        return []
+
+    parser = SearchResultParser(engine=engine)
+    try:
+        parser.feed(content)
+    except Exception:
+        return []
+
+    excludes = {utils.trim(x).lower() for x in notinurl if utils.trim(x)}
+    links = []
+    for raw in parser.links:
+        link = html.unescape(raw).strip()
+        if link.startswith("//"):
+            link = "https:" + link
+
+        try:
+            if engine == "duckduckgo":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+                link = query.get("uddg", [link])[0]
+            else:
+                matched = re.search(r"/RU=([^/]+)/RK=", link)
+                if matched:
+                    link = urllib.parse.unquote(matched.group(1))
+
+            parsed = urllib.parse.urlparse(link)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            hostname = parsed.netloc.lower().split(":", maxsplit=1)[0]
+            if engine == "duckduckgo" and hostname.endswith("duckduckgo.com"):
+                continue
+            if engine == "yahoo" and hostname.endswith("yahoo.com"):
+                continue
+            lowered = link.lower()
+            if any(word in lowered for word in excludes):
+                continue
+            if link not in links:
+                links.append(link)
+        except Exception:
+            continue
+
+    return links
+
+
+def crawl_public_search(
+    engine: str,
+    push_to: list = [],
+    exclude: str = "",
+    limits: int = 30,
+    notinurl: list = [],
+) -> dict:
+    origins = {"duckduckgo": Origin.DUCKDUCKGO.name, "yahoo": Origin.YAHOO.name}
+    if engine not in origins or not push_to:
+        return {}
+
+    starttime, collections, result_pages = time.time(), {}, []
+    limits = min(max(int(limits), 1), 100)
+    headers = {
+        "User-Agent": utils.USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+
+    for query in FREE_SEARCH_QUERIES:
+        encoded = urllib.parse.quote_plus(query)
+        if engine == "duckduckgo":
+            url = f"https://lite.duckduckgo.com/lite/?q={encoded}"
+        else:
+            url = f"https://search.yahoo.com/search?p={encoded}"
+
+        content = utils.http_get(url=url, headers=headers, retry=1, timeout=10)
+        if not content:
+            continue
+
+        collections.update(
+            extract_subscribes(
+                content=html.unescape(content),
+                push_to=push_to,
+                exclude=exclude,
+                source=origins[engine],
+                limits=limits,
+                nocache=True,
+            )
+        )
+        for link in extract_search_result_urls(content=content, engine=engine, notinurl=notinurl):
+            if link not in result_pages:
+                result_pages.append(link)
+            if len(result_pages) >= limits:
+                break
+        if len(result_pages) >= limits:
+            break
+
+    if result_pages:
+        pages = {
+            link: {"push_to": push_to, "exclude": exclude, "nocache": True}
+            for link in result_pages[:limits]
+        }
+        collections.update(crawl_pages(pages=pages, silent=True, origin=origins[engine], num_threads=16))
+
+    logger.info(
+        f"[{engine.title()}Crawl] found {len(collections)} subscriptions from "
+        f"{len(result_pages[:limits])} result pages, cost: {time.time()-starttime:.2f}s"
+    )
+    return collections
+
+
+def crawl_duckduckgo(push_to: list = [], exclude: str = "", limits: int = 30, notinurl: list = []) -> dict:
+    return crawl_public_search(
+        engine="duckduckgo", push_to=push_to, exclude=exclude, limits=limits, notinurl=notinurl
+    )
+
+
+def crawl_yahoo(push_to: list = [], exclude: str = "", limits: int = 30, notinurl: list = []) -> dict:
+    return crawl_public_search(engine="yahoo", push_to=push_to, exclude=exclude, limits=limits, notinurl=notinurl)
+
+
 def crawl_google(
     qdr: int = 10,
     push_to: list = [],
@@ -515,14 +762,7 @@ def crawl_google(
 
     reject = "+".join(list(items))
 
-    queries = [
-        '"/api/v1/client/subscribe?token="',
-        '"clash" "subscribe" "token="',
-        '"proxies:" "vmess://"',
-        '"trojan://" "vmess://" "ss://"',
-        '"vless://" "trojan://"',
-        '"hysteria2://" OR "hy2://"',
-    ]
+    queries = FREE_SEARCH_QUERIES
 
     num, limits = 100, min(max(1, limits), 1000)
     params = {
@@ -703,18 +943,20 @@ def crawl_github_page(page: int, cookie: str, push_to: list = [], exclude: str =
     return extract_subscribes(content=content, push_to=push_to, exclude=exclude, source=Origin.GITHUB.name)
 
 
-def search_github(page: int, cookie: str, searchtype: str, sortedby: str) -> str:
+def search_github(
+    page: int,
+    cookie: str,
+    searchtype: str,
+    sortedby: str,
+    query: str = FREE_SEARCH_QUERIES[0],
+) -> str:
     if page <= 0 or utils.isblank(cookie):
         return ""
 
     searchtype = "Code" if utils.isblank(searchtype) else searchtype
     sortedby = "indexed" if utils.isblank(sortedby) else sortedby
 
-    # search with regex for code
-    query = "%22%2Fapi%2Fv1%2Fclient%2Fsubscribe%3Ftoken%3D%22"
-    if searchtype.lower() == "code":
-        query = "%2F%5C%2Fapi%5C%2Fv1%5C%2Fclient%5C%2Fsubscribe%5C%3Ftoken%3D%5Ba-zA-Z0-9%5D%7B8%2C32%7D%2F"
-
+    query = urllib.parse.quote_plus(utils.trim(query) or FREE_SEARCH_QUERIES[0])
     url = f"https://github.com/search?o=desc&p={page}&q={query}&s={sortedby}&type={searchtype}"
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -777,15 +1019,35 @@ def search_github_issues_byapi(peer_page: int = 50, page: int = 1) -> list[str]:
         return []
 
 
-def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, excludes: list = []) -> list[str]:
-    """
-    curl -Ls -o response.json -H "Authorization: Bearer <token>" https://api.github.com/search/code?q=%22%2Fapi%2Fv1%2Fclient%2Fsubscribe%3Ftoken%3D%22&sort=indexed&order=desc&per_page=30&page=1
-    """
+def github_raw_url(url: str) -> str:
+    matched = re.match(r"https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+?)(?:#L\d+(?:-L\d+)?)?$", url)
+    if not matched:
+        return url
+    owner, repository, branch, path = matched.groups()
+    return f"https://raw.githubusercontent.com/{owner}/{repository}/{branch}/{path}"
+
+
+def search_github_code_byapi(
+    token: str,
+    peer_page: int = 30,
+    page: int = 1,
+    excludes: list = [],
+    query: str = FREE_SEARCH_QUERIES[0],
+) -> list[str]:
     if utils.isblank(token):
         return []
 
     peer_page, page = min(max(peer_page, 1), 100), max(1, page)
-    url = f"https://api.github.com/search/code?q=%22%2Fapi%2Fv1%2Fclient%2Fsubscribe%3Ftoken%3D%22&sort=indexed&order=desc&per_page={peer_page}&page={page}"
+    params = urllib.parse.urlencode(
+        {
+            "q": utils.trim(query) or FREE_SEARCH_QUERIES[0],
+            "sort": "indexed",
+            "order": "desc",
+            "per_page": peer_page,
+            "page": page,
+        }
+    )
+    url = f"https://api.github.com/search/code?{params}"
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
@@ -807,15 +1069,17 @@ def search_github_code_byapi(token: str, peer_page: int = 50, page: int = 1, exc
 
             reponame = item.get("repository", {}).get("full_name", "") + "/"
             if not intercept(text=reponame, excludes=excludes):
-                links.add(link)
+                links.add(github_raw_url(link))
 
         return list(links)
     except:
         return []
 
 
-def search_github_code(page: int, cookie: str, excludes: list = []) -> list[str]:
-    content = search_github(page=page, cookie=cookie, searchtype="Code", sortedby="indexed")
+def search_github_code(
+    page: int, cookie: str, excludes: list = [], query: str = FREE_SEARCH_QUERIES[0]
+) -> list[str]:
+    content = search_github(page=page, cookie=cookie, searchtype="Code", sortedby="indexed", query=query)
     if utils.isblank(content):
         return []
 
@@ -827,7 +1091,7 @@ def search_github_code(page: int, cookie: str, excludes: list = []) -> list[str]
 
         for uri in uris:
             if not intercept(text=uri, excludes=excludes):
-                links.add(f"https://github.com{uri}")
+                links.add(github_raw_url(f"https://github.com{uri}"))
 
         return list(links)
     except:
@@ -858,10 +1122,13 @@ def crawl_github(limits: int = 3, push_to: list = [], spams: list = [], exclude:
     links, starttime = [], time.time()
     method = "search on the page" if utils.isblank(token) else "rest api"
 
+    query_budget = min(max(int(limits), 1), len(FREE_SEARCH_QUERIES))
+    queries = FREE_SEARCH_QUERIES[:query_budget]
+
     if utils.isblank(token):
-        # 鉴于github搜索code不稳定，爬取两次
-        pages = [x for x in range(1, limits + 1)] * 2
-        params = [[x, cookie, spams] for x in pages]
+        # Use one newest result page per query. Repeating the same request only
+        # wastes time and makes GitHub throttling more likely.
+        params = [[1, cookie, spams, query] for query in queries]
 
         results = utils.multi_thread_run(func=search_github_code, tasks=params)
         items = list(set(itertools.chain.from_iterable(results)))
@@ -869,9 +1136,8 @@ def crawl_github(limits: int = 3, push_to: list = [], spams: list = [], exclude:
         links.extend(items)
         links.extend(search_github_issues(page=1, cookie=cookie))
     else:
-        peer_page, count = 50, 10
-        pages = paging(start=1, end=limits * count, peer_page=peer_page)
-        params = [[token, peer_page, x, spams] for x in pages] * 2
+        peer_page = 30
+        params = [[token, peer_page, 1, spams, query] for query in queries]
 
         results = utils.multi_thread_run(func=search_github_code_byapi, tasks=params)
         items = list(set(itertools.chain.from_iterable(results)))
@@ -885,7 +1151,7 @@ def crawl_github(limits: int = 3, push_to: list = [], spams: list = [], exclude:
 
         for link in links:
             page_tasks[link] = {"push_to": push_to, "exclude": exclude}
-        subscribes = crawl_pages(pages=page_tasks, silent=True, origin=Origin.GITHUB.name)
+        subscribes = crawl_pages(pages=page_tasks, silent=True, origin=Origin.GITHUB.name, num_threads=32)
     else:
         subscribes = {}
 
@@ -931,6 +1197,7 @@ def crawl_pages(
     silent: bool = False,
     headers: dict = None,
     origin: str = Origin.PAGE.name,
+    num_threads: int = None,
 ) -> dict:
     if not pages:
         return {}
@@ -953,7 +1220,7 @@ def crawl_pages(
 
         params.append([k, push_to, include, exclude, config, final_headers, origin, nocache])
 
-    subscribes = multi_thread_crawl(func=crawl_single_page, params=params)
+    subscribes = multi_thread_crawl(func=crawl_single_page, params=params, num_threads=num_threads)
     if not silent:
         cost = "{:.2f}s".format(time.time() - starttime)
         logger.info(f"[PageCrawl] finished crawl from Page, found {len(subscribes)} subscriptions, cost: {cost}")
@@ -961,198 +1228,116 @@ def crawl_pages(
     return subscribes
 
 
-def extract_twitter_cookies(retry: int = 2) -> str:
-    if retry <= 0:
-        return ""
+class TwitterNextDataParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.capture = False
+        self.parts = []
 
-    headers = None
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
+        attributes = {k.lower(): v or "" for k, v in attrs}
+        if tag.lower() == "script" and attributes.get("id") == "__NEXT_DATA__":
+            self.capture = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "script" and self.capture:
+            self.capture = False
+
+    def handle_data(self, data: str) -> None:
+        if self.capture:
+            self.parts.append(data)
+
+
+def extract_twitter_syndication(content: str, config: dict) -> dict:
+    if not content or not isinstance(config, dict):
+        return {}
+
+    parser = TwitterNextDataParser()
     try:
-        request = urllib.request.Request(url="https://twitter.com/", headers=utils.DEFAULT_HTTP_HEADERS)
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        headers = response.headers
-    except urllib.error.HTTPError as e:
-        if e.code != 302:
-            return extract_twitter_cookies(retry=retry - 1)
+        parser.feed(content)
+        payload = json.loads("".join(parser.parts))
+        entries = payload.get("props", {}).get("pageProps", {}).get("timeline", {}).get("entries", [])
+        limit = min(max(int(config.get("num", 100)), 1), 200)
+        entries = entries[:limit] if isinstance(entries, list) else []
+        text = json.dumps(entries, ensure_ascii=False)
+    except Exception:
+        return {}
 
-        headers = e.headers
-    except (urllib.error.URLError, TimeoutError):
-        return extract_twitter_cookies(retry=retry - 1)
-
-    if not headers or "set-cookie" not in headers:
-        return ""
-
-    regex = "(guest_id|guest_id_ads|guest_id_marketing|personalization_id)=(.+?);"
-    content = ";".join(headers.get_all("set-cookie", ""))
-    groups = re.findall(regex, content, flags=re.I)
-    cookies = ";".join(["=".join(x) for x in groups]).strip()
-
-    return cookies
+    return extract_subscribes(
+        content=text,
+        push_to=config.get("push_to", []),
+        include=config.get("include", ""),
+        exclude=config.get("exclude", ""),
+        config=config.get("config", {}),
+        source=Origin.TWITTER.name,
+        nocache=True,
+    )
 
 
-def activate_twitter_guest_token() -> str:
-    headers = {
-        "User-Agent": utils.USER_AGENT,
-        "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
-        "Content-Type": "application/json",
-    }
+def crawl_twitter_account(username: str, config: dict) -> dict:
+    username = utils.trim(username).lstrip("@")
+    if not username or not config or not isinstance(config, dict):
+        return {}
 
-    try:
-        request = urllib.request.Request(
-            url="https://api.twitter.com/1.1/guest/activate.json",
-            data=b"",
-            headers=headers,
-            method="POST",
-        )
-        response = urllib.request.urlopen(request, timeout=10, context=utils.CTX)
-        if not response or response.getcode() != 200:
-            return ""
-
-        return json.loads(response.read()).get("guest_token", "")
-    except:
-        return ""
-
-
-def get_guest_token() -> str:
-    cookies = extract_twitter_cookies(retry=3)
-    if not cookies:
-        guest_token = activate_twitter_guest_token()
-        if not guest_token:
-            logger.error(f"[TwitterCrawl] cannot extract Twitter cookies")
-        return guest_token
-
-    headers = {
-        "User-Agent": utils.USER_AGENT,
-        "Cookie": cookies,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    }
-    content = utils.http_get(url="https://twitter.com/", headers=headers)
-    if not content:
-        return ""
-
-    matcher = re.findall("gt=([0-9]{19})", content, flags=re.I)
-    return matcher[0] if matcher else activate_twitter_guest_token()
-
-
-def username_to_id(username: str, headers: dict) -> str:
-    if utils.isblank(username):
-        return ""
-
-    if not headers or "X-Guest-Token" not in headers:
-        guest_token = get_guest_token()
-        if not guest_token:
-            return ""
-
-        headers = {
+    url = f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{urllib.parse.quote(username)}"
+    content = utils.http_get(
+        url=url,
+        headers={
             "User-Agent": utils.USER_AGENT,
-            "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
-            "X-Guest-Token": guest_token,
-            "Content-Type": "application/json",
-        }
-
-    variables = {
-        "screen_name": username.lower().strip(),
-        "withSafetyModeUserFields": True,
-    }
-    features = {
-        "blue_business_profile_image_shape_enabled": True,
-        "responsive_web_graphql_exclude_directive_enabled": True,
-        "verified_phone_label_enabled": False,
-        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-        "responsive_web_graphql_timeline_navigation_enabled": True,
-    }
-
-    payload = urllib.parse.urlencode({"variables": json.dumps(variables), "features": json.dumps(features)})
-    url = f"https://twitter.com/i/api/graphql/sLVLhk0bGj3MVFEKTdax1w/UserByScreenName?{payload}"
-    try:
-        content = utils.http_get(url=url, headers=headers)
-        if not content:
-            return ""
-
-        data = json.loads(content).get("data", {}).get("user", {}).get("result", "")
-        return data.get("rest_id", "")
-    except:
-        logger.error(f"[TwitterCrawl] cannot query uid by username=[{username}]")
-        return ""
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.8",
+        },
+        retry=1,
+        timeout=10,
+    )
+    return extract_twitter_syndication(content=content, config=config)
 
 
 def crawl_twitter(tasks: dict) -> dict:
-    if not tasks:
+    if not tasks or not isinstance(tasks, dict):
         return {}
 
-    # extract X-Guest-Token
-    guest_token, starttime = get_guest_token(), time.time()
-    if not guest_token:
-        logger.error(f"[TwitterCrawl] cannot extract X-Guest-Token from twitter")
-        return {}
-
-    headers = {
-        "User-Agent": utils.USER_AGENT,
-        "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
-        "X-Guest-Token": guest_token,
-        "Content-Type": "application/json",
-    }
-
-    features = {
-        "blue_business_profile_image_shape_enabled": True,
-        "responsive_web_graphql_exclude_directive_enabled": True,
-        "verified_phone_label_enabled": False,
-        "responsive_web_graphql_timeline_navigation_enabled": True,
-        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-        "tweetypie_unmention_optimization_enabled": True,
-        "vibe_api_enabled": True,
-        "responsive_web_edit_tweet_api_enabled": True,
-        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-        "view_counts_everywhere_api_enabled": True,
-        "longform_notetweets_consumption_enabled": True,
-        "tweet_awards_web_tipping_enabled": False,
-        "freedom_of_speech_not_reach_fetch_enabled": True,
-        "standardized_nudges_misinfo": True,
-        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": False,
-        "interactive_text_enabled": True,
-        "responsive_web_text_conversations_enabled": False,
-        "longform_notetweets_rich_text_read_enabled": True,
-        "responsive_web_enhance_cards_enabled": False,
-    }
-
-    candidates, pages = {}, {}
-    for k, v in tasks.items():
-        if utils.isblank(k) or not v or type(v) != dict:
-            continue
-        candidates[k] = v
-
-    if not candidates:
-        return {}
-
-    # username to uid
-    params = [[k, headers] for k in candidates.keys()]
-    uids = utils.multi_thread_run(func=username_to_id, tasks=params)
-
-    for i in range(len(uids)):
-        uid = uids[i]
-        if not uid:
+    starttime, health = time.time(), load_source_health()
+    params, names = [], []
+    for username, config in tasks.items():
+        if utils.isblank(username) or not config or not isinstance(config, dict):
             continue
 
-        config = candidates.get(params[i][0])
-        count = config.pop("num", 10)
-        variables = {
-            "userId": uid,
-            "count": min(max(count, 1), 100),
-            "includePromotedContent": False,
-            "withClientEventToken": False,
-            "withBirdwatchNotes": False,
-            "withVoice": True,
-            "withV2Timeline": True,
-        }
+        health_key = f"twitter:{username.lower()}"
+        if source_in_cooldown(health, health_key):
+            logger.info(f"[TwitterCrawl] skip @{username} until its source-health cooldown expires")
+            continue
+        names.append(health_key)
+        params.append([username, config])
 
-        payload = urllib.parse.urlencode({"variables": json.dumps(variables), "features": json.dumps(features)})
-        url = f"https://twitter.com/i/api/graphql/P7qs2Sf7vu1LDKbzDW9FSA/UserMedia?{payload}"
-        pages[url] = config
+    results = utils.multi_thread_run(func=crawl_twitter_account, tasks=params)
+    records, proxies = {}, []
+    for index, result in enumerate(results):
+        result = result if isinstance(result, dict) else {}
+        count = len(result)
+        single = result.get(SINGLE_LINK_FLAG, {})
+        if isinstance(single, dict):
+            count += len(single.get("proxies", []))
+        update_source_health(health, names[index], count)
 
-    subscribes = crawl_pages(pages=pages, silent=True, headers=headers, origin=Origin.TWITTER.name)
-    cost = "{:.2f}s".format(time.time() - starttime)
-    logger.info(f"[TwitterCrawl] finished crawl from Twitter, found {len(subscribes)} subscriptions, cost: {cost}")
+        for url, item in result.items():
+            if url == SINGLE_LINK_FLAG:
+                proxies.extend(item.get("proxies", []))
+                current = records.get(url, {})
+                destinations = current.get("push_to", []) + item.get("push_to", [])
+                current.update(item)
+                current["push_to"] = list(set(destinations))
+                current["proxies"] = list(set(proxies))
+                records[url] = current
+            else:
+                records[url] = item
 
-    return subscribes
+    save_source_health(health)
+    logger.info(
+        f"[TwitterCrawl] finished crawl through public Syndication, found {len(records)} subscriptions, "
+        f"cost: {time.time()-starttime:.2f}s"
+    )
+    return records
 
 
 def extract_subscribes(
@@ -1255,7 +1440,8 @@ def extract_subscribes(
             try:
                 groups = re.findall(protocal_regex, content, flags=re.I)
                 if groups:
-                    proxies.extend([x.lower().strip() for x in groups if x])
+                    # URI payloads such as VMess base64 are case-sensitive.
+                    proxies.extend([x.strip() for x in groups if x])
                     params = {
                         "push_to": push_to,
                         "origin": source,
@@ -1604,14 +1790,6 @@ def collect_airport(
             coupon_regex=r"<p>(?:优惠|白嫖)码：<code>([^<]+)</code></p>",
         )
 
-    def crawl_askahh() -> dict:
-        return run_crawl(
-            url="https://www.askahh.com/archives/101",
-            separator=r"&lt;h2&gt;[^\r\n]+&lt;/h2&gt;",
-            address_regex=r"&lt;a class=&quot;no-external-link&quot; href=&quot;(https?://[^\s]+)&quot; target=&quot;_blank&quot;&gt;",
-            coupon_regex=r"使用优惠码(?:&lt;strong&gt;)?([A-Za-z0-9\u4e00-\u9fa5_\-%*:.@&#]+)(?:&lt;/strong&gt;(?:[\r\n\s]+)?)?免费购买",
-        )
-
     def crawl_ygpy() -> dict:
         def get_links(url: str, prefix: str, regex: str = r'href="(/vpn/\d{4}/\d{2}.html)"') -> list[str]:
             content = utils.http_get(url=url)
@@ -1852,29 +2030,45 @@ def collect_airport(
 
         return domain
 
-    domains = crawl_channel(channel=channel, page_num=page_num, fun=extract_airport_site)
+    health = load_source_health()
+
+    def run_source(name: str, func: typing.Callable):
+        key = f"airport-source:{name}"
+        if source_in_cooldown(health, key):
+            logger.info(f"[AirPortCollector] skip {name} until its source-health cooldown expires")
+            return {}
+        try:
+            result = func()
+        except Exception:
+            logger.error(f"[AirPortCollector] source {name} failed: \n{traceback.format_exc()}")
+            result = {}
+        update_source_health(health, key, len(result) if result else 0)
+        return result
+
+    domains = run_source(
+        f"telegram:{channel}",
+        lambda: crawl_channel(channel=channel, page_num=page_num, fun=extract_airport_site),
+    )
     candidates = {} if not domains else {utils.extract_domain(x, True): "" for x in domains}
 
     materials = dict()
-    jctj = crawl_jctj(convert=False)
+    jctj = run_source("github:hwanz", lambda: crawl_jctj(convert=False))
     if jctj:
         materials.update(jctj)
 
-    ccbh = crawl_ccbh()
+    ccbh = run_source("ccbaohe", crawl_ccbh)
     if ccbh:
         materials.update(ccbh)
 
-    maomeng = crawl_maomeng()
+    maomeng = run_source("maomeng", crawl_maomeng)
     if maomeng:
         materials.update(maomeng)
 
-    askahh = crawl_askahh()
-    if askahh:
-        materials.update(askahh)
-
-    ygpy = crawl_ygpy()
+    ygpy = run_source("ygpy", crawl_ygpy)
     if ygpy:
         materials.update(ygpy)
+
+    save_source_health(health)
 
     # save to file cause they often contain coupons and require common emails to use
     save_candidates(candidates=materials, filepath=filepath, delimiter=delimiter)

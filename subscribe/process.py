@@ -110,6 +110,14 @@ def load_configs(
             telegram_conf["users"] = enabled_users
             params["telegram"] = telegram_conf
 
+        # spiders for free, server-rendered search engines
+        for engine in ["duckduckgo", "yahoo"]:
+            search_conf = spiders.get(engine, {})
+            push_to = list(set(search_conf.get("push_to", [])))
+            if search_conf.pop("enable", True) and push_to:
+                search_conf["push_to"] = push_to
+                params[engine] = search_conf
+
         # spider's config for google
         google_conf = spiders.get("google", {})
         push_to = list(set(google_conf.get("push_to", [])))

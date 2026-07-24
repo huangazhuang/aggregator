@@ -27,6 +27,14 @@ on:
         options:
           - "true"
           - "false"
+      full_fork_scan:
+        description: "Scan every historical GitHub fork page (slow maintenance run)."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
   contents: write
@@ -41,6 +49,8 @@ env:
   PROFILE_FILE: clash.yaml
   REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
   REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
+  FULL_FORK_SCAN: ${{ github.event.inputs.full_fork_scan || 'false' }}
+  FORK_SCAN_PAGES: ${{ vars.FORK_SCAN_PAGES || '2' }}
   SCHEDULE_NAME: ${{ github.event.schedule || '' }}
   GH_TOKEN: ${{ github.token }}
   CLASH_SUBSCRIPTIONS_SECRET: ${{ secrets.CLASH_SUBSCRIPTIONS }}
@@ -48,6 +58,9 @@ env:
   CLASH_SUBSCRIPTION_URL_SECRET: ${{ secrets.CLASH_SUBSCRIPTION_URL }}
   CLASH_SUBSCRIPTION_URL_VAR: ${{ vars.CLASH_SUBSCRIPTION_URL }}
   ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS || 'true' }}
+  # Rotate through the large airport pool instead of re-registering all ~2000
+  # historical domains every day. Successful sites are always prioritized.
+  AIRPORT_MAX_DOMAINS: ${{ vars.AIRPORT_MAX_DOMAINS || '300' }}
   # Drop proxies that cannot reach this site (Cloudflare-guarded, blocks dirty IPs).
   # Set repository variable GMGN_FILTER=false to disable the filter.
   GMGN_FILTER: ${{ vars.GMGN_FILTER || 'true' }}
@@ -86,7 +99,7 @@ jobs:
 
           # crawler-subs.json / crawler-proxies.txt carry the crawler's accumulated
           # subscription pool across runs; without them every run starts cold.
-          for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt cn-fc-check.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json cn-fc-check.json; do
             if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/${name}" 2>/dev/null; then
               cp "/tmp/${name}" "data/${name}"
               echo "Restored ${name} from ${OUTPUT_BRANCH}."
@@ -228,6 +241,7 @@ jobs:
         if: steps.mode.outputs.mode != 'manual'
         shell: bash
         run: |
+          export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
           base_args=(--all --targets clash --num 64 --delay 10000 --easygoing)
           fallback_args=(--all --targets clash --num 64 --delay 10000 --easygoing --skip --overwrite)
 
@@ -357,22 +371,36 @@ jobs:
                   },
                   "github": {
                       "enable": True,
-                      "pages": 10,
+                      "pages": 6,
                       "push_to": ["crawler"],
                       "exclude": "",
                       "spams": [],
                   },
+                  "duckduckgo": {
+                      "enable": True,
+                      "limits": 30,
+                      "push_to": ["crawler"],
+                      "exclude": "",
+                      "notinurl": ["github.com", "githubusercontent.com"],
+                  },
+                  "yahoo": {
+                      "enable": True,
+                      "limits": 30,
+                      "push_to": ["crawler"],
+                      "exclude": "",
+                      "notinurl": ["github.com", "githubusercontent.com"],
+                  },
                   "google": {
                       "enable": True,
-                      "limits": 1000,
+                      "limits": 100,
                       "qdr": 30,
                       "push_to": ["crawler"],
                       "exclude": "",
                       "notinurl": ["github.com", "githubusercontent.com"],
                   },
                   "yandex": {
-                      "enable": True,
-                      "pages": 20,
+                      "enable": False,
+                      "pages": 1,
                       "within": 30,
                       "push_to": ["crawler"],
                       "exclude": "",
@@ -482,6 +510,8 @@ jobs:
                               "username": "wzdnzd",
                               "repository": "aggregator",
                               "sort": "newest",
+                              "max_pages": int(os.environ.get("FORK_SCAN_PAGES", "2")),
+                              "full_scan": os.environ.get("FULL_FORK_SCAN", "false").lower() == "true",
                               "persist": {"folderid": "", "fileid": "crawler-gitfork-subs.txt"},
                               "config": {
                                   "push_to": ["crawler"],
@@ -494,7 +524,7 @@ jobs:
                           },
                       },
                       {
-                          "enable": True,
+                          "enable": False,
                           "script": "v2rayse#fetch",
                           "params": {
                               "url": "https://v2rayse.com",
@@ -871,7 +901,7 @@ jobs:
           mkdir -p public
           cp "data/${PROFILE_FILE}" "public/${PROFILE_FILE}"
 
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
             # Never publish manual subscription URLs: they may embed private tokens.
             if [ "${name}" = "subscribes.txt" ] && [ "${{ steps.mode.outputs.mode }}" = "manual" ]; then
               echo "Skip publishing subscribes.txt in manual mode."
@@ -931,7 +961,7 @@ jobs:
           cp public/last-run.txt "${publish_dir}/last-run.txt"
           cp public/status.json "${publish_dir}/status.json"
 
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
             if [ -f "public/${name}" ]; then
               cp "public/${name}" "${publish_dir}/${name}"
             fi
@@ -939,7 +969,7 @@ jobs:
 
           cd "${publish_dir}"
           git add README.md "${PROFILE_FILE}" last-run.txt status.json
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
+          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
             if [ -f "${name}" ]; then
               git add "${name}"
             fi

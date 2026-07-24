@@ -79,6 +79,20 @@
             "notinurl": [],
             "push_to": []
         },
+        "duckduckgo": {
+            "enable": false,
+            "exclude": "",
+            "limits": 30,
+            "notinurl": [],
+            "push_to": []
+        },
+        "yahoo": {
+            "enable": false,
+            "exclude": "",
+            "limits": 30,
+            "notinurl": [],
+            "push_to": []
+        },
         "yandex": {
             "enable": false,
             "exclude": "",
