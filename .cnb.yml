@@ -5,6 +5,8 @@ main:
       runner:
         tags: cnb:arch:amd64
         cpus: 2
+      docker:
+        image: python:3.12-bookworm
       env:
         SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
         TARGET_URL: https://www.gstatic.com/generate_204
