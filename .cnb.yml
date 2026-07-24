@@ -1,4 +1,37 @@
 main:
+  "crontab: 0 10,22 * * *":
+    - &github_main_sync
+      name: Sync GitHub main to CNB
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 1
+      docker:
+        image: python:3.12-bookworm
+      env:
+        GITHUB_MAIN_REPO: https://github.com/huangazhuang/aggregator.git
+      stages:
+        - name: Fast-forward CNB main from GitHub
+          timeout: 10m
+          script: |
+            set -eu
+            test -n "${CNB_TOKEN:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+
+            git fetch --no-tags "${GITHUB_MAIN_REPO}" main
+            github_sha="$(git rev-parse FETCH_HEAD)"
+            cnb_sha="$(git rev-parse HEAD)"
+            if [ "${github_sha}" = "${cnb_sha}" ]; then
+              printf 'CNB main is already up to date: %s\n' "${github_sha}"
+              exit 0
+            fi
+
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              git push "${web_endpoint}/${CNB_REPO_SLUG}.git" "FETCH_HEAD:refs/heads/main"
+            printf 'CNB main fast-forwarded: %s -> %s\n' "${cnb_sha}" "${github_sha}"
+
   "crontab: 30 10,22 * * *":
     - &china_probe
       name: Mainland China Mihomo probe
@@ -85,3 +118,6 @@ main:
 
   web_trigger_china_probe:
     - *china_probe
+
+  web_trigger_sync_github:
+    - *github_main_sync

@@ -5,3 +5,6 @@ branch:
         description: 从中国大陆 CNB 节点运行 Mihomo 实测并更新独立订阅
         event: web_trigger_china_probe
         isDefault: true
+      - name: 立即同步 GitHub main
+        description: 将 GitHub main 的最新提交快进同步到 CNB
+        event: web_trigger_sync_github
