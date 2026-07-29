@@ -12,6 +12,14 @@ https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/cla
 
 Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址即可。建议把更新间隔设为 360 分钟或 720 分钟。
 
+如果更关心中国大陆实际可用性，优先使用 CNB 国内 Runner 实测后的订阅：
+
+```text
+https://cnb.cool/ASD12321_446/aggregator/-/git/raw/clash-cn-output/clash.yaml
+```
+
+该订阅会发布全部通过协议级请求的节点，并使用动态门槛防止少量异常结果覆盖上一版；详细说明见 [`CNB_SETUP.md`](CNB_SETUP.md)。
+
 ## 推荐配置
 
 要长期可用，建议使用你自己的稳定订阅源，而不是只依赖项目自动注册免费站点。
@@ -65,6 +73,8 @@ Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址�
 
 严格筛选采用失败关闭策略：任一目标检测异常，或最终通过数少于 20，或少于上一版的 25% 时，本次任务停止发布，`clash-verge-output` 保持上一版。可通过仓库变量 `STRICT_MIN_NODES` 和 `STRICT_MIN_RETAIN_RATIO` 调整门槛。
 
+可选的阿里云 FC TCP 探针现在会检查 SS、SSR、Snell、HTTP、SOCKS5 等 TCP 协议，只跳过 TUIC、Hysteria 和 Hysteria2。连接被拒绝或重置说明链路已到达目标，按入口可达处理；超时、DNS、无路由和未知系统错误按不可达处理。部署方法见 [`probe/README.md`](probe/README.md)。
+
 为提高自动注册成功率，已增加多临时邮箱服务商轮换，包括 `tempmail.lol`、`mail.tm`、`moakt`、`snapmail`、`linshiyouxiang` 等。遇到发信失败、收信超时或验证码提取失败时，会换邮箱服务商重试。
 
 ## 自动运行策略
@@ -86,6 +96,8 @@ Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址�
 - `crawler-*.txt/json/yaml`：爬虫模式的中间结果，用于下次运行复用。
 - `status.json`：最近一次运行状态。
 - `last-run.txt`：最近一次运行时间。
+
+工作流中的配置生成、合并、探针过滤、严格筛选和发布元数据逻辑均位于 `scripts/`，并在每次运行开始时执行 `tests/` 中的单元测试。
 
 ## 说明
 

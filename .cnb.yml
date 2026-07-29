@@ -42,10 +42,11 @@ main:
         image: python:3.12-bookworm
       env:
         SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
+        SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
         TARGET_URL: https://www.gstatic.com/generate_204
         OUTPUT_BRANCH: clash-cn-output
-        MAX_NODES: "80"
-        MIN_SUCCESS: "5"
+        MIN_SUCCESS: "20"
+        MIN_RETAIN_RATIO: "0.25"
         TIMEOUT_MS: "3000"
       stages:
         - name: Test proxies from the CNB runner
@@ -55,8 +56,15 @@ main:
             python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
             chmod +x clash/clash-linux-amd
             mkdir -p .cnb-runtime public-cn
-            python3 scripts/cnb_mihomo_filter.py \
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            previous_status_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${OUTPUT_BRANCH}/status.json"
+            main_sha="$(git rev-parse HEAD)"
+            python3 -m scripts.cnb_mihomo_filter \
               --source "${SOURCE_PROFILE_URL}" \
+              --source-status "${SOURCE_STATUS_URL}" \
+              --previous-status "${previous_status_url}" \
+              --main-sha "${main_sha}" \
               --mihomo clash/clash-linux-amd \
               --work-dir .cnb-runtime \
               --output-dir public-cn \
@@ -64,8 +72,8 @@ main:
               --timeout-ms "${TIMEOUT_MS}" \
               --attempts 2 \
               --workers 48 \
-              --max-nodes "${MAX_NODES}" \
-              --min-success "${MIN_SUCCESS}"
+              --min-success "${MIN_SUCCESS}" \
+              --min-retain-ratio "${MIN_RETAIN_RATIO}"
 
         - name: Publish the filtered profile to CNB
           timeout: 5m
@@ -76,25 +84,9 @@ main:
 
             web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
             profile_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${OUTPUT_BRANCH}/clash.yaml"
-            export PROFILE_URL="${profile_url}"
-            python3 - <<'PY'
-            import json
-            import os
-            from pathlib import Path
-
-            public = Path("public-cn")
-            status_path = public / "status.json"
-            status = json.loads(status_path.read_text(encoding="utf-8"))
-            status["profile_url"] = os.environ["PROFILE_URL"]
-            status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            (public / "README.md").write_text(
-                "# 中国大陆实测 Clash 订阅\n\n"
-                f"订阅地址：{os.environ['PROFILE_URL']}\n\n"
-                f"本次从 {status['source_count']} 个节点中实测通过 {status['passed_count']} 个，"
-                f"发布 {status['published_count']} 个。\n",
-                encoding="utf-8",
-            )
-            PY
+            python3 -m scripts.prepare_cnb_publish \
+              --output-dir public-cn \
+              --profile-url "${profile_url}"
 
             mkdir -p .cnb-runtime/publish
             cp public-cn/clash.yaml .cnb-runtime/publish/clash.yaml

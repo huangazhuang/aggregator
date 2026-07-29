@@ -55,6 +55,13 @@
 看到 `(FC)` 字样就说明 GitHub 已启用你的自建探针。未配置 `PROBE_URL`
 时会直接跳过中国侧预筛选，不会调用 Globalping。
 
+这是可选的 TCP 入口预筛选，和 CNB 的 Mihomo 协议级实测互为补充：
+
+- SS、SSR、Snell、HTTP、SOCKS5、VMess、VLESS、Trojan、AnyTLS 等 TCP 入口都会测试。
+- TUIC、Hysteria、Hysteria2 依赖 UDP，不参与 TCP 探测，也不会因此被删除。
+- TCP 成功连接、明确拒绝或连接重置，都能证明请求已到达入口，按可达处理。
+- 超时、DNS 失败、网络/主机无路由以及未知 `OSError` 按不可达处理；响应中的 `classifications` 会汇总分类结果。
+
 ## 成本
 
 FC 每月有免费额度(约 100 万次调用 + 一定 CU 资源),本探针每天最多几次、
@@ -68,3 +75,11 @@ FC 每月有免费额度(约 100 万次调用 + 一定 CU 资源),本探针每�
   (fail-open),订阅不会被清空。
 - 想临时停用自建探针: 删掉仓库的 `PROBE_URL` secret，GitHub 会跳过中国侧
   预筛选，后续 GMGN、Google、YouTube 三站点严格筛选仍会照常执行。
+
+## 测试
+
+探针错误分类和协议跳过列表由仓库单元测试覆盖：
+
+```bash
+python -m unittest tests.test_probe_classification -v
+```

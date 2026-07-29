@@ -20,34 +20,66 @@ FC 配置建议: Python 3.x runtime, 内存 512MB, 超时 120s, HTTP 触发器(�
 签名均可, 这里用自带 token 头做二次校验).
 """
 
+import errno
 import json
 import os
 import socket
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 MAX_ENDPOINTS = 2000
 MAX_WORKERS = 200
 DEFAULT_TIMEOUT = 3.0
+REACHABLE_ERRNOS = {errno.ECONNREFUSED, errno.ECONNRESET, errno.ECONNABORTED}
+REACHABLE_WINERRORS = {10053, 10054, 10061}
 
 
-def _tcp_ok(hostport: str, timeout: float) -> bool:
-    # 国内机房 -> 目标入口的 TCP 握手. 成功 / 被 RST / 拒绝 都算"入口未被墙";
-    # 只有 SYN 无响应(GFW 丢包)导致的 socket.timeout 才判为不可达.
+def classify_socket_error(exc: OSError) -> tuple[bool, str]:
+    """Classify whether a failed connect still proves that the endpoint was reached."""
+
+    if isinstance(exc, socket.timeout):
+        return False, "timeout"
+    if isinstance(exc, socket.gaierror):
+        return False, "dns_error"
+
+    code = getattr(exc, "errno", None)
+    winerror = getattr(exc, "winerror", None)
+    if isinstance(exc, (ConnectionRefusedError, ConnectionResetError)):
+        return True, "rejected"
+    if code in REACHABLE_ERRNOS or winerror in REACHABLE_WINERRORS:
+        return True, "rejected"
+    if code in {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ETIMEDOUT} or winerror in {
+        10051,
+        10060,
+        10065,
+    }:
+        return False, "unreachable"
+    return False, f"os_error_{code if code is not None else 'unknown'}"
+
+
+def _probe_endpoint(hostport: str, timeout: float) -> dict:
+    # 国内机房 -> 目标入口的 TCP 握手。成功、RST 或明确拒绝都证明路径已到达；
+    # 超时、DNS、无路由和未知 OSError 不能证明可达，按失败处理。
     host, _, port = hostport.rpartition(":")
     try:
         port = int(port)
     except ValueError:
-        return False
-    if not host:
-        return False
+        return {"ok": False, "classification": "invalid_endpoint"}
+    host = host.strip("[]")
+    if not host or port <= 0 or port > 65535:
+        return {"ok": False, "classification": "invalid_endpoint"}
     try:
         with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except socket.timeout:
-        return False
-    except OSError:
-        # ConnectionRefused / Reset / unreachable: 握手已抵达目标, 入口可达
-        return True
+            return {"ok": True, "classification": "connected"}
+    except OSError as exc:
+        ok, classification = classify_socket_error(exc)
+        return {"ok": ok, "classification": classification}
+
+
+def _tcp_ok(hostport: str, timeout: float) -> bool:
+    """Backward-compatible boolean helper used by local callers."""
+
+    return bool(_probe_endpoint(hostport, timeout)["ok"])
 
 
 def _run(body: dict) -> dict:
@@ -62,13 +94,21 @@ def _run(body: dict) -> dict:
         timeout = DEFAULT_TIMEOUT
     timeout = max(0.5, min(timeout, 10.0))
 
-    result = {}
+    details = {}
     if endpoints:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(endpoints))) as pool:
-            for ep, ok in zip(endpoints, pool.map(lambda e: _tcp_ok(e, timeout), endpoints)):
-                result[ep] = ok
+            for ep, detail in zip(endpoints, pool.map(lambda e: _probe_endpoint(e, timeout), endpoints)):
+                details[ep] = detail
 
-    return {"ok": result, "tested": len(result), "reachable": sum(1 for v in result.values() if v)}
+    result = {endpoint: bool(detail["ok"]) for endpoint, detail in details.items()}
+    classifications = Counter(str(detail["classification"]) for detail in details.values())
+    return {
+        "ok": result,
+        "results": details,
+        "classifications": dict(sorted(classifications.items())),
+        "tested": len(result),
+        "reachable": sum(1 for value in result.values() if value),
+    }
 
 
 # ---- 阿里云 FC HTTP 函数入口 (Python runtime) ----

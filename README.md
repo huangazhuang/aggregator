@@ -157,6 +157,8 @@ python subscribe/process.py -s config.json -n 128
 | ---------------------------- | --------------- | ------------------- |
 | [完整文档](README_CN.md)     | 详细配置说明    | 进阶用户            |
 | [English Docs](README_EN.md) | English version | International users |
+| [Clash Verge 自动订阅](CLASH_VERGE_AUTO.md) | GitHub 自动聚合订阅 | Clash Verge 用户 |
+| [CNB 国内实测](CNB_SETUP.md) | 国内 Runner 协议级筛选与状态追踪 | 中国大陆用户 |
 
 
 ## 🔧 常见问题

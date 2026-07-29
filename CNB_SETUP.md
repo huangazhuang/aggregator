@@ -1,6 +1,6 @@
 # CNB 中国大陆节点实测
 
-这套流水线不会修改现有的 `clash-verge-output`。它从该分支读取完整订阅，在 CNB 云端用 Mihomo 逐个进行协议级请求，最后把延迟最低的最多 80 个独立入口发布到 CNB 仓库的 `clash-cn-output` 分支。
+这套流水线不会修改现有的 `clash-verge-output`。它从该分支读取完整订阅，在 CNB 云端用 Mihomo 逐个进行协议级请求，并把所有实测通过的独立入口发布到 CNB 仓库的 `clash-cn-output` 分支。
 
 ## 一次性开通
 
@@ -38,17 +38,36 @@ CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub
 
 - 使用仓库自带的 Mihomo，对所有候选节点发起真实代理请求，而非只做 TCP 端口探测。
 - 单次等待 3 秒，失败节点再试一次，降低网络抖动造成的误杀。
-- 按实测延迟排序，最多发布 80 个；上游聚合阶段已经做过凭据级去重。
-- 少于 5 个节点通过时任务直接失败，不覆盖上一次可用订阅。
+- 按实测延迟排序并发布所有通过节点；上游聚合阶段已经做过凭据级去重，不再使用固定 80 个上限。
+- 覆盖门槛默认为 20 个，且不能低于上一版发布量的 25%，两者取较大值；未达到时任务失败并保留上一版。
+- REALITY `short-id` 在 CNB 二次生成 YAML 时始终强制保留为带引号字符串，避免 `08`、`54462e21` 被 YAML 当成数值导致 Mihomo 整体启动失败。
 - `status.json` 保存本次汇总，`probe-results.json` 保存每个节点的成功状态和延迟，便于排查。
 
-第一次运行后请在 `status.json` 中检查 `runner_ip`。CNB 是国内平台，但共享 Runner 的具体出口可能调整；最终应以 Clash Verge 的实际可用率为准。
+`status.json` 还记录以下追踪信息：
+
+- `source_run_at`：本次输入订阅在 GitHub 的生成时间。
+- `source_sha256`：实际下载到的源 `clash.yaml` 的 SHA-256。
+- `main_sha`：CNB 本次执行所使用的主分支提交。
+- `runner_public_ip`、`runner_country`、`runner_region`、`runner_city`：第三方 IP 定位服务返回的公网出口与地区。
+- `required_count`、`previous_published_count`：本轮覆盖门槛及其计算基线。
+
+公网出口和地区是尽力查询的观测信息；定位服务不可用时会留空，不影响节点探测。CNB 共享 Runner 的出口可能调整，最终仍应以 Clash Verge 的实际可用率为准。
 
 ## 调整参数
 
 可直接修改根目录 `.cnb.yml`：
 
-- `MAX_NODES`：发布节点上限，默认 80。
 - `TIMEOUT_MS`：云端初筛超时，默认 3000 毫秒。不建议直接改成 1000，否则容易误删可用但首连较慢的免费节点。
 - `TARGET_URL`：测速目标，默认使用返回 204 的 Google 静态地址。
-- `MIN_SUCCESS`：允许覆盖旧订阅所需的最少成功节点数，默认 5。
+- `MIN_SUCCESS`：允许覆盖旧订阅所需的绝对最少成功节点数，默认 20。
+- `MIN_RETAIN_RATIO`：相对上一版发布量的最低保留比例，默认 0.25。
+
+## 本地验证
+
+流水线逻辑位于 `scripts/`，工作流不再包含大段内嵌 Python。提交前可运行：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+测试覆盖动态门槛、代理组过滤、REALITY 字符串序列化和 TCP 探针错误分类。
