@@ -42,6 +42,19 @@ class PublishFloorTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in selected], ["fast", "slow"])
         self.assertEqual([item["name"] for item in selected_results], ["fast", "slow"])
 
+    def test_publish_cap_keeps_the_fastest_eighty_proxies(self) -> None:
+        proxies = {f"proxy-{index}": {"name": f"proxy-{index}"} for index in range(100)}
+        results = [
+            {"name": f"proxy-{index}", "ok": True, "delay_ms": 100 - index}
+            for index in range(100)
+        ]
+
+        selected, selected_results = select_fastest(proxies, results, 80)
+
+        expected = [f"proxy-{index}" for index in range(99, 19, -1)]
+        self.assertEqual([item["name"] for item in selected], expected)
+        self.assertEqual([item["name"] for item in selected_results], expected)
+
     def test_optional_status_loader_returns_json_mapping(self) -> None:
         with patch("scripts.cnb_mihomo_filter.read_source", return_value=b'{"run_at":"now"}'):
             self.assertEqual(load_optional_json("status.json"), {"run_at": "now"})

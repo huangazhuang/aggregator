@@ -45,6 +45,7 @@ main:
         SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
         TARGET_URL: https://www.gstatic.com/generate_204
         OUTPUT_BRANCH: clash-cn-output
+        MAX_NODES: "80"
         MIN_SUCCESS: "20"
         MIN_RETAIN_RATIO: "0.25"
         TIMEOUT_MS: "3000"
@@ -72,6 +73,7 @@ main:
               --timeout-ms "${TIMEOUT_MS}" \
               --attempts 2 \
               --workers 48 \
+              --max-nodes "${MAX_NODES}" \
               --min-success "${MIN_SUCCESS}" \
               --min-retain-ratio "${MIN_RETAIN_RATIO}"
 

@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-ms", type=int, default=3000)
     parser.add_argument("--attempts", type=int, default=2)
     parser.add_argument("--workers", type=int, default=48)
-    parser.add_argument("--max-nodes", type=int, default=0, help="Publish cap; zero publishes every passing node")
+    parser.add_argument("--max-nodes", type=int, default=80, help="Publish cap; zero publishes every passing node")
     parser.add_argument("--min-success", type=int, default=20)
     parser.add_argument("--min-retain-ratio", type=float, default=0.25)
     return parser.parse_args()

@@ -18,7 +18,7 @@ Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址�
 https://cnb.cool/ASD12321_446/aggregator/-/git/raw/clash-cn-output/clash.yaml
 ```
 
-该订阅会发布全部通过协议级请求的节点，并使用动态门槛防止少量异常结果覆盖上一版；详细说明见 [`CNB_SETUP.md`](CNB_SETUP.md)。
+该订阅会按实测延迟发布通过节点中最快的前 80 个，并使用动态门槛防止少量异常结果覆盖上一版；详细说明见 [`CNB_SETUP.md`](CNB_SETUP.md)。
 
 ## 推荐配置
 
