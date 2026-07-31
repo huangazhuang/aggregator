@@ -1721,6 +1721,14 @@ def _parse_yaml_proxies(content: str) -> list | None:
         return None
 
 
+def _parse_subscription_userinfo_number(value: str) -> int:
+    value = value.strip()
+    if not re.fullmatch(r"[0-9]+", value):
+        raise ValueError("subscription-userinfo values must be non-negative integers")
+
+    return int(value)
+
+
 def is_expired(header: str, remain: float = 0, spare_time: float = 0, tolerance: float = 0) -> tuple[bool, bool]:
     if utils.isblank(header):
         return True, False
@@ -1739,13 +1747,17 @@ def is_expired(header: str, remain: float = 0, spare_time: float = 0, tolerance:
                 continue
 
             if "upload" == words[0].strip():
-                upload = eval(words[1])
+                upload = _parse_subscription_userinfo_number(words[1])
             elif "download" == words[0].strip():
-                download = eval(words[1])
+                download = _parse_subscription_userinfo_number(words[1])
             elif "total" == words[0].strip():
-                total = eval(words[1])
+                total = _parse_subscription_userinfo_number(words[1])
             elif "expire" == words[0].strip():
-                expire = None if utils.isblank(words[1]) else eval(words[1])
+                expire = (
+                    None
+                    if utils.isblank(words[1])
+                    else _parse_subscription_userinfo_number(words[1])
+                )
 
         # 剩余流量大于 ${remain} GB 并且未过期则返回 True，否则返回 False
         flag = total - (upload + download) > remain * pow(1024, 3) and (
