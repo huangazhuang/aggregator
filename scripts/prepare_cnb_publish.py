@@ -66,6 +66,9 @@ def main() -> int:
         f"P90 不高于 {status.get('max_qualified_p90_ms', 0)} ms",
         f"发布构成：亚洲 {status.get('published_asia_count', 0)} 个，"
         f"非亚洲 {status.get('published_non_asia_count', 0)} 个",
+        f"亚洲分级：严格 {status.get('strict_qualified_asia_count', 0)} 个，"
+        f"12/20 兜底 {status.get('asia_fallback_count', 0)} 个，"
+        f"10/20 应急 {status.get('asia_emergency_count', 0)} 个",
     ]
     (public / "README.md").write_text(
         "# 中国大陆 20 轮稳定性实测 Clash 订阅\n\n"

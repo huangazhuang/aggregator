@@ -32,6 +32,8 @@ https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-output/clash.yaml
 
 CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub 同步一次，作为实时推送失败时的兜底；`10:30` 和 `22:30` 运行大陆节点实测。临时需要同步代码时，也可在 CNB `main` 分支详情页点击“立即同步 GitHub main”。
 
+大陆测速流水线配置了独占锁 `aggregator-mainland-probe`：定时任务和手动点击触发的任务不会并行运行，也不会同时强制推送 `clash-cn-output`。等待或锁租约最长为 2 小时，足以覆盖当前约 23 分钟的全量 20 轮测速和失败诊断发布。若前一次任务异常终止，租约到期后才会允许下一次任务接管；不应通过重复点击来绕过锁。
+
 同步只允许正常的快进更新。如果有人直接修改 CNB 的 `main` 导致它与 GitHub 分叉，任务会失败而不是强制覆盖；此项目应始终在 GitHub 修改代码。节点数据本身始终从 GitHub 最新的 `clash-verge-output` 下载，不依赖代码同步时间。
 
 探测流水线申请 2 个 CPU，同步流水线申请 1 个 CPU。按当前频率运行，月用量明显低于 CNB 社区版每月 160 CPU 核时的免费额度。
@@ -40,15 +42,34 @@ CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub
 
 - 使用仓库自带的 Mihomo，对所有源节点发起真实代理请求，而非只做 TCP 端口探测。
 - 所有节点先测 3 轮，再让全部节点补测 17 轮，总计 20 轮。以当前约 1450 个源节点计算，约需 29,000 次真实请求；任务超时上限为 50 分钟，避免低质节点大量 timeout 时被过早中断。
+- 旧版 CNB 任务可能仍携带 `candidate-limit`、`asia-candidate-target` 等参数；当前脚本会兼容接收但忽略这些候选上限，始终对源中的全部节点完成 20 轮，直到 CNB main 同步到最新提交。
 - 每轮单次等待 3 秒。成功率至少达到 70%（20 轮中至少成功 14 次），且成功样本的 P90 延迟不高于 2800 ms，才算合格。
 - 排名依次比较成功率、P90 延迟、中位延迟、抖动和最低延迟；不会因偶尔出现一次很低的延迟就把经常 timeout 的节点排在前面。
-- 基础发布目标为 80 个，优先使用成功率至少 80% 的节点；有足够合格节点时先保留最稳的 10 个非亚洲节点，再由亚洲节点填充主体。非亚洲最多 20 个，因此正常发布 80 个时亚洲节点至少有 60 个；非亚洲不足 10 个时不会为了凑数降低门槛。
-- 达到 90% 成功率且 P90 不高于 2000 ms 的高质量节点可以继续扩容。扩容阶段按稳定性统一排名，非亚洲仍然最多 20 个，最终数量会在 80–150 个之间动态变化，亚洲节点没有 50 或 60 个的上限。
+- 基础发布目标为 80 个，先保留最稳的 10 个非亚洲节点，再由亚洲节点填充主体。非亚洲的硬合格线仍是 14/20 且 P90 不高于 2800 ms，最多 20 个。
+- 亚洲采用三级基础填充：严格层为 14/20；基础兜底层为 12/20；只有仍不足 80 个时才启用应急兜底层 10/20。两级兜底仍要求 P90 不高于 2800 ms，只能补足基础 80，不能用于扩容；如果分层后仍不足 80 个，则拒绝覆盖旧订阅。
+- 达到 90% 成功率且 P90 不高于 2000 ms 的高质量节点可以继续扩容。扩容前会优先用精英亚洲节点替换基础配置中的兜底节点，清除兜底节点后才新增；最终数量会在 80–150 个之间动态变化，非亚洲仍然最多 20 个。
 - 如果达不到至少 80 个合格且符合地区上限的节点，本轮拒绝覆盖，继续保留上一版订阅。
 - 发布保护门槛绝对不少于 80 个；上一版发布量最高按 150 计算并乘以 50%，所以默认配置允许结果按本轮质量从 150 安全回落到 80。
 - REALITY `short-id` 在 CNB 二次生成 YAML 时始终强制保留为带引号字符串，避免 `08`、`54462e21` 被 YAML 当成数值导致 Mihomo 整体启动失败。
 - 格式无效、Mihomo 无法解析的节点仍会丢弃，否则会导致整份 Clash 配置无法启动。
 - `status.json` 保存本次汇总；`probe-results.json` 保存每轮样本、成功率、P90、中位数、抖动、全量复测/合格/发布状态和淘汰原因。
+
+### 失败诊断与保留策略
+
+测速阶段失败时，CNB 会跳过正常发布阶段；这是故意的 fail-closed 行为，最后一版可用的 `clash-cn-output/clash.yaml` 不会被覆盖。筛选程序会在 `public-cn/failure.json` 写入脱敏的失败汇总，并在构建日志中打印亚洲 10/12/14 次成功门槛的 what-if 矩阵，便于判断下一轮是否仍需增加源节点。
+
+CNB 的 `failStages` 会在本次流水线失败后把最新脱敏报告写入与订阅分离的 `clash-cn-diagnostics` 分支；如果测速在生成汇总前就中止，失败阶段只打印提示，不会影响原始失败状态：
+
+- `failure.json`：失败类型、消息、主分支/源 SHA、required/selected 数量、旧 profile 基线、0–20 次成功直方图及 10/12/14/18 次门槛模拟；
+- 诊断分支只保存该脱敏报告，不复制运行时 YAML、UUID、password、server、port 或原始错误文本。
+
+诊断地址格式：
+
+```text
+https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-diagnostics/failure.json
+```
+
+失败诊断不得复制含 UUID、password 或其他凭据的运行时 YAML。当前报告只保存节点短哈希和统计，不保存 server、port 或原始错误文本；诊断发布失败不能覆盖或删除最后一版订阅，也不能把失败尝试的数量写成 `published_count`。
 
 `status.json` 还记录以下追踪信息：
 
@@ -57,6 +78,8 @@ CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub
 - `main_sha`：CNB 本次执行所使用的主分支提交。
 - `runner_public_ip`、`runner_country`、`runner_region`、`runner_city`：第三方 IP 定位服务返回的公网出口与地区。
 - `candidate_count`、`qualified_count`、`published_asia_count`、`published_non_asia_count`：全量复测和最终地区构成。
+- `strict_qualified_count`、`asia_fallback_count`、`asia_emergency_count`、`qualification_tier_counts`：各质量层数量。
+- `asia_threshold_matrix`、`asia_success_histogram`、`non_asia_success_histogram`：亚洲分级门槛和成功次数分布。
 - `required_count`、`previous_publish_baseline`：本轮覆盖门槛及兼容旧版状态后的计算基线。
 
 公网出口和地区是尽力查询的观测信息；定位服务不可用时会留空，不影响节点探测。CNB 共享 Runner 的出口可能调整，最终仍应以 Clash Verge 的实际可用率为准。
@@ -73,6 +96,8 @@ CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub
 - `MAX_QUALIFIED_P90_MS` / `ELITE_MAX_P90_MS`：普通合格和高质量扩容的 P90 上限，默认 2800 / 2000 ms。
 - `BASE_TARGET` / `MAX_NODES`：基础发布 80 个，达到精英门槛后最多动态扩容到 150 个。
 - `NON_ASIA_MIN` / `NON_ASIA_MAX`：非亚洲节点软目标为 10 个、硬上限为 20 个。
+- `ASIA_FALLBACK_MIN_SUCCESS` / `ASIA_EMERGENCY_MIN_SUCCESS`：亚洲基础/应急兜底成功次数，默认 12/10（20 轮）。
+- `ASIA_EMERGENCY_MAX_P90_MS`：亚洲应急兜底 P90 上限，默认 2800 ms；`ASIA_EMERGENCY_MAX_COUNT=0` 表示只取达到基础目标所需的数量。
 - `MIN_SUCCESS`：允许覆盖旧订阅所需的绝对最少节点数，默认 80。
 - `MIN_RETAIN_RATIO`：相对上一版发布量的最低保留比例，默认 0.50。
 

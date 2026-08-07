@@ -40,12 +40,23 @@ main:
         cpus: 2
       docker:
         image: python:3.12-bookworm
+      # Prevent a scheduled probe and a manual/web-triggered probe from
+      # running at the same time and force-pushing the same output branch.
+      # The 2-hour lease/wait window is longer than the current ~23-minute
+      # full scan and leaves room for publishing diagnostics.
+      lock:
+        key: aggregator-mainland-probe
+        expires: 7200
+        wait: true
+        timeout: 7200
+        cancel-in-progress: false
       env:
         SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
         SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
         TARGET_URL: https://www.gstatic.com/generate_204
         EXPECTED_STATUS: "204"
         OUTPUT_BRANCH: clash-cn-output
+        DIAGNOSTICS_BRANCH: clash-cn-diagnostics
         PRELIMINARY_ROUNDS: "3"
         TOTAL_ROUNDS: "20"
         ROUND_GAP_SECONDS: "0.75"
@@ -58,6 +69,10 @@ main:
         ELITE_MIN_SUCCESS_RATE: "0.90"
         MAX_QUALIFIED_P90_MS: "2800"
         ELITE_MAX_P90_MS: "2000"
+        ASIA_FALLBACK_MIN_SUCCESS: "12"
+        ASIA_EMERGENCY_MIN_SUCCESS: "10"
+        ASIA_EMERGENCY_MAX_P90_MS: "2800"
+        ASIA_EMERGENCY_MAX_COUNT: "0"
         MIN_SUCCESS: "80"
         MIN_RETAIN_RATIO: "0.50"
         TIMEOUT_MS: "3000"
@@ -73,6 +88,7 @@ main:
             web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
             previous_status_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${OUTPUT_BRANCH}/status.json"
             main_sha="$(git rev-parse HEAD)"
+            set +e
             python3 -m scripts.cnb_mihomo_filter \
               --source "${SOURCE_PROFILE_URL}" \
               --source-status "${SOURCE_STATUS_URL}" \
@@ -97,8 +113,19 @@ main:
               --elite-min-success-rate "${ELITE_MIN_SUCCESS_RATE}" \
               --max-qualified-p90-ms "${MAX_QUALIFIED_P90_MS}" \
               --elite-max-p90-ms "${ELITE_MAX_P90_MS}" \
+              --asia-fallback-min-success "${ASIA_FALLBACK_MIN_SUCCESS}" \
+              --asia-emergency-min-success "${ASIA_EMERGENCY_MIN_SUCCESS}" \
+              --asia-emergency-max-p90-ms "${ASIA_EMERGENCY_MAX_P90_MS}" \
+              --asia-emergency-max-count "${ASIA_EMERGENCY_MAX_COUNT}" \
               --min-success "${MIN_SUCCESS}" \
               --min-retain-ratio "${MIN_RETAIN_RATIO}"
+            probe_rc=$?
+            set -e
+            if test -f public-cn/failure.json; then
+              printf '%s\n' '--- redacted failure.json ---'
+              python3 -m json.tool public-cn/failure.json
+            fi
+            exit "${probe_rc}"
 
         - name: Publish the filtered profile to CNB
           timeout: 5m
@@ -132,6 +159,43 @@ main:
             GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
               git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${OUTPUT_BRANCH}"
             printf 'Subscription URL: %s\n' "${profile_url}"
+
+      failStages:
+        - name: Publish redacted CNB failure diagnostics
+          timeout: 5m
+          script: |
+            set -eu
+            if ! test -s public-cn/failure.json; then
+              printf '%s\n' 'No redacted failure.json was produced; keeping the original failure status.'
+              exit 0
+            fi
+            if ! test -n "${CNB_TOKEN:-}" || ! test -n "${CNB_REPO_SLUG:-}"; then
+              printf '%s\n' 'CNB credentials are unavailable; failure diagnostics remain in the build log.'
+              exit 0
+            fi
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            mkdir -p .cnb-runtime/diagnostics
+            cp public-cn/failure.json .cnb-runtime/diagnostics/failure.json
+            cd .cnb-runtime/diagnostics
+            git init
+            git checkout -b "${DIAGNOSTICS_BRANCH}"
+            git config user.name "cnb-probe[bot]"
+            git config user.email "cnb-probe@users.noreply.cnb.cool"
+            git add failure.json
+            git commit -m "Record redacted mainland-China probe failure" >/dev/null
+            set +e
+            GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${DIAGNOSTICS_BRANCH}"
+            push_rc=$?
+            set -e
+            if [ "${push_rc}" -ne 0 ]; then
+              printf 'WARNING: failure diagnostics push failed with code %s; original failure is preserved.\n' "${push_rc}"
+            else
+              printf 'Failure diagnostics URL: %s\n' \
+                "${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${DIAGNOSTICS_BRANCH}/failure.json"
+            fi
 
   web_trigger_china_probe:
     - *china_probe

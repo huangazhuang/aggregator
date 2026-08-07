@@ -29,6 +29,11 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from subscribe.asia import is_preferred_asian_proxy
+from scripts.cnb_diagnostics import (
+    build_failure_diagnostic,
+    threshold_matrix,
+    write_failure_diagnostic,
+)
 from scripts.pipeline_utils import (
     calculate_publish_floor,
     dump_clash_yaml,
@@ -57,6 +62,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--total-rounds", type=int, default=20)
     parser.add_argument("--round-gap", type=float, default=0.75)
     parser.add_argument("--workers", type=int, default=48)
+    # Kept as no-op compatibility flags for CNB jobs created from the older
+    # candidate-cap configuration. Full-scan mode intentionally ignores them.
+    parser.add_argument("--candidate-limit", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--asia-candidate-target", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--non-asia-candidate-target", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--base-target", type=int, default=80)
     parser.add_argument("--max-nodes", type=int, default=150)
     parser.add_argument("--non-asia-min", type=int, default=10)
@@ -66,6 +76,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--elite-min-success-rate", type=float, default=0.90)
     parser.add_argument("--max-qualified-p90-ms", type=float, default=2800.0)
     parser.add_argument("--elite-max-p90-ms", type=float, default=2000.0)
+    parser.add_argument(
+        "--asia-fallback-min-success",
+        type=int,
+        default=12,
+        help="Minimum successful rounds for the first Asia base-fill tier",
+    )
+    parser.add_argument(
+        "--asia-emergency-min-success",
+        type=int,
+        default=10,
+        help="Minimum successful rounds for the last-resort Asia base-fill tier",
+    )
+    parser.add_argument(
+        "--asia-emergency-max-p90-ms",
+        type=float,
+        default=2800.0,
+        help="P90 ceiling for the last-resort Asia base-fill tier",
+    )
+    parser.add_argument(
+        "--asia-emergency-max-count",
+        type=int,
+        default=0,
+        help="Optional cap for last-resort Asia nodes; zero means only as many as needed",
+    )
     parser.add_argument("--min-success", type=int, default=80)
     parser.add_argument("--min-retain-ratio", type=float, default=0.50)
     return parser.parse_args()
@@ -439,6 +473,237 @@ def is_elite_result(
     )
 
 
+def _minimum_success_count(min_success_rate: float, total_rounds: int) -> int:
+    """Convert a rate threshold to an exact integer sample requirement."""
+
+    return max(1, math.ceil(float(min_success_rate) * max(int(total_rounds), 1) - 1e-9))
+
+
+def _passes_quality_line(
+    summary: dict[str, Any],
+    minimum_success: int,
+    max_p90_ms: float,
+    total_rounds: int,
+) -> bool:
+    """Require a complete sample set before applying a quality threshold."""
+
+    try:
+        attempts = int(summary.get("attempts", total_rounds))
+        successes = int(summary.get("success_count", 0))
+        p90_value = summary.get("p90_delay_ms")
+        p90_ms = float(p90_value) if p90_value is not None else math.inf
+    except (TypeError, ValueError):
+        return False
+    return (
+        attempts == total_rounds
+        and successes >= int(minimum_success)
+        and math.isfinite(p90_ms)
+        and p90_ms <= float(max_p90_ms)
+    )
+
+
+def _asia_selection_tier(
+    summary: dict[str, Any],
+    min_success_rate: float,
+    max_qualified_p90_ms: float,
+    *,
+    total_rounds: int = 20,
+    asia_fallback_min_success: int = 12,
+    asia_emergency_min_success: int = 10,
+    asia_emergency_max_p90_ms: float = 2800.0,
+) -> str | None:
+    """Return the Asia base-selection tier for one complete probe result."""
+
+    strict_minimum = _minimum_success_count(min_success_rate, total_rounds)
+    if _passes_quality_line(
+        summary, strict_minimum, max_qualified_p90_ms, total_rounds
+    ):
+        return "asia-strict"
+    if _passes_quality_line(
+        summary,
+        int(asia_fallback_min_success),
+        max_qualified_p90_ms,
+        total_rounds,
+    ):
+        return "asia-fallback"
+    if _passes_quality_line(
+        summary,
+        int(asia_emergency_min_success),
+        asia_emergency_max_p90_ms,
+        total_rounds,
+    ):
+        return "asia-emergency"
+    return None
+
+
+def _select_tiered_asia_results(
+    summaries: list[dict[str, Any]],
+    min_success_rate: float,
+    max_qualified_p90_ms: float,
+    base_target: int,
+    maximum: int,
+    non_asia_min: int,
+    non_asia_max: int,
+    elite_min_success_rate: float,
+    elite_max_p90_ms: float,
+    *,
+    total_rounds: int = 20,
+    asia_fallback_min_success: int = 12,
+    asia_emergency_min_success: int = 10,
+    asia_emergency_max_p90_ms: float = 2800.0,
+    asia_emergency_max_count: int = 0,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Select an Asia-heavy base set with explicit quality tiers.
+
+    The return shape intentionally matches :func:`select_stable_results`.
+    ``qualified`` contains every node that is eligible for the base target;
+    ``selected`` is empty when the base target cannot be reached, allowing the
+    caller's existing fail-closed guard to preserve the previous profile.
+    """
+
+    target = min(base_target, maximum)
+    # Zero means “use only as many emergency nodes as are needed to reach the
+    # base target”; a positive value is an optional safety cap.
+    emergency_limit = target if int(asia_emergency_max_count) <= 0 else max(
+        0, min(int(asia_emergency_max_count), target)
+    )
+
+    qualified: list[dict[str, Any]] = []
+    for original in summaries:
+        item = dict(original)
+        if item.get("preferred_asia"):
+            tier = _asia_selection_tier(
+                item,
+                min_success_rate,
+                max_qualified_p90_ms,
+                total_rounds=total_rounds,
+                asia_fallback_min_success=asia_fallback_min_success,
+                asia_emergency_min_success=asia_emergency_min_success,
+                asia_emergency_max_p90_ms=asia_emergency_max_p90_ms,
+            )
+            if tier is None:
+                continue
+        else:
+            if not _passes_quality_line(
+                item,
+                _minimum_success_count(min_success_rate, total_rounds),
+                max_qualified_p90_ms,
+                total_rounds,
+            ):
+                continue
+            tier = "non-asia-strict"
+        item["selection_tier"] = tier
+        item["qualification_tier"] = tier
+        qualified.append(item)
+
+    def ranked(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(items, key=stability_sort_key)
+
+    asia_by_tier = {
+        tier: ranked(
+            [item for item in qualified if item.get("selection_tier") == tier]
+        )
+        for tier in ("asia-strict", "asia-fallback", "asia-emergency")
+    }
+    non_asia = ranked(
+        [item for item in qualified if item.get("selection_tier") == "non-asia-strict"]
+    )
+
+    selected_names: list[str] = []
+    selected_set: set[str] = set()
+    selected_non_asia = 0
+    selected_emergency_asia = 0
+
+    def add(item: dict[str, Any]) -> bool:
+        nonlocal selected_non_asia, selected_emergency_asia
+        name = str(item.get("name", ""))
+        if not name or name in selected_set or len(selected_names) >= target:
+            return False
+        if item.get("selection_tier") == "non-asia-strict":
+            if selected_non_asia >= non_asia_max:
+                return False
+            selected_non_asia += 1
+        elif item.get("selection_tier") == "asia-emergency":
+            if selected_emergency_asia >= emergency_limit:
+                return False
+            selected_emergency_asia += 1
+        selected_set.add(name)
+        selected_names.append(name)
+        return True
+
+    # Reserve the requested minimum of strict non-Asia nodes, when available.
+    for item in non_asia[: min(non_asia_min, target)]:
+        add(item)
+
+    # Fill the base target with Asia, from strict to progressively relaxed.
+    for tier in ("asia-strict", "asia-fallback", "asia-emergency"):
+        for item in asia_by_tier[tier]:
+            if len(selected_names) >= target:
+                break
+            add(item)
+        if len(selected_names) >= target:
+            break
+
+    # Only after the Asian portion is exhausted may non-Asia fill the gap,
+    # and it is always capped at ``non_asia_max``.
+    if len(selected_names) < target:
+        for item in non_asia:
+            if len(selected_names) >= target:
+                break
+            add(item)
+
+    # A1/A2 are base-only tiers. Before adding anything above the base target,
+    # replace them with strict elite Asia nodes. This prevents weak fallback
+    # nodes from being used as hidden expansion capacity.
+    elite_remaining = sorted(
+        (
+            item
+            for item in qualified
+            if str(item.get("name", "")) not in selected_set
+            and item.get("selection_tier") in {"asia-strict", "non-asia-strict"}
+            and is_elite_result(item, elite_min_success_rate, elite_max_p90_ms)
+        ),
+        key=stability_sort_key,
+    )
+    if len(selected_names) >= target:
+        selected = [
+            item for item in qualified if str(item.get("name", "")) in selected_set
+        ]
+        weak_asia = [
+            item
+            for item in selected
+            if item.get("selection_tier") in {"asia-fallback", "asia-emergency"}
+        ]
+        for item in elite_remaining:
+            name = str(item.get("name", ""))
+            if name in selected_set:
+                continue
+            if item.get("preferred_asia") and weak_asia:
+                weakest = min(weak_asia, key=stability_sort_key)
+                weak_name = str(weakest.get("name", ""))
+                selected_set.remove(weak_name)
+                selected_set.add(name)
+                weak_asia.remove(weakest)
+                continue
+            if weak_asia:
+                # Do not trade an Asian fallback for a non-Asian node while
+                # the profile is already at its base size.
+                continue
+            if len(selected_names) >= maximum:
+                break
+            if not item.get("preferred_asia"):
+                if selected_non_asia >= non_asia_max:
+                    continue
+                selected_non_asia += 1
+            selected_set.add(name)
+            selected_names.append(name)
+
+    selected = [
+        item for item in qualified if str(item.get("name", "")) in selected_set
+    ]
+    return selected, qualified
+
+
 def select_stable_results(
     summaries: list[dict[str, Any]],
     min_success_rate: float,
@@ -450,8 +715,38 @@ def select_stable_results(
     non_asia_max: int,
     elite_min_success_rate: float,
     elite_max_p90_ms: float,
+    *,
+    asia_tiering: bool = False,
+    total_rounds: int = 20,
+    asia_fallback_min_success: int = 12,
+    asia_emergency_min_success: int = 10,
+    asia_emergency_max_p90_ms: float = 2800.0,
+    asia_emergency_max_count: int = 0,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Build an Asia-heavy stable set, then expand only with elite results."""
+    """Build an Asia-heavy stable set, then expand only with elite results.
+
+    The original positional API remains unchanged.  Production CNB runs pass
+    ``asia_tiering=True``; callers that omit it retain the legacy single-line
+    qualification behavior for backwards compatibility.
+    """
+
+    if asia_tiering:
+        return _select_tiered_asia_results(
+            summaries,
+            min_success_rate,
+            max_qualified_p90_ms,
+            base_target,
+            maximum,
+            non_asia_min,
+            non_asia_max,
+            elite_min_success_rate,
+            elite_max_p90_ms,
+            total_rounds=total_rounds,
+            asia_fallback_min_success=asia_fallback_min_success,
+            asia_emergency_min_success=asia_emergency_min_success,
+            asia_emergency_max_p90_ms=asia_emergency_max_p90_ms,
+            asia_emergency_max_count=asia_emergency_max_count,
+        )
 
     qualified = sorted(
         (
@@ -523,8 +818,105 @@ def select_stable_results(
     return selected, qualified
 
 
+def _write_failure_diagnostic(
+    output_dir: Path,
+    *,
+    failure_kind: str,
+    message: str,
+    summaries: list[dict[str, Any]],
+    qualified_summaries: list[dict[str, Any]] | None = None,
+    required_count: int,
+    selected_count: int,
+    previous_published_count: int,
+    previous_publish_baseline: int,
+    args: argparse.Namespace,
+    source_sha256: str,
+) -> None:
+    """Persist and log a redacted failure report without masking the failure."""
+
+    try:
+        payload = build_failure_diagnostic(
+            failure_kind=failure_kind,
+            message=message,
+            summaries=summaries,
+            required_count=required_count,
+            selected_count=selected_count,
+            previous_published_count=previous_published_count,
+            previous_publish_baseline=previous_publish_baseline,
+            total_rounds=args.total_rounds,
+            asia_thresholds=(
+                (
+                    "strict",
+                    _minimum_success_count(args.min_success_rate, args.total_rounds),
+                    args.max_qualified_p90_ms,
+                ),
+                ("fallback", args.asia_fallback_min_success, args.max_qualified_p90_ms),
+                (
+                    "emergency",
+                    args.asia_emergency_min_success,
+                    args.asia_emergency_max_p90_ms,
+                ),
+                (
+                    "elite",
+                    _minimum_success_count(
+                        getattr(args, "elite_min_success_rate", 0.90), args.total_rounds
+                    ),
+                    getattr(args, "elite_max_p90_ms", 2000.0),
+                ),
+            ),
+            non_asia_minimum_success=_minimum_success_count(
+                args.min_success_rate, args.total_rounds
+            ),
+            non_asia_p90_limit_ms=args.max_qualified_p90_ms,
+            non_asia_max=args.non_asia_max,
+            base_target=args.base_target,
+            asia_emergency_max_count=args.asia_emergency_max_count,
+            main_sha=args.main_sha,
+            source_sha256=source_sha256,
+        )
+        tier_counts: dict[str, int] = {}
+        tier_source = qualified_summaries if qualified_summaries is not None else summaries
+        for item in tier_source:
+            tier = str(item.get("qualification_tier") or item.get("selection_tier") or "none")
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        payload["qualification_tier_counts"] = tier_counts
+        payload["failure_reason"] = str(message)[:500]
+        thresholds = payload.get("diagnostic", {}).get("thresholds", {})
+        if failure_kind == "incomplete_probe":
+            reason_code = "incomplete_probe_rounds"
+        elif not thresholds.get("emergency", {}).get("base_reachable", False):
+            reason_code = "asia_capacity_below_base_after_emergency_tier"
+        elif not thresholds.get("strict", {}).get("base_reachable", False):
+            reason_code = "strict_pool_requires_asia_fallback"
+        else:
+            reason_code = "publish_floor_or_region_selection_shortfall"
+        payload["failure_reason_code"] = reason_code
+        path = write_failure_diagnostic(output_dir, payload)
+        what_if = thresholds
+        print(
+            "Failure diagnostic written to "
+            f"{path}: "
+            + json.dumps(what_if, ensure_ascii=False, separators=(",", ":")),
+            flush=True,
+        )
+    except Exception as diagnostic_error:
+        print(f"WARNING: unable to write failure diagnostic: {diagnostic_error}", flush=True)
+
+
 def main() -> int:
     args = parse_args()
+    if any(
+        int(getattr(args, name, 0) or 0) > 0
+        for name in (
+            "candidate_limit",
+            "asia_candidate_target",
+            "non_asia_candidate_target",
+        )
+    ):
+        print(
+            "Ignoring deprecated candidate caps; full-scan mode tests every source proxy.",
+            flush=True,
+        )
     for label, value in (
         ("timeout-ms", args.timeout_ms),
         ("preliminary-rounds", args.preliminary_rounds),
@@ -571,6 +963,21 @@ def main() -> int:
             raise RuntimeError(f"--{label} must be greater than zero")
     if args.elite_max_p90_ms > args.max_qualified_p90_ms:
         raise RuntimeError("--elite-max-p90-ms cannot exceed --max-qualified-p90-ms")
+    strict_minimum = _minimum_success_count(args.min_success_rate, args.total_rounds)
+    if not (
+        0 < args.asia_emergency_min_success
+        < args.asia_fallback_min_success
+        < strict_minimum
+        <= args.total_rounds
+    ):
+        raise RuntimeError(
+            "Asia fallback success thresholds must satisfy "
+            "0 < emergency < fallback < strict <= total-rounds"
+        )
+    if args.asia_emergency_max_count < 0:
+        raise RuntimeError("--asia-emergency-max-count cannot be negative")
+    if args.asia_emergency_max_p90_ms <= 0:
+        raise RuntimeError("--asia-emergency-max-p90-ms must be greater than zero")
 
     mihomo = Path(args.mihomo).resolve()
     if not mihomo.is_file():
@@ -675,28 +1082,6 @@ def main() -> int:
     candidate_results = [
         item for item in results if str(item.get("name", "")) in candidate_set
     ]
-    incomplete = [
-        str(item.get("name", ""))
-        for item in candidate_results
-        if int(item.get("attempts", 0)) != args.total_rounds
-    ]
-    if incomplete:
-        raise RuntimeError(
-            f"{len(incomplete)} proxies did not complete all {args.total_rounds} rounds"
-        )
-
-    selected_results, qualified_results = select_stable_results(
-        candidate_results,
-        args.min_success_rate,
-        args.base_preferred_success_rate,
-        args.max_qualified_p90_ms,
-        args.base_target,
-        args.max_nodes,
-        args.non_asia_min,
-        args.non_asia_max,
-        args.elite_min_success_rate,
-        args.elite_max_p90_ms,
-    )
     previous_status = load_optional_json(args.previous_status)
     try:
         previous_published_count = max(int(previous_status.get("published_count", 0)), 0)
@@ -711,6 +1096,45 @@ def main() -> int:
             args.min_retain_ratio,
         ),
     )
+    incomplete = [
+        str(item.get("name", ""))
+        for item in candidate_results
+        if int(item.get("attempts", 0)) != args.total_rounds
+    ]
+    if incomplete:
+        message = f"{len(incomplete)} proxies did not complete all {args.total_rounds} rounds"
+        _write_failure_diagnostic(
+            output_dir,
+            failure_kind="incomplete_probe",
+            message=message,
+            summaries=candidate_results,
+            required_count=required_count,
+            selected_count=0,
+            previous_published_count=previous_published_count,
+            previous_publish_baseline=previous_baseline,
+            args=args,
+            source_sha256=source_sha256,
+        )
+        raise RuntimeError(message)
+
+    selected_results, qualified_results = select_stable_results(
+        candidate_results,
+        args.min_success_rate,
+        args.base_preferred_success_rate,
+        args.max_qualified_p90_ms,
+        args.base_target,
+        args.max_nodes,
+        args.non_asia_min,
+        args.non_asia_max,
+        args.elite_min_success_rate,
+        args.elite_max_p90_ms,
+        asia_tiering=True,
+        total_rounds=args.total_rounds,
+        asia_fallback_min_success=args.asia_fallback_min_success,
+        asia_emergency_min_success=args.asia_emergency_min_success,
+        asia_emergency_max_p90_ms=args.asia_emergency_max_p90_ms,
+        asia_emergency_max_count=args.asia_emergency_max_count,
+    )
     print(
         "Stable publish floor: "
         f"{required_count} (previous baseline={previous_baseline}, minimum={args.min_success}, "
@@ -720,12 +1144,26 @@ def main() -> int:
     if len(qualified_results) < required_count or len(selected_results) < required_count:
         qualified_asia = sum(bool(item.get("preferred_asia")) for item in qualified_results)
         qualified_non_asia = len(qualified_results) - qualified_asia
-        raise RuntimeError(
+        message = (
             f"only {len(qualified_results)} qualified and {len(selected_results)} selectable proxies; "
             f"qualified regions: Asia {qualified_asia}, non-Asia {qualified_non_asia}; "
             f"at least {required_count} are required; "
             "refusing to replace the last good profile"
         )
+        _write_failure_diagnostic(
+            output_dir,
+            failure_kind="publish_floor_not_reached",
+            message=message,
+            summaries=candidate_results,
+            qualified_summaries=qualified_results,
+            required_count=required_count,
+            selected_count=len(selected_results),
+            previous_published_count=previous_published_count,
+            previous_publish_baseline=previous_baseline,
+            args=args,
+            source_sha256=source_sha256,
+        )
+        raise RuntimeError(message)
 
     selected_names = [str(item["name"]) for item in selected_results]
     selected = [copy.deepcopy(proxies_by_name[name]) for name in selected_names]
@@ -739,11 +1177,16 @@ def main() -> int:
     yaml.safe_load(profile_path.read_text(encoding="utf-8"))
 
     qualified_names = {str(item["name"]) for item in qualified_results}
+    qualification_tiers = {
+        str(item["name"]): str(item.get("qualification_tier") or "")
+        for item in qualified_results
+    }
     selected_rank = {name: index + 1 for index, name in enumerate(selected_names)}
     for item in results:
         name = str(item.get("name", ""))
         item["candidate"] = name in candidate_set
         item["qualified"] = name in qualified_names
+        item["qualification_tier"] = qualification_tiers.get(name, "")
         item["elite"] = bool(
             item["candidate"]
             and is_elite_result(
@@ -773,6 +1216,55 @@ def main() -> int:
         json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     runner_network = discover_runner_network()
+    tier_names = (
+        "asia-strict",
+        "asia-fallback",
+        "asia-emergency",
+        "non-asia-strict",
+    )
+    qualification_tier_counts = {
+        tier: sum(
+            str(item.get("qualification_tier") or "") == tier
+            for item in qualified_results
+        )
+        for tier in tier_names
+    }
+    selected_tier_counts = {
+        tier: sum(
+            str(item.get("qualification_tier") or "") == tier
+            for item in selected_results
+        )
+        for tier in tier_names
+    }
+    threshold_summary = threshold_matrix(
+        candidate_results,
+        total_rounds=args.total_rounds,
+        asia_thresholds=(
+            (
+                "strict",
+                _minimum_success_count(args.min_success_rate, args.total_rounds),
+                args.max_qualified_p90_ms,
+            ),
+            ("fallback", args.asia_fallback_min_success, args.max_qualified_p90_ms),
+            (
+                "emergency",
+                args.asia_emergency_min_success,
+                args.asia_emergency_max_p90_ms,
+            ),
+            (
+                "elite",
+                _minimum_success_count(args.elite_min_success_rate, args.total_rounds),
+                args.elite_max_p90_ms,
+            ),
+        ),
+        non_asia_minimum_success=_minimum_success_count(
+            args.min_success_rate, args.total_rounds
+        ),
+        non_asia_p90_limit_ms=args.max_qualified_p90_ms,
+        non_asia_max=args.non_asia_max,
+        base_target=args.base_target,
+        asia_emergency_max_count=args.asia_emergency_max_count,
+    )
     status = {
         "run_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "runner_ip": os.environ.get("CNB_RUNNER_IP", ""),
@@ -782,7 +1274,7 @@ def main() -> int:
         "source_run_at": str(source_status.get("run_at") or ""),
         "source_sha256": source_sha256,
         "main_sha": args.main_sha,
-        "selection_schema_version": 3,
+        "selection_schema_version": 4,
         "target_url": args.target_url,
         "expected_status": args.expected_status,
         "timeout_ms": args.timeout_ms,
@@ -804,6 +1296,19 @@ def main() -> int:
         "passed_count": len(qualified_results),
         "qualified_count": len(qualified_results),
         "qualified_asia_count": sum(bool(item.get("preferred_asia")) for item in qualified_results),
+        "strict_qualified_count": sum(
+            item.get("qualification_tier") in {"asia-strict", "non-asia-strict"}
+            for item in qualified_results
+        ),
+        "strict_qualified_asia_count": qualification_tier_counts["asia-strict"],
+        "strict_qualified_non_asia_count": qualification_tier_counts["non-asia-strict"],
+        "asia_fallback_count": qualification_tier_counts["asia-fallback"],
+        "asia_emergency_count": qualification_tier_counts["asia-emergency"],
+        "qualification_tier_counts": qualification_tier_counts,
+        "selected_tier_counts": selected_tier_counts,
+        "asia_threshold_matrix": threshold_summary["thresholds"],
+        "asia_success_histogram": threshold_summary["asia_success_histogram"],
+        "non_asia_success_histogram": threshold_summary["non_asia_success_histogram"],
         "elite_count": sum(
             is_elite_result(item, args.elite_min_success_rate, args.elite_max_p90_ms)
             for item in candidate_results
@@ -814,6 +1319,8 @@ def main() -> int:
             for item in candidate_results
         ),
         "published_count": len(selected),
+        "published_base_count": min(len(selected), args.base_target),
+        "published_extra_count": max(len(selected) - args.base_target, 0),
         "published_asia_count": sum(bool(item.get("preferred_asia")) for item in selected_results),
         "published_non_asia_count": sum(
             not bool(item.get("preferred_asia")) for item in selected_results
@@ -828,6 +1335,10 @@ def main() -> int:
         "elite_min_success_rate": args.elite_min_success_rate,
         "max_qualified_p90_ms": args.max_qualified_p90_ms,
         "elite_max_p90_ms": args.elite_max_p90_ms,
+        "asia_fallback_min_success": args.asia_fallback_min_success,
+        "asia_emergency_min_success": args.asia_emergency_min_success,
+        "asia_emergency_max_p90_ms": args.asia_emergency_max_p90_ms,
+        "asia_emergency_max_count": args.asia_emergency_max_count,
         "minimum_success": args.min_success,
         "minimum_retain_ratio": args.min_retain_ratio,
         "previous_published_count": previous_published_count,
