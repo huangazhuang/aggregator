@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.cnb_mihomo_filter import load_optional_json, select_fastest
+from scripts.cnb_mihomo_filter import load_optional_json
 from scripts.pipeline_utils import (
     calculate_publish_floor,
     dump_clash_yaml,
@@ -21,6 +21,9 @@ class PublishFloorTests(unittest.TestCase):
     def test_scales_with_previous_publication(self) -> None:
         self.assertEqual(calculate_publish_floor(20, 240, 0.25), 60)
 
+    def test_dynamic_cnb_policy_can_shrink_from_150_back_to_80(self) -> None:
+        self.assertEqual(calculate_publish_floor(80, 150, 0.50), 80)
+
     def test_rejects_invalid_settings(self) -> None:
         with self.assertRaises(ValueError):
             calculate_publish_floor(0, 80, 0.25)
@@ -28,32 +31,6 @@ class PublishFloorTests(unittest.TestCase):
             calculate_publish_floor(20, -1, 0.25)
         with self.assertRaises(ValueError):
             calculate_publish_floor(20, 80, 1.1)
-
-    def test_zero_publish_cap_keeps_every_passing_proxy(self) -> None:
-        proxies = {"slow": {"name": "slow"}, "fast": {"name": "fast"}}
-        results = [
-            {"name": "slow", "ok": True, "delay_ms": 300},
-            {"name": "fast", "ok": True, "delay_ms": 30},
-            {"name": "failed", "ok": False, "delay_ms": None},
-        ]
-
-        selected, selected_results = select_fastest(proxies, results, 0)
-
-        self.assertEqual([item["name"] for item in selected], ["fast", "slow"])
-        self.assertEqual([item["name"] for item in selected_results], ["fast", "slow"])
-
-    def test_publish_cap_keeps_the_fastest_eighty_proxies(self) -> None:
-        proxies = {f"proxy-{index}": {"name": f"proxy-{index}"} for index in range(100)}
-        results = [
-            {"name": f"proxy-{index}", "ok": True, "delay_ms": 100 - index}
-            for index in range(100)
-        ]
-
-        selected, selected_results = select_fastest(proxies, results, 80)
-
-        expected = [f"proxy-{index}" for index in range(99, 19, -1)]
-        self.assertEqual([item["name"] for item in selected], expected)
-        self.assertEqual([item["name"] for item in selected_results], expected)
 
     def test_optional_status_loader_returns_json_mapping(self) -> None:
         with patch("scripts.cnb_mihomo_filter.read_source", return_value=b'{"run_at":"now"}'):

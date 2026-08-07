@@ -157,7 +157,7 @@ def liveness_fillter(proxies: list) -> tuple[list, list]:
             continue
 
         liveness = p.pop("liveness", True)
-        if liveness:
+        if liveness and not utils.is_preferred_asian_proxy(p):
             checks.append(p)
         else:
             p.pop("sub", "")

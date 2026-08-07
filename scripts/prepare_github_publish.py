@@ -12,6 +12,8 @@ from pathlib import Path
 
 import yaml
 
+from subscribe.asia import is_preferred_asian_proxy
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -32,9 +34,12 @@ def main() -> int:
     content = profile.read_bytes()
     try:
         data = yaml.safe_load(content) or {}
-        proxy_count = len(data.get("proxies", []))
+        proxies = [proxy for proxy in data.get("proxies", []) if isinstance(proxy, dict)]
+        proxy_count = len(proxies)
+        protected_asia_count = sum(is_preferred_asian_proxy(proxy) for proxy in proxies)
     except Exception:
         proxy_count = 0
+        protected_asia_count = 0
 
     run_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     status = {
@@ -42,6 +47,7 @@ def main() -> int:
         "mode": args.mode,
         "alive_check": args.alive_check,
         "proxy_count": proxy_count,
+        "protected_asia_count": protected_asia_count,
         "profile_url": args.profile_url,
         "profile_sha256": hashlib.sha256(content).hexdigest(),
         "main_sha": args.main_sha or os.environ.get("GITHUB_SHA", ""),

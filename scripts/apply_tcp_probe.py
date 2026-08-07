@@ -17,6 +17,7 @@ import yaml
 sys.path.insert(0, os.path.abspath("subscribe"))
 
 import clash  # noqa: E402
+import utils  # noqa: E402
 
 
 CACHE_FILE = Path("data/cn-fc-check.json")
@@ -37,6 +38,15 @@ def endpoint_key(proxy: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         return ""
     return f"{server}:{port}" if server and 0 < port <= 65535 else ""
+
+
+def should_drop_proxy(proxy: dict[str, Any], blocked: set[str]) -> bool:
+    """Return whether a cached TCP failure may remove this proxy."""
+
+    if utils.is_preferred_asian_proxy(proxy) or not should_probe_proxy(proxy):
+        return False
+    key = endpoint_key(proxy)
+    return bool(key and key in blocked)
 
 
 def load_cache(now: float) -> dict[str, dict[str, Any]]:
@@ -65,7 +75,7 @@ def main() -> int:
     cache = load_cache(now)
     endpoints: dict[str, tuple[str, int]] = {}
     for proxy in proxies:
-        if not should_probe_proxy(proxy):
+        if utils.is_preferred_asian_proxy(proxy) or not should_probe_proxy(proxy):
             continue
         key = endpoint_key(proxy)
         if key:
@@ -109,16 +119,20 @@ def main() -> int:
     blocked = {key for key, value in cache.items() if not value.get("ok")}
     kept: list[dict[str, Any]] = []
     dropped = 0
+    protected = 0
     for proxy in proxies:
-        key = endpoint_key(proxy)
-        if should_probe_proxy(proxy) and key and key in blocked:
+        if utils.is_preferred_asian_proxy(proxy):
+            protected += 1
+            kept.append(proxy)
+            continue
+        if should_drop_proxy(proxy, blocked):
             dropped += 1
             continue
         kept.append(proxy)
 
     line = (
         f"cn-check: dropped {dropped} TCP-unreachable, kept {len(kept)}/{len(proxies)} "
-        f"(blocked cache {len(blocked)})"
+        f"(protected Asia {protected}, blocked cache {len(blocked)})"
     )
     print(line)
     summary = os.environ.get("GITHUB_STEP_SUMMARY", "")

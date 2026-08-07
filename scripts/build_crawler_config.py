@@ -9,6 +9,8 @@ import re
 import urllib.request
 from pathlib import Path
 
+from subscribe.asia import preferred_asia_include_pattern
+
 
 COMMUNITY_SUBS = [
     "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
@@ -37,6 +39,77 @@ BASE_CRAWL_CONFIG = {
     "liveness": True,
     "rate": 20.0,
 }
+PREFERRED_ASIA_INCLUDE = preferred_asia_include_pattern()
+ASIA_SOURCE_SPECS = [
+    {
+        "name": "asia-au1rxx-hk",
+        "sub": [
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-HK.yaml"
+        ],
+        "rename": "^#@&#@香港 ",
+        "include": "",
+    },
+    {
+        "name": "asia-au1rxx-tw",
+        "sub": [
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-TW.yaml"
+        ],
+        "rename": "^#@&#@台湾 ",
+        "include": "",
+    },
+    {
+        "name": "asia-au1rxx-sg",
+        "sub": [
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-SG.yaml"
+        ],
+        "rename": "^#@&#@新加坡 ",
+        "include": "",
+    },
+    {
+        "name": "asia-au1rxx-jp",
+        "sub": [
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-JP.yaml"
+        ],
+        "rename": "^#@&#@日本 ",
+        "include": "",
+    },
+    {
+        "name": "asia-au1rxx-kr",
+        "sub": [
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-KR.yaml"
+        ],
+        "rename": "^#@&#@韩国 ",
+        "include": "",
+    },
+    {
+        "name": "asia-multi-proxy-tested",
+        "sub": [
+            "https://raw.githubusercontent.com/4n0nymou3/multi-proxy-config-fetcher/main/configs/clash_configs_tested.yaml"
+        ],
+        "rename": "^#@&#@ASIA-KEEP ",
+        "include": PREFERRED_ASIA_INCLUDE,
+    },
+    {
+        "name": "asia-ovmvo-freesub",
+        "sub": ["https://raw.githubusercontent.com/ovmvo/FreeSub/main/sub/permanent/mihomo.yaml"],
+        "rename": "^#@&#@ASIA-KEEP ",
+        "include": PREFERRED_ASIA_INCLUDE,
+    },
+    {
+        "name": "asia-daily-free-vpn",
+        "sub": [
+            "https://raw.githubusercontent.com/cbusifabcap/daily_free_vpn/main/sub/ClashMeta.yml"
+        ],
+        "rename": "^#@&#@ASIA-KEEP ",
+        "include": PREFERRED_ASIA_INCLUDE,
+    },
+    {
+        "name": "asia-kooker-free-subs",
+        "sub": ["https://raw.githubusercontent.com/kooker/FreeSubsCheck/main/all.yaml"],
+        "rename": "^#@&#@ASIA-KEEP ",
+        "include": PREFERRED_ASIA_INCLUDE,
+    },
+]
 
 
 def add_rotating_clashfree_feed(subscriptions: list[str]) -> None:
@@ -88,6 +161,24 @@ def twitter_user() -> dict:
     }
 
 
+def asia_domains() -> list[dict]:
+    """Build Asia-only source tasks whose nodes bypass later liveness filters."""
+
+    return [
+        {
+            **source,
+            "enable": True,
+            "exclude": "",
+            "push_to": ["crawler"],
+            "ignorede": True,
+            "liveness": False,
+            "rate": 20.0,
+            "secure": False,
+        }
+        for source in ASIA_SOURCE_SPECS
+    ]
+
+
 def build_config() -> dict:
     subscriptions = list(COMMUNITY_SUBS)
     add_rotating_clashfree_feed(subscriptions)
@@ -127,7 +218,8 @@ def build_config() -> dict:
                 "rate": 20.0,
                 "secure": False,
             }
-        ],
+        ]
+        + asia_domains(),
         "crawl": {
             "enable": True,
             "threshold": 10,

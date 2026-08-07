@@ -30,6 +30,11 @@ from logger import logger
 from tqdm import tqdm
 from urlvalidator import isurl
 
+try:
+    from .asia import is_preferred_asian_proxy
+except ImportError:
+    from asia import is_preferred_asian_proxy
+
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE

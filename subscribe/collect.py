@@ -420,7 +420,17 @@ def aggregate(args: argparse.Namespace) -> None:
         except:
             logger.error(f"terminate clash process error")
 
-        nodes = [proxies[i] for i in range(len(proxies)) if masks[i]]
+        protected = [utils.is_preferred_asian_proxy(proxy) for proxy in proxies]
+        preserved = sum(1 for index, keep in enumerate(protected) if keep and not masks[index])
+        nodes = [
+            proxies[index]
+            for index in range(len(proxies))
+            if masks[index] or protected[index]
+        ]
+        if preserved:
+            logger.info(
+                f"preserved {preserved} HK/TW/SG/JP/KR proxies that failed liveness checks"
+            )
         if len(nodes) <= 0:
             logger.error(f"cannot fetch any proxy")
             sys.exit(0)

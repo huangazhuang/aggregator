@@ -41,12 +41,19 @@ def main() -> int:
         f"主分支 SHA：`{status.get('main_sha') or '未知'}`",
         f"CNB 公网出口：{status.get('runner_public_ip') or '查询失败'}"
         + (f"（{region}）" if region else ""),
+        f"两阶段测速：全量 {status.get('preliminary_rounds', 0)} 轮，"
+        f"{status.get('candidate_count', 0)} 个候选补足到 {status.get('total_rounds', 0)} 轮",
+        f"稳定门槛：成功率至少 {float(status.get('minimum_success_rate', 0)):.0%}，"
+        f"P90 不高于 {status.get('max_qualified_p90_ms', 0)} ms",
+        f"发布构成：亚洲 {status.get('published_asia_count', 0)} 个，"
+        f"非亚洲 {status.get('published_non_asia_count', 0)} 个",
     ]
     (public / "README.md").write_text(
-        "# 中国大陆实测 Clash 订阅\n\n"
+        "# 中国大陆 20 轮稳定性实测 Clash 订阅\n\n"
         f"订阅地址：{args.profile_url}\n\n"
-        f"本次从 {status['source_count']} 个节点中实测通过 {status['passed_count']} 个，"
-        f"发布 {status['published_count']} 个。\n\n"
+        f"本次从 {status['source_count']} 个节点中选出 {status.get('candidate_count', 0)} 个复测候选，"
+        f"其中 {status.get('qualified_count', 0)} 个达到稳定门槛，"
+        f"最终动态发布 {status['published_count']} 个。\n\n"
         + "\n".join(f"- {line}" for line in metadata_lines)
         + "\n",
         encoding="utf-8",

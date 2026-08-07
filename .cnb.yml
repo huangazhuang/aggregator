@@ -44,14 +44,29 @@ main:
         SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
         SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
         TARGET_URL: https://www.gstatic.com/generate_204
+        EXPECTED_STATUS: "204"
         OUTPUT_BRANCH: clash-cn-output
-        MAX_NODES: "80"
-        MIN_SUCCESS: "20"
-        MIN_RETAIN_RATIO: "0.25"
+        PRELIMINARY_ROUNDS: "3"
+        TOTAL_ROUNDS: "20"
+        ROUND_GAP_SECONDS: "0.75"
+        CANDIDATE_LIMIT: "360"
+        ASIA_CANDIDATE_TARGET: "300"
+        NON_ASIA_CANDIDATE_TARGET: "60"
+        BASE_TARGET: "80"
+        MAX_NODES: "150"
+        NON_ASIA_MIN: "10"
+        NON_ASIA_MAX: "20"
+        MIN_SUCCESS_RATE: "0.70"
+        BASE_PREFERRED_SUCCESS_RATE: "0.80"
+        ELITE_MIN_SUCCESS_RATE: "0.90"
+        MAX_QUALIFIED_P90_MS: "2800"
+        ELITE_MAX_P90_MS: "2000"
+        MIN_SUCCESS: "80"
+        MIN_RETAIN_RATIO: "0.50"
         TIMEOUT_MS: "3000"
       stages:
         - name: Test proxies from the CNB runner
-          timeout: 20m
+          timeout: 35m
           script: |
             set -eu
             python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
@@ -70,10 +85,24 @@ main:
               --work-dir .cnb-runtime \
               --output-dir public-cn \
               --target-url "${TARGET_URL}" \
+              --expected-status "${EXPECTED_STATUS}" \
               --timeout-ms "${TIMEOUT_MS}" \
-              --attempts 2 \
+              --preliminary-rounds "${PRELIMINARY_ROUNDS}" \
+              --total-rounds "${TOTAL_ROUNDS}" \
+              --round-gap "${ROUND_GAP_SECONDS}" \
               --workers 48 \
+              --candidate-limit "${CANDIDATE_LIMIT}" \
+              --asia-candidate-target "${ASIA_CANDIDATE_TARGET}" \
+              --non-asia-candidate-target "${NON_ASIA_CANDIDATE_TARGET}" \
+              --base-target "${BASE_TARGET}" \
               --max-nodes "${MAX_NODES}" \
+              --non-asia-min "${NON_ASIA_MIN}" \
+              --non-asia-max "${NON_ASIA_MAX}" \
+              --min-success-rate "${MIN_SUCCESS_RATE}" \
+              --base-preferred-success-rate "${BASE_PREFERRED_SUCCESS_RATE}" \
+              --elite-min-success-rate "${ELITE_MIN_SUCCESS_RATE}" \
+              --max-qualified-p90-ms "${MAX_QUALIFIED_P90_MS}" \
+              --elite-max-p90-ms "${ELITE_MAX_P90_MS}" \
               --min-success "${MIN_SUCCESS}" \
               --min-retain-ratio "${MIN_RETAIN_RATIO}"
 

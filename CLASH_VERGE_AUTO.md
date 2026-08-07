@@ -18,7 +18,7 @@ Clash Verge 中进入 `Profiles`，选择从 URL 导入，粘贴上面的地址�
 https://cnb.cool/ASD12321_446/aggregator/-/git/raw/clash-cn-output/clash.yaml
 ```
 
-该订阅会按实测延迟发布通过节点中最快的前 80 个，并使用动态门槛防止少量异常结果覆盖上一版；详细说明见 [`CNB_SETUP.md`](CNB_SETUP.md)。
+该订阅会先对全部节点测 3 轮，再让约 360 个候选补足到 20 轮，按成功率、P90、中位延迟和抖动筛选。基础发布目标为 80 个，其中亚洲通常至少 60 个；只有更稳更快的节点才会继续扩容，最终动态发布 80–150 个。非亚洲有足够合格节点时优先保留 10 个，最多 20 个。详细说明见 [`CNB_SETUP.md`](CNB_SETUP.md)。
 
 ## 推荐配置
 
@@ -69,7 +69,9 @@ https://cnb.cool/ASD12321_446/aggregator/-/git/raw/clash-cn-output/clash.yaml
 - `collect.py`：从原项目所有机场来源收集候选站点，自动注册、购买免费套餐并提取订阅。
 - `process.py`：同时启用爬虫聚合，默认包含 GitHub、Google、DuckDuckGo、Yahoo、Twitter、Telegram 和 GitHub forks 等公开来源。
 
-两部分结果会合并到同一个 `clash.yaml`。`alive_check=true` 是默认值，会在 GitHub Actions runner 上用 Mihomo/Clash 测活。最终发布前还会强制检查 GMGN、Google 和 YouTube，只有同时通过三个目标的节点才会进入严格版。
+两部分结果会合并到同一个 `clash.yaml`。`alive_check=true` 是默认值，会在 GitHub Actions runner 上用 Mihomo/Clash 测活。最终发布前还会强制检查 GMGN、Google 和 YouTube；普通节点只有同时通过三个目标才会进入严格版，香港、台湾、新加坡、日本、韩国节点跳过连通性筛选并始终保留。格式无效、Mihomo 无法解析的配置仍会丢弃，否则会导致整份订阅无法加载。
+
+亚洲节点还会从 9 个专用任务补充：`Au1rxx/free-vpn-subscriptions` 的香港、台湾、新加坡、日本、韩国分类源，以及 `multi-proxy-config-fetcher`、`ovmvo/FreeSub`、`daily_free_vpn`、`FreeSubsCheck` 中名称能识别出目标地区的节点。原有全球来源仍然保留，因此输出不是“只有亚洲节点”。
 
 严格筛选采用失败关闭策略：任一目标检测异常，或最终通过数少于 20，或少于上一版的 25% 时，本次任务停止发布，`clash-verge-output` 保持上一版。可通过仓库变量 `STRICT_MIN_NODES` 和 `STRICT_MIN_RETAIN_RATIO` 调整门槛。
 

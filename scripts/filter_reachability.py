@@ -57,6 +57,30 @@ def previous_proxy_count(path: Path) -> int:
         return 0
 
 
+def select_reachability_passes(
+    checks: list[dict[str, Any]],
+    tested: list[dict[str, Any]],
+    valid_masks: list[list[bool]],
+) -> list[dict[str, Any]]:
+    """Keep protected Asia plus ordinary proxies that passed every target."""
+
+    tested_passed_names = (
+        {
+            str(tested[index].get("name", ""))
+            for index in range(len(tested))
+            if all(mask[index] for mask in valid_masks)
+        }
+        if valid_masks
+        else set()
+    )
+    return [
+        proxy
+        for proxy in checks
+        if utils.is_preferred_asian_proxy(proxy)
+        or str(proxy.get("name", "")) in tested_passed_names
+    ]
+
+
 def main() -> int:
     targets = [
         (os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"), 200),
@@ -91,6 +115,9 @@ def main() -> int:
     if not checks:
         fail_closed("Mihomo test configuration contains no valid proxies")
 
+    protected = [utils.is_preferred_asian_proxy(proxy) for proxy in checks]
+    tested = [proxy for index, proxy in enumerate(checks) if not protected[index]]
+
     def reachable(proxy: dict[str, Any], target: str, expected: int) -> bool:
         name = urllib.parse.quote(str(proxy.get("name", "")), safe="")
         quoted = urllib.parse.quote(target)
@@ -105,42 +132,50 @@ def main() -> int:
             return False
 
     process: subprocess.Popen[Any] | None = None
-    lines: list[str] = []
+    lines: list[str] = [
+        f"protected Asia skipped from network tests: {sum(protected)}/{len(checks)}"
+    ]
     valid_masks: list[list[bool]] = []
-    try:
-        process = subprocess.Popen(
-            [str(binary), "-d", str(workspace), "-f", str(workspace / "reach-check.yaml")]
-        )
-        time.sleep(8)
-        if process.poll() is not None:
-            fail_closed(f"Mihomo exited before reachability checks (code {process.returncode})", lines)
-
-        for target, expected in targets:
-            masks = utils.multi_thread_run(
-                func=reachable,
-                tasks=[[proxy, target, expected] for proxy in checks],
-                num_threads=128,
-                show_progress=False,
+    if tested:
+        try:
+            process = subprocess.Popen(
+                [str(binary), "-d", str(workspace), "-f", str(workspace / "reach-check.yaml")]
             )
-            if not isinstance(masks, list) or len(masks) != len(checks):
-                fail_closed(f"incomplete reachability results for {target}", lines)
-            count = sum(1 for mask in masks if mask)
-            lines.append(f"{target}: {count}/{len(checks)} proxies reachable")
-            print(lines[-1])
-            if count <= 0:
-                fail_closed(f"no proxy passed {target}; treating the target check as unavailable", lines)
-            valid_masks.append(masks)
-    finally:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            time.sleep(8)
+            if process.poll() is not None:
+                fail_closed(f"Mihomo exited before reachability checks (code {process.returncode})", lines)
 
-    passed = [checks[index] for index in range(len(checks)) if all(mask[index] for mask in valid_masks)]
-    lines.append(f"kept {len(passed)}/{len(checks)} proxies")
+            for target, expected in targets:
+                masks = utils.multi_thread_run(
+                    func=reachable,
+                    tasks=[[proxy, target, expected] for proxy in tested],
+                    num_threads=128,
+                    show_progress=False,
+                )
+                if not isinstance(masks, list) or len(masks) != len(tested):
+                    fail_closed(f"incomplete reachability results for {target}", lines)
+                count = sum(1 for mask in masks if mask)
+                lines.append(f"{target}: {count}/{len(tested)} tested proxies reachable")
+                print(lines[-1])
+                if count <= 0:
+                    fail_closed(f"no proxy passed {target}; treating the target check as unavailable", lines)
+                valid_masks.append(masks)
+        finally:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+    else:
+        lines.append("all valid proxies are protected Asia; network tests skipped")
+        print(lines[-1])
+
+    passed = select_reachability_passes(checks, tested, valid_masks)
+    lines.append(
+        f"kept {len(passed)}/{len(checks)} proxies (protected Asia {sum(protected)})"
+    )
     print(f"reachability filter: kept {len(passed)}/{len(checks)} proxies")
 
     minimum = integer_setting("STRICT_MIN_NODES", 20)
