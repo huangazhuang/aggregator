@@ -57,9 +57,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--total-rounds", type=int, default=20)
     parser.add_argument("--round-gap", type=float, default=0.75)
     parser.add_argument("--workers", type=int, default=48)
-    parser.add_argument("--candidate-limit", type=int, default=360)
-    parser.add_argument("--asia-candidate-target", type=int, default=300)
-    parser.add_argument("--non-asia-candidate-target", type=int, default=60)
     parser.add_argument("--base-target", type=int, default=80)
     parser.add_argument("--max-nodes", type=int, default=150)
     parser.add_argument("--non-asia-min", type=int, default=10)
@@ -533,7 +530,6 @@ def main() -> int:
         ("preliminary-rounds", args.preliminary_rounds),
         ("total-rounds", args.total_rounds),
         ("workers", args.workers),
-        ("candidate-limit", args.candidate_limit),
         ("base-target", args.base_target),
         ("max-nodes", args.max_nodes),
         ("min-success", args.min_success),
@@ -542,8 +538,6 @@ def main() -> int:
             raise RuntimeError(f"--{label} must be greater than zero")
     if args.preliminary_rounds >= args.total_rounds:
         raise RuntimeError("--preliminary-rounds must be smaller than --total-rounds")
-    if args.candidate_limit < args.max_nodes:
-        raise RuntimeError("--candidate-limit must be at least --max-nodes")
     if args.base_target > args.max_nodes:
         raise RuntimeError("--base-target cannot exceed --max-nodes")
     if args.min_success > args.max_nodes:
@@ -552,10 +546,6 @@ def main() -> int:
         raise RuntimeError("non-Asia limits must satisfy 0 <= min <= max <= max-nodes")
     if args.non_asia_min > args.base_target:
         raise RuntimeError("--non-asia-min cannot exceed --base-target")
-    if min(args.asia_candidate_target, args.non_asia_candidate_target) < 0:
-        raise RuntimeError("candidate region targets cannot be negative")
-    if args.asia_candidate_target + args.non_asia_candidate_target > args.candidate_limit:
-        raise RuntimeError("candidate region targets cannot exceed --candidate-limit in total")
     if args.round_gap < 0:
         raise RuntimeError("--round-gap cannot be negative")
     if not 0.0 <= args.min_retain_ratio <= 1.0:
@@ -621,7 +611,11 @@ def main() -> int:
     runtime_config.write_text(runtime_yaml, encoding="utf-8")
 
     records = {str(proxy["name"]): new_probe_record(proxy) for proxy in proxies}
-    candidate_names: list[str] = []
+    # Every source proxy gets the same total number of independent samples.
+    # The earlier staged candidate cap could discard an Asian node after a
+    # transient timeout during the first three rounds, before it had a chance
+    # to recover in the remaining rounds.
+    candidate_names = [str(proxy["name"]) for proxy in proxies]
     print(
         f"Loaded {len(proxies)} proxies; starting {args.preliminary_rounds}-round preliminary checks.",
         flush=True,
@@ -647,20 +641,11 @@ def main() -> int:
                 "preliminary",
                 process,
             )
-            preliminary = [summarize_probe_record(record) for record in records.values()]
-            candidate_names = select_preliminary_candidates(
-                preliminary,
-                args.candidate_limit,
-                args.asia_candidate_target,
-                args.non_asia_candidate_target,
-            )
             candidate_set = set(candidate_names)
-            candidates = [
-                proxy for proxy in proxies if str(proxy.get("name", "")) in candidate_set
-            ]
+            candidates = proxies
             asia_candidates = sum(is_preferred_asian_proxy(proxy) for proxy in candidates)
             print(
-                f"Advanced {len(candidates)} candidates to full testing "
+                f"Continuing all {len(candidates)} proxies to full testing "
                 f"(Asia {asia_candidates}, non-Asia {len(candidates) - asia_candidates}).",
                 flush=True,
             )
@@ -697,7 +682,7 @@ def main() -> int:
     ]
     if incomplete:
         raise RuntimeError(
-            f"{len(incomplete)} candidates did not complete all {args.total_rounds} rounds"
+            f"{len(incomplete)} proxies did not complete all {args.total_rounds} rounds"
         )
 
     selected_results, qualified_results = select_stable_results(
@@ -797,7 +782,7 @@ def main() -> int:
         "source_run_at": str(source_status.get("run_at") or ""),
         "source_sha256": source_sha256,
         "main_sha": args.main_sha,
-        "selection_schema_version": 2,
+        "selection_schema_version": 3,
         "target_url": args.target_url,
         "expected_status": args.expected_status,
         "timeout_ms": args.timeout_ms,
@@ -835,9 +820,7 @@ def main() -> int:
         ),
         "base_target": args.base_target,
         "publish_limit": args.max_nodes,
-        "candidate_limit": args.candidate_limit,
-        "asia_candidate_target": args.asia_candidate_target,
-        "non_asia_candidate_target": args.non_asia_candidate_target,
+        "full_scan": True,
         "non_asia_min": args.non_asia_min,
         "non_asia_max": args.non_asia_max,
         "minimum_success_rate": args.min_success_rate,

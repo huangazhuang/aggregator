@@ -49,9 +49,6 @@ main:
         PRELIMINARY_ROUNDS: "3"
         TOTAL_ROUNDS: "20"
         ROUND_GAP_SECONDS: "0.75"
-        CANDIDATE_LIMIT: "360"
-        ASIA_CANDIDATE_TARGET: "300"
-        NON_ASIA_CANDIDATE_TARGET: "60"
         BASE_TARGET: "80"
         MAX_NODES: "150"
         NON_ASIA_MIN: "10"
@@ -66,7 +63,7 @@ main:
         TIMEOUT_MS: "3000"
       stages:
         - name: Test proxies from the CNB runner
-          timeout: 35m
+          timeout: 50m
           script: |
             set -eu
             python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
@@ -91,9 +88,6 @@ main:
               --total-rounds "${TOTAL_ROUNDS}" \
               --round-gap "${ROUND_GAP_SECONDS}" \
               --workers 48 \
-              --candidate-limit "${CANDIDATE_LIMIT}" \
-              --asia-candidate-target "${ASIA_CANDIDATE_TARGET}" \
-              --non-asia-candidate-target "${NON_ASIA_CANDIDATE_TARGET}" \
               --base-target "${BASE_TARGET}" \
               --max-nodes "${MAX_NODES}" \
               --non-asia-min "${NON_ASIA_MIN}" \

@@ -137,3 +137,4 @@ config.local.json
 
 # local dev workspace
 docs/
+clash/local-check.yaml
