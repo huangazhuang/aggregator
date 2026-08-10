@@ -104,7 +104,7 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Optional cap for last-resort Asia nodes; zero means only as many as needed",
     )
-    parser.add_argument("--min-success", type=int, default=80)
+    parser.add_argument("--min-success", type=int, default=50)
     parser.add_argument("--min-retain-ratio", type=float, default=0.50)
     return parser.parse_args()
 
@@ -151,6 +151,28 @@ def load_optional_json(source: str) -> dict[str, Any]:
     except Exception as exc:
         print(f"WARNING: cannot load optional metadata from {source}: {exc}", flush=True)
         return {}
+
+
+def calculate_cnb_publish_floor(
+    minimum: int,
+    previous_published_count: int,
+    base_target: int,
+    retain_ratio: float,
+) -> tuple[int, int]:
+    """Return the fail-closed floor and its non-elite previous baseline.
+
+    ``base_target`` remains the desired selection size, not a hard publication
+    requirement. Opportunistic elite expansion above that target must also not
+    make a later healthy, smaller base set impossible to publish.
+    """
+
+    if previous_published_count < 0:
+        raise ValueError("previous_published_count cannot be negative")
+    if base_target < 1:
+        raise ValueError("base_target must be at least 1")
+    previous_baseline = min(previous_published_count, base_target)
+    required_count = calculate_publish_floor(minimum, previous_baseline, retain_ratio)
+    return required_count, previous_baseline
 
 
 def load_source_snapshot(
@@ -1131,14 +1153,11 @@ def main() -> int:
         previous_published_count = max(int(previous_status.get("published_count", 0)), 0)
     except (TypeError, ValueError):
         previous_published_count = 0
-    previous_baseline = min(previous_published_count, args.max_nodes)
-    required_count = max(
+    required_count, previous_baseline = calculate_cnb_publish_floor(
+        args.min_success,
+        previous_published_count,
         args.base_target,
-        calculate_publish_floor(
-            args.min_success,
-            previous_baseline,
-            args.min_retain_ratio,
-        ),
+        args.min_retain_ratio,
     )
     incomplete = [
         str(item.get("name", ""))

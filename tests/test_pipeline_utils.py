@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.cnb_mihomo_filter import load_optional_json
+from scripts.cnb_mihomo_filter import calculate_cnb_publish_floor, load_optional_json
 from scripts.pipeline_utils import (
     calculate_publish_floor,
     dump_clash_yaml,
@@ -23,6 +23,10 @@ class PublishFloorTests(unittest.TestCase):
 
     def test_dynamic_cnb_policy_can_shrink_from_150_back_to_80(self) -> None:
         self.assertEqual(calculate_publish_floor(80, 150, 0.50), 80)
+
+    def test_cnb_floor_is_lower_than_target_and_ignores_elite_expansion(self) -> None:
+        self.assertEqual(calculate_cnb_publish_floor(50, 80, 80, 0.50), (50, 80))
+        self.assertEqual(calculate_cnb_publish_floor(50, 150, 80, 0.50), (50, 80))
 
     def test_rejects_invalid_settings(self) -> None:
         with self.assertRaises(ValueError):

@@ -238,6 +238,20 @@ class PolicyReplayTests(unittest.TestCase):
             },
         )
 
+    def test_publish_floor_can_be_below_an_unreached_base_target(self) -> None:
+        report = replay_policy(
+            self.bundle,
+            {
+                "base_target": 6,
+                "max_nodes": 6,
+                "required_count": 4,
+            },
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["selected_count"], 5)
+        self.assertLess(report["selected_count"], report["policy"]["base_target"])
+
     def test_latest_failure_shape_replays_to_seven_asia_plus_twenty_non_asia(self) -> None:
         summaries = [
             probe_summary(f"asia-{index}", asia=True, successes=4)

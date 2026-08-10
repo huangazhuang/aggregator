@@ -45,7 +45,7 @@ main:
         image: python:3.12-bookworm
       # Prevent a scheduled probe and a manual/web-triggered probe from
       # running at the same time and force-pushing the same output branch.
-      # The 2-hour lease/wait window is longer than the current ~23-minute
+      # The 2-hour lease/wait window is longer than the current ~30-40-minute
       # full scan and leaves room for publishing diagnostics.
       lock:
         key: aggregator-mainland-probe
@@ -79,7 +79,7 @@ main:
         ASIA_EMERGENCY_MIN_SUCCESS: "10"
         ASIA_EMERGENCY_MAX_P90_MS: "2800"
         ASIA_EMERGENCY_MAX_COUNT: "0"
-        MIN_SUCCESS: "80"
+        MIN_SUCCESS: "50"
         MIN_RETAIN_RATIO: "0.50"
         TIMEOUT_MS: "3000"
       stages:
