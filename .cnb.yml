@@ -312,6 +312,162 @@ main:
               fi
             fi
 
+  web_trigger_gmgn_shadow:
+    - &gmgn_shadow
+      name: Mainland China GMGN shadow probe
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 4
+      docker:
+        image: python:3.12-bookworm
+      lock:
+        key: aggregator-gmgn-shadow
+        expires: 10800
+        wait: true
+        timeout: 10800
+        cancel-in-progress: false
+      env:
+        SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
+        SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
+        # GitHub refreshes roughly every 6 hours and a collection run may take
+        # several hours. Ten hours rejects genuinely stale output without
+        # creating a guaranteed dead window before the next refresh finishes.
+        SOURCE_MAX_AGE_SECONDS: "36000"
+        SOURCE_FRESHNESS_WAIT_SECONDS: "1200"
+        SOURCE_FRESHNESS_POLL_SECONDS: "60"
+        SHADOW_BRANCH: clash-cn-gmgn-shadow
+        SHADOW_TARGET_URL: https://gmgn.ai/
+        SHADOW_EXPECTED_STATUS: "200"
+        SHADOW_REQUEST_TIMEOUT_MS: "3000"
+        SHADOW_QUALIFIED_DELAY_MS: "1000"
+        SHADOW_TOTAL_ROUNDS: "20"
+        SHADOW_ROUND_GAP_SECONDS: "0.75"
+        SHADOW_WORKERS_PER_SHARD: "16"
+        # Abort before launching four 120-minute jobs if the current source is
+        # too large for this single-runner layout in an all-timeout scenario.
+        SHADOW_MAX_ESTIMATED_SECONDS: "6600"
+      stages:
+        - name: Prepare the pinned GMGN shadow snapshot
+          timeout: 30m
+          script: |
+            set -eu
+            python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
+            chmod +x clash/clash-linux-amd
+            mkdir -p .cnb-runtime/gmgn-shadow public-cn-shadow/fragments public-cn-shadow/final
+            main_sha="$(git rev-parse HEAD)"
+            python3 -m scripts.cnb_gmgn_shadow prepare \
+              --source "${SOURCE_PROFILE_URL}" \
+              --source-status "${SOURCE_STATUS_URL}" \
+              --source-max-age-seconds "${SOURCE_MAX_AGE_SECONDS}" \
+              --source-freshness-wait-seconds "${SOURCE_FRESHNESS_WAIT_SECONDS}" \
+              --source-freshness-poll-seconds "${SOURCE_FRESHNESS_POLL_SECONDS}" \
+              --main-sha "${main_sha}" \
+              --output-dir .cnb-runtime/gmgn-shadow/prepared \
+              --target-url "${SHADOW_TARGET_URL}" \
+              --expected-status "${SHADOW_EXPECTED_STATUS}" \
+              --request-timeout-ms "${SHADOW_REQUEST_TIMEOUT_MS}" \
+              --qualified-delay-ms "${SHADOW_QUALIFIED_DELAY_MS}" \
+              --total-rounds "${SHADOW_TOTAL_ROUNDS}" \
+              --round-gap "${SHADOW_ROUND_GAP_SECONDS}" \
+              --shard-count 4 \
+              --workers-per-shard "${SHADOW_WORKERS_PER_SHARD}" \
+              --max-estimated-probe-seconds "${SHADOW_MAX_ESTIMATED_SECONDS}"
+
+        - name: Probe four GMGN shards in parallel
+          jobs:
+            shard-0:
+              timeout: 120m
+              script: |
+                set -eu
+                python3 -m scripts.cnb_gmgn_shadow probe \
+                  --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
+                  --shard-index 0 \
+                  --mihomo clash/clash-linux-amd \
+                  --work-dir .cnb-runtime/gmgn-shadow/run-0 \
+                  --output public-cn-shadow/fragments/shard-0.json \
+                  --controller-port 19090 \
+                  --mixed-port 17890
+            shard-1:
+              timeout: 120m
+              script: |
+                set -eu
+                python3 -m scripts.cnb_gmgn_shadow probe \
+                  --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
+                  --shard-index 1 \
+                  --mihomo clash/clash-linux-amd \
+                  --work-dir .cnb-runtime/gmgn-shadow/run-1 \
+                  --output public-cn-shadow/fragments/shard-1.json \
+                  --controller-port 19091 \
+                  --mixed-port 17891
+            shard-2:
+              timeout: 120m
+              script: |
+                set -eu
+                python3 -m scripts.cnb_gmgn_shadow probe \
+                  --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
+                  --shard-index 2 \
+                  --mihomo clash/clash-linux-amd \
+                  --work-dir .cnb-runtime/gmgn-shadow/run-2 \
+                  --output public-cn-shadow/fragments/shard-2.json \
+                  --controller-port 19092 \
+                  --mixed-port 17892
+            shard-3:
+              timeout: 120m
+              script: |
+                set -eu
+                python3 -m scripts.cnb_gmgn_shadow probe \
+                  --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
+                  --shard-index 3 \
+                  --mihomo clash/clash-linux-amd \
+                  --work-dir .cnb-runtime/gmgn-shadow/run-3 \
+                  --output public-cn-shadow/fragments/shard-3.json \
+                  --controller-port 19093 \
+                  --mixed-port 17893
+
+        - name: Merge complete redacted GMGN results
+          timeout: 5m
+          script: |
+            set -eu
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            results_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${SHADOW_BRANCH}/gmgn-shadow-results.json"
+            python3 -m scripts.cnb_gmgn_shadow merge \
+              --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
+              --fragments \
+                public-cn-shadow/fragments/shard-0.json \
+                public-cn-shadow/fragments/shard-1.json \
+                public-cn-shadow/fragments/shard-2.json \
+                public-cn-shadow/fragments/shard-3.json \
+              --output-dir public-cn-shadow/final \
+              --results-url "${results_url}"
+            python3 -m json.tool public-cn-shadow/final/status.json
+
+        - name: Publish the isolated GMGN shadow report
+          timeout: 5m
+          script: |
+            set -eu
+            test -n "${CNB_TOKEN:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            mkdir -p .cnb-runtime/gmgn-shadow/publish
+            cp public-cn-shadow/final/README.md .cnb-runtime/gmgn-shadow/publish/README.md
+            cp public-cn-shadow/final/status.json .cnb-runtime/gmgn-shadow/publish/status.json
+            cp public-cn-shadow/final/gmgn-shadow-results.json \
+              .cnb-runtime/gmgn-shadow/publish/gmgn-shadow-results.json
+            cd .cnb-runtime/gmgn-shadow/publish
+            git init
+            git checkout -b "${SHADOW_BRANCH}"
+            git config user.name "cnb-probe[bot]"
+            git config user.email "cnb-probe@users.noreply.cnb.cool"
+            git add README.md status.json gmgn-shadow-results.json
+            git commit -m "Record redacted GMGN shadow probe"
+            GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${SHADOW_BRANCH}"
+            printf 'GMGN shadow report: %s\n' \
+              "${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${SHADOW_BRANCH}/status.json"
+
   web_trigger_china_probe:
     - *china_probe
 
@@ -321,3 +477,7 @@ main:
 "cnb-probe-*":
   tag_push:
     - *china_probe
+
+"cnb-gmgn-shadow-*":
+  tag_push:
+    - *gmgn_shadow

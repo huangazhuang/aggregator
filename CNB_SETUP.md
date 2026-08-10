@@ -26,7 +26,7 @@ https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-output/clash.yaml
 1. 在 CNB 创建一个具有当前仓库 Git 写入权限的新访问令牌。
 2. 打开 GitHub 仓库的 `Settings > Secrets and variables > Actions`。
 3. 新建 Repository secret，名称填写 `CNB_MIRROR_TOKEN`，值填写刚创建的 CNB 令牌。
-4. 再次向 GitHub `main` 推送提交，或在 GitHub Actions 中手动运行 `Sync GitHub main to CNB`。手动运行时把 `trigger_probe` 设为 `true`，会先确认 CNB `main` 已同步到同一提交，再向 CNB 单独推送一个唯一的 `cnb-probe-*` 标签，由受信任的 `tag_push` 事件启动同一套大陆探测。标签只存在于 CNB、用于追踪手动运行，不会写入 GitHub；令牌只从 GitHub Secret 注入，不写入日志。
+4. 再次向 GitHub `main` 推送提交，或在 GitHub Actions 中手动运行 `Sync GitHub main to CNB`。手动运行时必须在分支选择器中选 `main`；工作流也会硬性拒绝其他分支。把 `trigger_probe` 设为 `true`，会先确认 CNB `main` 已同步到同一提交，再向 CNB 单独推送一个唯一的 `cnb-probe-*` 标签，由受信任的 `tag_push` 事件启动同一套大陆探测。若只想运行不会改动订阅的 GMGN 影子测速，则把 `trigger_gmgn_shadow` 设为 `true`；它会推送独立的 `cnb-gmgn-shadow-*` 标签。标签只存在于 CNB、用于追踪手动运行，不会写入 GitHub；令牌只从 GitHub Secret 注入，不写入日志。
 
 请勿使用 Repository variable 保存令牌，变量不会像 Secret 一样自动脱敏。
 
@@ -36,7 +36,32 @@ CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub
 
 同步只允许正常的快进更新。如果有人直接修改 CNB 的 `main` 导致它与 GitHub 分叉，任务会失败而不是强制覆盖；此项目应始终在 GitHub 修改代码。节点数据本身始终从 GitHub 最新的 `clash-verge-output` 下载，不依赖代码同步时间。
 
-探测流水线申请 2 个 CPU，同步流水线申请 1 个 CPU。按当前频率运行，月用量明显低于 CNB 社区版每月 160 CPU 核时的免费额度。
+正式探测流水线申请 2 个 CPU，同步流水线申请 1 个 CPU。手动 GMGN 影子测速申请 4 个 CPU，但当前不设定时任务，只在校准和性能调优时运行。按当前频率运行，月用量仍应明显低于 CNB 社区版每月 160 CPU 核时的免费额度。
+
+## GMGN 影子测速校准
+
+在把正式选拔目标从 gstatic 切换到 GMGN 之前，仓库提供一套完全隔离的影子任务：
+
+- 测速目标为 `https://gmgn.ai/`，期望 HTTP 200；
+- Mihomo 每轮最多等待 3000 ms，以区分“1001–3000 ms 有响应但太慢”和“无结果”；
+- 每个节点测试 20 轮，只有延迟不高于 1000 ms 的轮次才记为 Clash 对齐达标；
+- 同一 CNB Runner 内启动 4 个独立 Mihomo 分片，每片 16 个并发线程，总并发 64。节点之间并行，同一节点的 20 轮仍保持顺序；
+- 4 个分片必须全部完成、源 SHA 和规则参数完全一致，才会原子生成报告；缺少任意分片都会失败，不发布半份数据；
+- 每轮结束都会复查 Mihomo 进程和控制器健康；基础设施中途退出不会伪装成一批节点超时。合并时还会逐项核对节点计数、轮次计数、错误计数与脱敏字段；
+- 任务会等待最多 20 分钟获取带 SHA 校验的 GitHub 快照，并接受最近 10 小时内的输出，以覆盖 6 小时刷新周期和较长的收集任务；更旧或哈希不一致的源仍会拒绝；
+- 4×16 布局按全超时估算可覆盖约 5000 个候选。超过单 Runner 的 110 分钟安全预算时会在测速前明确失败，届时再增加分片或拆分仓库，而不是跑到最后才超时；
+- 结果发布到独立的 `clash-cn-gmgn-shadow` 分支。该分支不是 Clash 订阅，也不会写入或覆盖 `clash-cn-output`。
+
+手动运行方式：打开 GitHub Actions 的 `Sync GitHub main to CNB`，将 `trigger_gmgn_shadow` 设为 `true`。报告地址：
+
+```text
+https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-gmgn-shadow/status.json
+https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-gmgn-shadow/gmgn-shadow-results.json
+```
+
+`status.json` 保存 20/18/16/14/12/10 轮在 1000 ms 内达标的亚洲/非亚洲候选数量、逐轮总体趋势、分片耗时和尽力分类的错误数量。第一轮的亚洲口径仍来自源名称/标记，只用于观察大致分布，并不等同于真实出口地区；正式切换前还要补出口地区验证。`gmgn-shadow-results.json` 另含逐节点脱敏汇总，但不会发布名称、server、port、UUID、密码、原始错误、逐轮样本或 Runner 公网 IP；匿名 ID 每次运行重新生成，不能跨运行追踪。
+
+第一轮影子数据只用于确认 GMGN 实际分布、是否存在后半程整体成功率下降以及合适的正式门槛。在完成分析前，正式 `clash-cn-output` 继续使用现有 gstatic 20 轮逻辑。
 
 ## 筛选规则
 

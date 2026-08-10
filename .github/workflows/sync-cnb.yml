@@ -11,13 +11,20 @@ on:
         required: false
         default: false
         type: boolean
+      trigger_gmgn_shadow:
+        description: Sync CNB main, then start the isolated GMGN shadow probe
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
   group: sync-cnb-main
-  cancel-in-progress: true
+  # Queue mirror/trigger runs so a main push cannot cancel a manual run before
+  # its CNB trigger tag is created.
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -29,9 +36,19 @@ jobs:
       CNB_TOKEN: ${{ secrets.CNB_MIRROR_TOKEN }}
 
     steps:
+      - name: Require main for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from the main branch."
+            exit 1
+          fi
+
       - name: Checkout GitHub main
         uses: actions/checkout@v5
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Check mirror credentials
@@ -49,6 +66,7 @@ jobs:
         if: steps.credentials.outputs.enabled == 'true'
         shell: bash
         run: |
+          main_sha="$(git rev-parse HEAD)"
           chmod +x scripts/cnb_git_askpass.sh
           remote_sha="$(
             GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
@@ -56,15 +74,15 @@ jobs:
               git ls-remote "${CNB_REPO_URL}" refs/heads/main | awk '{print $1}'
           )"
 
-          if [ "${remote_sha}" = "${GITHUB_SHA}" ]; then
-            echo "CNB main is already up to date: ${GITHUB_SHA}"
+          if [ "${remote_sha}" = "${main_sha}" ]; then
+            echo "CNB main is already up to date: ${main_sha}"
             exit 0
           fi
 
           GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
             GIT_TERMINAL_PROMPT=0 \
             git push "${CNB_REPO_URL}" "HEAD:refs/heads/main"
-          echo "CNB main fast-forwarded to ${GITHUB_SHA}"
+          echo "CNB main fast-forwarded to ${main_sha}"
 
       - name: Trigger CNB mainland-China probe
         if: >-
@@ -74,8 +92,22 @@ jobs:
         shell: bash
         run: |
           probe_tag="cnb-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          git tag "${probe_tag}" "${GITHUB_SHA}"
+          git tag "${probe_tag}" HEAD
           GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
             GIT_TERMINAL_PROMPT=0 \
             git push "${CNB_REPO_URL}" "refs/tags/${probe_tag}:refs/tags/${probe_tag}"
           echo "CNB probe trigger tag pushed: ${probe_tag}"
+
+      - name: Trigger CNB GMGN shadow probe
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.trigger_gmgn_shadow &&
+          steps.credentials.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          shadow_tag="cnb-gmgn-shadow-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git tag "${shadow_tag}" HEAD
+          GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+            GIT_TERMINAL_PROMPT=0 \
+            git push "${CNB_REPO_URL}" "refs/tags/${shadow_tag}:refs/tags/${shadow_tag}"
+          echo "CNB GMGN shadow trigger tag pushed: ${shadow_tag}"
