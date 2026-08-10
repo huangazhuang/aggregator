@@ -72,38 +72,10 @@ jobs:
           inputs.trigger_probe &&
           steps.credentials.outputs.enabled == 'true'
         shell: bash
-        env:
-          CNB_BUILD_API: https://api.cnb.cool/ASD12321_446/aggregator/-/build/start
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          payload = json.dumps(
-              {
-                  "branch": "main",
-                  "sha": os.environ["GITHUB_SHA"],
-                  "event": "api_trigger_china_probe",
-                  "sync": "false",
-                  "title": "Mainland China Mihomo probe",
-              }
-          ).encode("utf-8")
-          request = urllib.request.Request(
-              os.environ["CNB_BUILD_API"],
-              data=payload,
-              method="POST",
-              headers={
-                  "Accept": "application/vnd.cnb.api+json",
-                  "Authorization": f"Bearer {os.environ['CNB_TOKEN']}",
-                  "Content-Type": "application/json",
-                  "User-Agent": "aggregator-github-sync/1.0",
-              },
-          )
-          with urllib.request.urlopen(request, timeout=30) as response:
-              result = json.load(response)
-          if not result.get("success"):
-              raise SystemExit(f"CNB rejected the probe trigger: {result.get('message', '')}")
-          print(f"CNB probe build number: {result.get('sn', '')}")
-          print(f"CNB probe build URL: {result.get('buildLogUrl', '')}")
-          PY
+          probe_tag="cnb-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git tag "${probe_tag}" "${GITHUB_SHA}"
+          GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+            GIT_TERMINAL_PROMPT=0 \
+            git push "${CNB_REPO_URL}" "refs/tags/${probe_tag}:refs/tags/${probe_tag}"
+          echo "CNB probe trigger tag pushed: ${probe_tag}"

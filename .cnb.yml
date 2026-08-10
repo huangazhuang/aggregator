@@ -315,8 +315,9 @@ main:
   web_trigger_china_probe:
     - *china_probe
 
-  api_trigger_china_probe:
-    - *china_probe
-
   web_trigger_sync_github:
     - *github_main_sync
+
+"cnb-probe-*":
+  tag_push:
+    - *china_probe
