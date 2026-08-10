@@ -12,7 +12,7 @@ on:
         default: false
         type: boolean
       trigger_gmgn_shadow:
-        description: Sync CNB main, then start the isolated GMGN shadow probe
+        description: Sync CNB main, then refresh GMGN shadow data and the priority profile
         required: false
         default: false
         type: boolean
@@ -98,7 +98,7 @@ jobs:
             git push "${CNB_REPO_URL}" "refs/tags/${probe_tag}:refs/tags/${probe_tag}"
           echo "CNB probe trigger tag pushed: ${probe_tag}"
 
-      - name: Trigger CNB GMGN shadow probe
+      - name: Trigger CNB GMGN probe and priority profile
         if: >-
           github.event_name == 'workflow_dispatch' &&
           inputs.trigger_gmgn_shadow &&
@@ -110,4 +110,4 @@ jobs:
           GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
             GIT_TERMINAL_PROMPT=0 \
             git push "${CNB_REPO_URL}" "refs/tags/${shadow_tag}:refs/tags/${shadow_tag}"
-          echo "CNB GMGN shadow trigger tag pushed: ${shadow_tag}"
+          echo "CNB GMGN probe trigger tag pushed: ${shadow_tag}"

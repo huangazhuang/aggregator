@@ -314,7 +314,7 @@ main:
 
   web_trigger_gmgn_shadow:
     - &gmgn_shadow
-      name: Mainland China GMGN shadow probe
+      name: Mainland China GMGN probe and priority profile
       runner:
         tags: cnb:arch:amd64
         cpus: 4
@@ -336,6 +336,7 @@ main:
         SOURCE_FRESHNESS_WAIT_SECONDS: "1200"
         SOURCE_FRESHNESS_POLL_SECONDS: "60"
         SHADOW_BRANCH: clash-cn-gmgn-shadow
+        GMGN_OUTPUT_BRANCH: clash-cn-gmgn-output
         SHADOW_TARGET_URL: https://gmgn.ai/
         SHADOW_EXPECTED_STATUS: "200"
         SHADOW_REQUEST_TIMEOUT_MS: "3000"
@@ -353,7 +354,11 @@ main:
             set -eu
             python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
             chmod +x clash/clash-linux-amd
-            mkdir -p .cnb-runtime/gmgn-shadow public-cn-shadow/fragments public-cn-shadow/final
+            mkdir -p \
+              .cnb-runtime/gmgn-shadow/selection \
+              public-cn-shadow/fragments \
+              public-cn-shadow/final \
+              public-cn-gmgn
             main_sha="$(git rev-parse HEAD)"
             python3 -m scripts.cnb_gmgn_shadow prepare \
               --source "${SOURCE_PROFILE_URL}" \
@@ -385,6 +390,7 @@ main:
                   --mihomo clash/clash-linux-amd \
                   --work-dir .cnb-runtime/gmgn-shadow/run-0 \
                   --output public-cn-shadow/fragments/shard-0.json \
+                  --selection-output .cnb-runtime/gmgn-shadow/selection/shard-0.json \
                   --controller-port 19090 \
                   --mixed-port 17890
             shard-1:
@@ -397,6 +403,7 @@ main:
                   --mihomo clash/clash-linux-amd \
                   --work-dir .cnb-runtime/gmgn-shadow/run-1 \
                   --output public-cn-shadow/fragments/shard-1.json \
+                  --selection-output .cnb-runtime/gmgn-shadow/selection/shard-1.json \
                   --controller-port 19091 \
                   --mixed-port 17891
             shard-2:
@@ -409,6 +416,7 @@ main:
                   --mihomo clash/clash-linux-amd \
                   --work-dir .cnb-runtime/gmgn-shadow/run-2 \
                   --output public-cn-shadow/fragments/shard-2.json \
+                  --selection-output .cnb-runtime/gmgn-shadow/selection/shard-2.json \
                   --controller-port 19092 \
                   --mixed-port 17892
             shard-3:
@@ -421,6 +429,7 @@ main:
                   --mihomo clash/clash-linux-amd \
                   --work-dir .cnb-runtime/gmgn-shadow/run-3 \
                   --output public-cn-shadow/fragments/shard-3.json \
+                  --selection-output .cnb-runtime/gmgn-shadow/selection/shard-3.json \
                   --controller-port 19093 \
                   --mixed-port 17893
 
@@ -467,6 +476,55 @@ main:
               git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${SHADOW_BRANCH}"
             printf 'GMGN shadow report: %s\n' \
               "${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${SHADOW_BRANCH}/status.json"
+
+        - name: Build the independent GMGN priority profile
+          timeout: 5m
+          script: |
+            set -eu
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            profile_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${GMGN_OUTPUT_BRANCH}/clash.yaml"
+            previous_profile_url="${profile_url}?cnb_previous=$(date +%s)"
+            python3 -m scripts.cnb_gmgn_publish \
+              --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
+              --fragments \
+                .cnb-runtime/gmgn-shadow/selection/shard-0.json \
+                .cnb-runtime/gmgn-shadow/selection/shard-1.json \
+                .cnb-runtime/gmgn-shadow/selection/shard-2.json \
+                .cnb-runtime/gmgn-shadow/selection/shard-3.json \
+              --output-dir public-cn-gmgn \
+              --previous-profile "${previous_profile_url}" \
+              --profile-url "${profile_url}"
+            python3 -m json.tool public-cn-gmgn/status.json
+            mkdir -p .cnb-runtime/gmgn-shadow/final-check
+            clash/clash-linux-amd -t \
+              -d .cnb-runtime/gmgn-shadow/final-check \
+              -f public-cn-gmgn/clash.yaml
+
+        - name: Publish the independent GMGN priority profile
+          timeout: 5m
+          script: |
+            set -eu
+            test -n "${CNB_TOKEN:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            profile_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${GMGN_OUTPUT_BRANCH}/clash.yaml"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            mkdir -p .cnb-runtime/gmgn-publish
+            cp public-cn-gmgn/README.md .cnb-runtime/gmgn-publish/README.md
+            cp public-cn-gmgn/status.json .cnb-runtime/gmgn-publish/status.json
+            cp public-cn-gmgn/clash.yaml .cnb-runtime/gmgn-publish/clash.yaml
+            cd .cnb-runtime/gmgn-publish
+            git init
+            git checkout -b "${GMGN_OUTPUT_BRANCH}"
+            git config user.name "cnb-probe[bot]"
+            git config user.email "cnb-probe@users.noreply.cnb.cool"
+            git add README.md status.json clash.yaml
+            git commit -m "Update GMGN-prioritized Clash profile"
+            GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${GMGN_OUTPUT_BRANCH}"
+            printf 'GMGN priority subscription: %s\n' "${profile_url}"
 
   web_trigger_china_probe:
     - *china_probe

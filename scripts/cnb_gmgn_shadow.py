@@ -46,9 +46,16 @@ from scripts.cnb_mihomo_filter import (
 from scripts.pipeline_utils import dump_clash_yaml, normalize_reality_short_ids
 
 
-SHADOW_SCHEMA_VERSION = 1
+SHADOW_SCHEMA_VERSION = 2
+SELECTION_FRAGMENT_SCHEMA_VERSION = 1
 DEFAULT_THRESHOLDS = (20, 18, 16, 14, 12, 10)
 REGION_CLASSIFICATION = "source-label heuristic; egress region not verified"
+WITHIN_LIMIT_BLOCK_FIELDS = (
+    "within_limit_count_rounds_1_5",
+    "within_limit_count_rounds_6_10",
+    "within_limit_count_rounds_11_15",
+    "within_limit_count_rounds_16_20",
+)
 SHADOW_RESULT_FIELDS = frozenset(
     {
         "node_id",
@@ -56,6 +63,9 @@ SHADOW_RESULT_FIELDS = frozenset(
         "attempts",
         "response_count",
         "within_limit_count",
+        "first_half_within_limit_count",
+        "second_half_within_limit_count",
+        *WITHIN_LIMIT_BLOCK_FIELDS,
         "slow_response_count",
         "no_result_count",
         "response_rate",
@@ -117,13 +127,15 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_json_atomic(path: Path, payload: Any) -> None:
+def write_json_atomic(path: Path, payload: Any, *, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    if mode is not None:
+        temporary.chmod(mode)
     temporary.replace(path)
 
 
@@ -375,6 +387,19 @@ def summarize_shadow_record(
     within_limit = [value for value in delays if value <= qualified_delay_ms]
     slow = [value for value in delays if value > qualified_delay_ms]
     attempts = len(samples)
+    halfway = attempts // 2
+
+    def count_within(values: Iterable[Any]) -> int:
+        return sum(
+            value is not None and int(value) <= qualified_delay_ms for value in values
+        )
+
+    first_half_within_limit_count = count_within(samples[:halfway])
+    second_half_within_limit_count = count_within(samples[halfway:])
+    block_counts = {
+        field: count_within(samples[index * 5 : (index + 1) * 5])
+        for index, field in enumerate(WITHIN_LIMIT_BLOCK_FIELDS)
+    }
     median_ms = float(statistics.median(delays)) if delays else None
     p90_ms = percentile(delays, 0.90)
     jitter_ms = float(statistics.pstdev(delays)) if len(delays) > 1 else (0.0 if delays else None)
@@ -384,6 +409,9 @@ def summarize_shadow_record(
         "attempts": attempts,
         "response_count": len(delays),
         "within_limit_count": len(within_limit),
+        "first_half_within_limit_count": first_half_within_limit_count,
+        "second_half_within_limit_count": second_half_within_limit_count,
+        **block_counts,
         "slow_response_count": len(slow),
         "no_result_count": attempts - len(delays),
         "response_rate": round(len(delays) / attempts, 4) if attempts else 0.0,
@@ -646,6 +674,8 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
     manifest = load_json_mapping(manifest_path)
     if manifest.get("kind") != "cnb-gmgn-shadow-manifest":
         raise RuntimeError("unsupported shadow manifest")
+    if manifest.get("schema_version") != SHADOW_SCHEMA_VERSION:
+        raise RuntimeError("unsupported shadow manifest schema")
     shard = manifest_shard(manifest, args.shard_index)
     shard_profile = (manifest_path.parent / str(shard["profile_file"])).resolve()
     if file_sha256(shard_profile) != str(shard.get("profile_sha256") or ""):
@@ -678,6 +708,12 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
         raise RuntimeError("controller and mixed ports must differ")
     work_dir = Path(args.work_dir).resolve()
     output_path = Path(args.output).resolve()
+    selection_output_value = str(getattr(args, "selection_output", "") or "")
+    selection_output_path = (
+        Path(selection_output_value).resolve() if selection_output_value else None
+    )
+    if selection_output_path == output_path:
+        raise RuntimeError("selection output must differ from the redacted fragment output")
     work_dir.mkdir(parents=True, exist_ok=True)
     controller = f"127.0.0.1:{args.controller_port}"
     runtime_profile = {
@@ -738,14 +774,19 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
         )
     used_ids: set[str] = set()
     results: list[dict[str, Any]] = []
-    for record in records.values():
+    summaries_by_name: dict[str, dict[str, Any]] = {}
+    for proxy in proxies:
+        name = str(proxy["name"])
+        record = records[name]
         node_id = f"n1_{secrets.token_hex(12)}"
         while node_id in used_ids:
             node_id = f"n1_{secrets.token_hex(12)}"
         used_ids.add(node_id)
-        results.append(
-            summarize_shadow_record(record, qualified_delay_ms, node_id=node_id)
+        summary = summarize_shadow_record(
+            record, qualified_delay_ms, node_id=node_id
         )
+        summaries_by_name[name] = summary
+        results.append(summary)
     results.sort(key=lambda item: str(item["node_id"]))
     fragment = {
         "kind": "cnb-gmgn-shadow-fragment",
@@ -769,6 +810,34 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
         "results": results,
     }
     write_json_atomic(output_path, fragment)
+    if selection_output_path is not None:
+        selection_fragment = {
+            "kind": "cnb-gmgn-selection-fragment",
+            "schema_version": SELECTION_FRAGMENT_SCHEMA_VERSION,
+            "run_id": manifest["run_id"],
+            "main_sha": manifest["main_sha"],
+            "source_sha256": manifest["source_sha256"],
+            "target_url": manifest["target_url"],
+            "expected_status": manifest["expected_status"],
+            "request_timeout_ms": request_timeout_ms,
+            "qualified_delay_ms": qualified_delay_ms,
+            "total_rounds": total_rounds,
+            "shard_count": manifest["shard_count"],
+            "shard_index": args.shard_index,
+            "shard_profile_sha256": shard["profile_sha256"],
+            "proxy_count": len(proxies),
+            "preferred_asia_count": sum(
+                bool(item["preferred_asia"]) for item in results
+            ),
+            "results": [
+                {
+                    "proxy": copy.deepcopy(proxy),
+                    "summary": copy.deepcopy(summaries_by_name[str(proxy["name"])]),
+                }
+                for proxy in proxies
+            ],
+        }
+        write_json_atomic(selection_output_path, selection_fragment, mode=0o600)
     print(
         f"Completed GMGN shadow shard {args.shard_index}: {len(proxies)} proxies in "
         f"{fragment['duration_seconds']}s.",
@@ -875,6 +944,18 @@ def validate_shadow_result(
     within_limit_count = non_negative_int(
         result.get("within_limit_count"), "within_limit_count"
     )
+    first_half_within_limit_count = non_negative_int(
+        result.get("first_half_within_limit_count"),
+        "first_half_within_limit_count",
+    )
+    second_half_within_limit_count = non_negative_int(
+        result.get("second_half_within_limit_count"),
+        "second_half_within_limit_count",
+    )
+    block_counts = [
+        non_negative_int(result.get(field), field)
+        for field in WITHIN_LIMIT_BLOCK_FIELDS
+    ]
     slow_response_count = non_negative_int(
         result.get("slow_response_count"), "slow_response_count"
     )
@@ -887,6 +968,28 @@ def validate_shadow_result(
         raise RuntimeError(f"shard {shard_index} response counts do not sum to attempts")
     if within_limit_count + slow_response_count != response_count:
         raise RuntimeError(f"shard {shard_index} delay classes do not sum to responses")
+    first_half_rounds = total_rounds // 2
+    second_half_rounds = total_rounds - first_half_rounds
+    if first_half_within_limit_count > first_half_rounds:
+        raise RuntimeError(f"shard {shard_index} first-half count exceeds its rounds")
+    if second_half_within_limit_count > second_half_rounds:
+        raise RuntimeError(f"shard {shard_index} second-half count exceeds its rounds")
+    if first_half_within_limit_count + second_half_within_limit_count != within_limit_count:
+        raise RuntimeError(f"shard {shard_index} half-window counts are inconsistent")
+    for index, count in enumerate(block_counts):
+        available_rounds = max(min(total_rounds - index * 5, 5), 0)
+        if count > available_rounds:
+            raise RuntimeError(f"shard {shard_index} five-round block count is invalid")
+    represented_rounds = min(total_rounds, len(WITHIN_LIMIT_BLOCK_FIELDS) * 5)
+    if total_rounds <= represented_rounds and sum(block_counts) != within_limit_count:
+        raise RuntimeError(f"shard {shard_index} five-round block counts are inconsistent")
+    if total_rounds > represented_rounds and sum(block_counts) > within_limit_count:
+        raise RuntimeError(f"shard {shard_index} five-round block counts exceed the total")
+    if total_rounds == 20 and (
+        first_half_within_limit_count != sum(block_counts[:2])
+        or second_half_within_limit_count != sum(block_counts[2:])
+    ):
+        raise RuntimeError(f"shard {shard_index} half and block counts disagree")
 
     response_rate = finite_number(result.get("response_rate"), "response_rate")
     within_limit_rate = finite_number(
@@ -1007,6 +1110,38 @@ def validate_fragment(
     }
     if trend_totals != result_totals:
         raise RuntimeError(f"shard {shard_index} round totals do not match node results")
+
+    expected_first_half = sum(
+        int(trend["within_limit_count"]) for trend in raw_trends[: total_rounds // 2]
+    )
+    expected_second_half = sum(
+        int(trend["within_limit_count"]) for trend in raw_trends[total_rounds // 2 :]
+    )
+    actual_first_half = sum(
+        int(result["first_half_within_limit_count"]) for result in results
+    )
+    actual_second_half = sum(
+        int(result["second_half_within_limit_count"]) for result in results
+    )
+    if (actual_first_half, actual_second_half) != (
+        expected_first_half,
+        expected_second_half,
+    ):
+        raise RuntimeError(f"shard {shard_index} half-window totals do not match round trends")
+
+    expected_blocks = [
+        sum(
+            int(trend["within_limit_count"])
+            for trend in raw_trends[index * 5 : (index + 1) * 5]
+        )
+        for index in range(len(WITHIN_LIMIT_BLOCK_FIELDS))
+    ]
+    actual_blocks = [
+        sum(int(result[field]) for result in results)
+        for field in WITHIN_LIMIT_BLOCK_FIELDS
+    ]
+    if actual_blocks != expected_blocks:
+        raise RuntimeError(f"shard {shard_index} five-round block totals do not match round trends")
 
     raw_error_counts = fragment.get("error_counts")
     if not isinstance(raw_error_counts, dict):
@@ -1218,6 +1353,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--mihomo", required=True)
     probe.add_argument("--work-dir", required=True)
     probe.add_argument("--output", required=True)
+    probe.add_argument("--selection-output", default="")
     probe.add_argument("--controller-port", type=int, required=True)
     probe.add_argument("--mixed-port", type=int, required=True)
     probe.set_defaults(handler=probe_shadow_shard)
