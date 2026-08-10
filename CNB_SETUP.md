@@ -23,10 +23,10 @@ https://cnb.cool/<你的组织>/<仓库>/-/git/raw/clash-cn-output/clash.yaml
 
 启用近实时同步只需操作一次：
 
-1. 在 CNB 创建一个具有当前仓库 Git 写入权限的新访问令牌。
+1. 在 CNB 创建一个具有当前仓库 Git 写入权限及 `repo-cnb-trigger:rw` 权限的新访问令牌。
 2. 打开 GitHub 仓库的 `Settings > Secrets and variables > Actions`。
 3. 新建 Repository secret，名称填写 `CNB_MIRROR_TOKEN`，值填写刚创建的 CNB 令牌。
-4. 再次向 GitHub `main` 推送提交，或在 GitHub Actions 中手动运行 `Sync GitHub main to CNB`。
+4. 再次向 GitHub `main` 推送提交，或在 GitHub Actions 中手动运行 `Sync GitHub main to CNB`。手动运行时把 `trigger_probe` 设为 `true`，会先确认 CNB `main` 已同步到同一提交，再通过 CNB OpenAPI 启动一次 `api_trigger_china_probe`；令牌只从 GitHub Secret 注入，不写入日志。
 
 请勿使用 Repository variable 保存令牌，变量不会像 Secret 一样自动脱敏。
 
