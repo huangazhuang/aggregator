@@ -180,6 +180,112 @@ class CnbStabilitySelectionTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in qualified], ["pass-14"])
         self.assertEqual([item["name"] for item in selected], ["pass-14"])
 
+    def test_production_tiering_uses_exact_asia_quality_boundaries(self) -> None:
+        incomplete = probe_summary("asia-incomplete", True, successes=14, p90=2800)
+        incomplete["attempts"] = 19
+        incomplete["success_rate"] = 14 / 19
+        summaries = [
+            probe_summary("asia-strict-boundary", True, successes=14, p90=2800),
+            probe_summary("asia-fallback-boundary", True, successes=12, p90=2800),
+            probe_summary("asia-emergency-boundary", True, successes=10, p90=2800),
+            probe_summary("non-asia-strict-boundary", False, successes=14, p90=2800),
+            probe_summary("asia-below-success", True, successes=9, p90=2800),
+            probe_summary("asia-above-p90", True, successes=20, p90=2801),
+            probe_summary("non-asia-relaxed-rejected", False, successes=13, p90=2800),
+            incomplete,
+        ]
+
+        selected, qualified = select_stable_results(
+            summaries,
+            0.70,
+            0.80,
+            2800,
+            4,
+            4,
+            1,
+            1,
+            0.90,
+            2000,
+            asia_tiering=True,
+            total_rounds=20,
+            asia_fallback_min_success=12,
+            asia_emergency_min_success=10,
+            asia_emergency_max_p90_ms=2800,
+        )
+
+        tiers = {item["name"]: item["selection_tier"] for item in qualified}
+        self.assertEqual(
+            tiers,
+            {
+                "asia-strict-boundary": "asia-strict",
+                "asia-fallback-boundary": "asia-fallback",
+                "asia-emergency-boundary": "asia-emergency",
+                "non-asia-strict-boundary": "non-asia-strict",
+            },
+        )
+        self.assertEqual({item["name"] for item in selected}, set(tiers))
+
+    def test_production_tiering_exposes_a_base_target_shortfall(self) -> None:
+        summaries = [
+            probe_summary("asia-emergency-only", True, successes=10, p90=2800),
+            probe_summary("non-asia-strict-only", False, successes=14, p90=2800),
+            probe_summary("asia-rejected", True, successes=9, p90=2800),
+        ]
+
+        selected, qualified = select_stable_results(
+            summaries,
+            0.70,
+            0.80,
+            2800,
+            3,
+            3,
+            1,
+            1,
+            0.90,
+            2000,
+            asia_tiering=True,
+        )
+
+        self.assertEqual(len(qualified), 2)
+        self.assertEqual(len(selected), 2)
+        self.assertLess(len(selected), 3)
+
+    def test_production_tiering_can_expand_with_elite_non_asia_after_fallback_base(self) -> None:
+        summaries = [
+            probe_summary("asia-strict", True, successes=20, p90=100),
+            probe_summary("asia-fallback-a", True, successes=12, p90=400),
+            probe_summary("asia-fallback-b", True, successes=12, p90=700),
+            probe_summary("global-elite-a", False, successes=20, p90=150),
+            probe_summary("global-elite-b", False, successes=18, p90=1200),
+        ]
+
+        selected, _ = select_stable_results(
+            summaries,
+            0.70,
+            0.80,
+            2800,
+            4,
+            5,
+            1,
+            2,
+            0.90,
+            2000,
+            asia_tiering=True,
+        )
+
+        selected_names = {item["name"] for item in selected}
+        self.assertEqual(len(selected), 5)
+        self.assertEqual(
+            selected_names,
+            {
+                "asia-strict",
+                "asia-fallback-a",
+                "asia-fallback-b",
+                "global-elite-a",
+                "global-elite-b",
+            },
+        )
+
     def test_dynamic_capacity_can_reach_150_while_non_asia_stays_at_ten(self) -> None:
         summaries = [probe_summary(f"asia-{index:03d}", True, successes=19) for index in range(140)]
         summaries += [probe_summary(f"global-{index:03d}", False, successes=19) for index in range(30)]

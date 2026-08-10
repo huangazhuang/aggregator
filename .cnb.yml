@@ -32,7 +32,10 @@ main:
               git push "${web_endpoint}/${CNB_REPO_SLUG}.git" "FETCH_HEAD:refs/heads/main"
             printf 'CNB main fast-forwarded: %s -> %s\n' "${cnb_sha}" "${github_sha}"
 
-  "crontab: 30 10,22 * * *":
+  # Run after the corresponding GitHub source-profile refresh has had time to
+  # publish. Keep the main-mirror schedule above unchanged: this probe reads
+  # the generated clash-verge-output branch directly from GitHub.
+  "crontab: 10 11,23 * * *":
     - &china_probe
       name: Mainland China Mihomo probe
       runner:
@@ -53,6 +56,9 @@ main:
       env:
         SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
         SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
+        SOURCE_MAX_AGE_SECONDS: "18000"
+        SOURCE_FRESHNESS_WAIT_SECONDS: "1200"
+        SOURCE_FRESHNESS_POLL_SECONDS: "60"
         TARGET_URL: https://www.gstatic.com/generate_204
         EXPECTED_STATUS: "204"
         OUTPUT_BRANCH: clash-cn-output
@@ -78,7 +84,7 @@ main:
         TIMEOUT_MS: "3000"
       stages:
         - name: Test proxies from the CNB runner
-          timeout: 50m
+          timeout: 80m
           script: |
             set -eu
             python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
@@ -88,10 +94,99 @@ main:
             web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
             previous_status_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${OUTPUT_BRANCH}/status.json"
             main_sha="$(git rev-parse HEAD)"
+            source_profile_snapshot=".cnb-runtime/source-clash.yaml"
+            source_status_snapshot=".cnb-runtime/source-status.json"
+            freshness_deadline="$(( $(date +%s) + SOURCE_FRESHNESS_WAIT_SECONDS ))"
+            while :; do
+              if python3 - \
+                "${SOURCE_STATUS_URL}" \
+                "${SOURCE_PROFILE_URL}" \
+                "${SOURCE_MAX_AGE_SECONDS}" \
+                "${source_status_snapshot}" \
+                "${source_profile_snapshot}" <<'PY'
+            import hashlib
+            import json
+            import sys
+            import time
+            import urllib.request
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            status_url = sys.argv[1]
+            profile_url = sys.argv[2]
+            maximum_age = int(sys.argv[3])
+            status_destination = Path(sys.argv[4])
+            profile_destination = Path(sys.argv[5])
+            cache_key = str(time.time_ns())
+
+            def fetch(url: str) -> bytes:
+                separator = "&" if "?" in url else "?"
+                request = urllib.request.Request(
+                    f"{url}{separator}cnb_snapshot={cache_key}",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache",
+                        "User-Agent": "aggregator-cnb-probe/1.0",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return response.read()
+
+            def write_atomic(destination: Path, content: bytes) -> None:
+                temporary = destination.with_suffix(destination.suffix + ".tmp")
+                temporary.write_bytes(content)
+                temporary.replace(destination)
+
+            try:
+                status_content = fetch(status_url)
+                payload = json.loads(status_content.decode("utf-8"))
+                run_at = str(payload.get("run_at") or "")
+                profile_sha256 = str(payload.get("profile_sha256") or "").lower()
+                generated_at = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - generated_at).total_seconds()
+                if len(profile_sha256) != 64 or any(
+                    character not in "0123456789abcdef" for character in profile_sha256
+                ):
+                    raise ValueError("profile_sha256 is missing or malformed")
+                if not -300 <= age_seconds <= maximum_age:
+                    raise ValueError(
+                        f"source profile age {int(age_seconds)}s is outside the accepted window"
+                    )
+                profile_content = fetch(profile_url)
+                actual_sha256 = hashlib.sha256(profile_content).hexdigest()
+                if actual_sha256 != profile_sha256:
+                    raise ValueError(
+                        "source profile SHA-256 does not match the fresh status metadata"
+                    )
+                write_atomic(status_destination, status_content)
+                write_atomic(profile_destination, profile_content)
+                print(
+                    f"Pinned GitHub source snapshot: run_at={run_at}, "
+                    f"age={int(age_seconds)}s, sha256={profile_sha256[:12]}...",
+                    flush=True,
+                )
+                raise SystemExit(0)
+            except Exception as exc:
+                print(f"GitHub source snapshot check failed: {exc}", file=sys.stderr, flush=True)
+                raise SystemExit(1)
+            PY
+              then
+                break
+              fi
+              if [ "$(date +%s)" -ge "${freshness_deadline}" ]; then
+                printf '%s\n' 'ERROR: GitHub source profile did not become fresh before the wait deadline.' >&2
+                exit 1
+              fi
+              printf 'Waiting %s seconds for a fresh GitHub source profile.\n' \
+                "${SOURCE_FRESHNESS_POLL_SECONDS}"
+              sleep "${SOURCE_FRESHNESS_POLL_SECONDS}"
+            done
             set +e
             python3 -m scripts.cnb_mihomo_filter \
-              --source "${SOURCE_PROFILE_URL}" \
-              --source-status "${SOURCE_STATUS_URL}" \
+              --source "${source_profile_snapshot}" \
+              --source-status "${source_status_snapshot}" \
               --previous-status "${previous_status_url}" \
               --main-sha "${main_sha}" \
               --mihomo clash/clash-linux-amd \
@@ -165,8 +260,8 @@ main:
           timeout: 5m
           script: |
             set -eu
-            if ! test -s public-cn/failure.json; then
-              printf '%s\n' 'No redacted failure.json was produced; keeping the original failure status.'
+            if ! test -s public-cn/failure.json && ! test -s public-cn/redacted-probe-results.json; then
+              printf '%s\n' 'No redacted failure diagnostics were produced; keeping the original failure status.'
               exit 0
             fi
             if ! test -n "${CNB_TOKEN:-}" || ! test -n "${CNB_REPO_SLUG:-}"; then
@@ -177,13 +272,27 @@ main:
             askpass="$(pwd)/scripts/cnb_git_askpass.sh"
             chmod +x "${askpass}"
             mkdir -p .cnb-runtime/diagnostics
-            cp public-cn/failure.json .cnb-runtime/diagnostics/failure.json
+            published_failure=false
+            published_replay=false
+            if test -s public-cn/failure.json; then
+              cp public-cn/failure.json .cnb-runtime/diagnostics/failure.json
+              published_failure=true
+            fi
+            if test -s public-cn/redacted-probe-results.json; then
+              cp public-cn/redacted-probe-results.json .cnb-runtime/diagnostics/redacted-probe-results.json
+              published_replay=true
+            fi
             cd .cnb-runtime/diagnostics
             git init
             git checkout -b "${DIAGNOSTICS_BRANCH}"
             git config user.name "cnb-probe[bot]"
             git config user.email "cnb-probe@users.noreply.cnb.cool"
-            git add failure.json
+            if [ "${published_failure}" = true ]; then
+              git add failure.json
+            fi
+            if [ "${published_replay}" = true ]; then
+              git add redacted-probe-results.json
+            fi
             git commit -m "Record redacted mainland-China probe failure" >/dev/null
             set +e
             GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
@@ -193,8 +302,14 @@ main:
             if [ "${push_rc}" -ne 0 ]; then
               printf 'WARNING: failure diagnostics push failed with code %s; original failure is preserved.\n' "${push_rc}"
             else
-              printf 'Failure diagnostics URL: %s\n' \
-                "${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${DIAGNOSTICS_BRANCH}/failure.json"
+              if [ "${published_failure}" = true ]; then
+                printf 'Failure diagnostics URL: %s\n' \
+                  "${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${DIAGNOSTICS_BRANCH}/failure.json"
+              fi
+              if [ "${published_replay}" = true ]; then
+                printf 'Redacted replay data URL: %s\n' \
+                  "${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${DIAGNOSTICS_BRANCH}/redacted-probe-results.json"
+              fi
             fi
 
   web_trigger_china_probe:

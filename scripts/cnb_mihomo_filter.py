@@ -30,9 +30,13 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from subscribe.asia import is_preferred_asian_proxy
 from scripts.cnb_diagnostics import (
+    POLICY_NODE_ID_KEY,
     build_failure_diagnostic,
+    build_redacted_probe_results,
+    ensure_policy_node_ids,
     threshold_matrix,
     write_failure_diagnostic,
+    write_redacted_probe_results,
 )
 from scripts.pipeline_utils import (
     calculate_publish_floor,
@@ -427,7 +431,7 @@ def stability_sort_key(summary: dict[str, Any]) -> tuple[Any, ...]:
         metric("median_delay_ms"),
         metric("jitter_ms"),
         metric("min_delay_ms"),
-        str(summary.get("name", "")),
+        str(summary.get(POLICY_NODE_ID_KEY) or summary.get("name", "")),
     )
 
 
@@ -557,8 +561,9 @@ def _select_tiered_asia_results(
 
     The return shape intentionally matches :func:`select_stable_results`.
     ``qualified`` contains every node that is eligible for the base target;
-    ``selected`` is empty when the base target cannot be reached, allowing the
-    caller's existing fail-closed guard to preserve the previous profile.
+    ``selected`` may contain a partial base set when the target cannot be
+    reached, allowing the caller to report the exact shortfall before its
+    fail-closed guard preserves the previous profile.
     """
 
     target = min(base_target, maximum)
@@ -652,9 +657,10 @@ def _select_tiered_asia_results(
                 break
             add(item)
 
-    # A1/A2 are base-only tiers. Before adding anything above the base target,
-    # replace them with strict elite Asia nodes. This prevents weak fallback
-    # nodes from being used as hidden expansion capacity.
+    # A1/A2 are base-only tiers: they can fill the first ``base_target`` slots
+    # but never create extra capacity. Any additional slots must come from
+    # strict elite results. If a future constraint leaves an elite Asian node
+    # outside a fallback-filled base, prefer a quality upgrade first.
     elite_remaining = sorted(
         (
             item
@@ -679,15 +685,13 @@ def _select_tiered_asia_results(
             if name in selected_set:
                 continue
             if item.get("preferred_asia") and weak_asia:
-                weakest = min(weak_asia, key=stability_sort_key)
+                # Lower sort keys are better, so the weakest fallback is the
+                # maximum item under the same ordering used for ranking.
+                weakest = max(weak_asia, key=stability_sort_key)
                 weak_name = str(weakest.get("name", ""))
                 selected_set.remove(weak_name)
                 selected_set.add(name)
                 weak_asia.remove(weakest)
-                continue
-            if weak_asia:
-                # Do not trade an Asian fallback for a non-Asian node while
-                # the profile is already at its base size.
                 continue
             if len(selected_names) >= maximum:
                 break
@@ -834,6 +838,60 @@ def _write_failure_diagnostic(
 ) -> None:
     """Persist and log a redacted failure report without masking the failure."""
 
+    asia_thresholds = (
+        (
+            "strict",
+            _minimum_success_count(args.min_success_rate, args.total_rounds),
+            args.max_qualified_p90_ms,
+        ),
+        ("fallback", args.asia_fallback_min_success, args.max_qualified_p90_ms),
+        (
+            "emergency",
+            args.asia_emergency_min_success,
+            args.asia_emergency_max_p90_ms,
+        ),
+        (
+            "elite",
+            _minimum_success_count(
+                getattr(args, "elite_min_success_rate", 0.90), args.total_rounds
+            ),
+            getattr(args, "elite_max_p90_ms", 2000.0),
+        ),
+    )
+    replay_results_file: str | None = None
+    replay_run_id: str | None = None
+    try:
+        replay_payload = build_redacted_probe_results(
+            summaries=summaries,
+            total_rounds=args.total_rounds,
+            asia_thresholds=asia_thresholds,
+            non_asia_minimum_success=_minimum_success_count(
+                args.min_success_rate, args.total_rounds
+            ),
+            non_asia_p90_limit_ms=args.max_qualified_p90_ms,
+            non_asia_min=args.non_asia_min,
+            non_asia_max=args.non_asia_max,
+            base_target=args.base_target,
+            max_nodes=args.max_nodes,
+            asia_emergency_max_count=args.asia_emergency_max_count,
+            required_count=required_count,
+            main_sha=args.main_sha,
+            source_sha256=source_sha256,
+        )
+        replay_path = write_redacted_probe_results(output_dir, replay_payload)
+        replay_results_file = replay_path.name
+        replay_run_id = str(replay_payload["run_id"])
+        print(
+            f"Redacted policy replay data written to {replay_path} "
+            f"({len(summaries)} results).",
+            flush=True,
+        )
+    except Exception as replay_error:
+        print(
+            f"WARNING: unable to write redacted policy replay data: {replay_error}",
+            flush=True,
+        )
+
     try:
         payload = build_failure_diagnostic(
             failure_kind=failure_kind,
@@ -844,33 +902,18 @@ def _write_failure_diagnostic(
             previous_published_count=previous_published_count,
             previous_publish_baseline=previous_publish_baseline,
             total_rounds=args.total_rounds,
-            asia_thresholds=(
-                (
-                    "strict",
-                    _minimum_success_count(args.min_success_rate, args.total_rounds),
-                    args.max_qualified_p90_ms,
-                ),
-                ("fallback", args.asia_fallback_min_success, args.max_qualified_p90_ms),
-                (
-                    "emergency",
-                    args.asia_emergency_min_success,
-                    args.asia_emergency_max_p90_ms,
-                ),
-                (
-                    "elite",
-                    _minimum_success_count(
-                        getattr(args, "elite_min_success_rate", 0.90), args.total_rounds
-                    ),
-                    getattr(args, "elite_max_p90_ms", 2000.0),
-                ),
-            ),
+            asia_thresholds=asia_thresholds,
             non_asia_minimum_success=_minimum_success_count(
                 args.min_success_rate, args.total_rounds
             ),
             non_asia_p90_limit_ms=args.max_qualified_p90_ms,
+            non_asia_min=args.non_asia_min,
             non_asia_max=args.non_asia_max,
             base_target=args.base_target,
+            max_nodes=args.max_nodes,
             asia_emergency_max_count=args.asia_emergency_max_count,
+            replay_results_file=replay_results_file,
+            replay_run_id=replay_run_id,
             main_sha=args.main_sha,
             source_sha256=source_sha256,
         )
@@ -1082,6 +1125,7 @@ def main() -> int:
     candidate_results = [
         item for item in results if str(item.get("name", "")) in candidate_set
     ]
+    ensure_policy_node_ids(candidate_results)
     previous_status = load_optional_json(args.previous_status)
     try:
         previous_published_count = max(int(previous_status.get("published_count", 0)), 0)
@@ -1212,6 +1256,8 @@ def main() -> int:
             stability_sort_key(item),
         )
     )
+    for item in results:
+        item.pop(POLICY_NODE_ID_KEY, None)
     (output_dir / "probe-results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
