@@ -1,0 +1,9 @@
+*
+!Dockerfile.gmgn-v2
+!scripts/
+!scripts/**
+!tests/
+!tests/fixtures/
+!tests/fixtures/gmgn_identity_v1.json
+!clash/
+!clash/clash-linux-amd

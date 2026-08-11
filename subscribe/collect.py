@@ -29,6 +29,8 @@ import clash
 import subconverter
 
 PATH = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+if PATH not in sys.path:
+    sys.path.insert(0, PATH)
 
 DATA_BASE = os.path.join(PATH, "data")
 DOMAIN_HEALTH_FILE = "domain-health.json"
@@ -87,11 +89,27 @@ def update_domain_health(state: dict, domain: str, success: bool, now: float = N
     state[domain] = item
 
 
-def select_airport_domains(domains: dict, health: dict, known_good: set, limit: int) -> dict:
-    if limit <= 0 or len(domains) <= limit:
-        return domains
+def _airport_quota_targets(limit: int) -> dict[str, int]:
+    """Allocate the versioned 60/20/20 airport exploration quota."""
 
-    now = time.time()
+    if limit <= 0:
+        return {"known_good": 0, "untried": 0, "due_retry": 0}
+    targets = {
+        "known_good": int(limit * 0.60),
+        "untried": int(limit * 0.20),
+        "due_retry": int(limit * 0.20),
+    }
+    for bucket in ("due_retry", "untried", "known_good"):
+        if sum(targets.values()) >= limit:
+            break
+        targets[bucket] += 1
+    return targets
+
+
+def select_airport_domains_with_stats(
+    domains: dict, health: dict, known_good: set, limit: int, now: float = None
+) -> tuple[dict, dict]:
+    current = time.time() if now is None else now
     known = sorted([domain for domain in domains if domain in known_good])
     untried = sorted([domain for domain in domains if domain not in health and domain not in known_good])
     due = sorted(
@@ -100,19 +118,78 @@ def select_airport_domains(domains: dict, health: dict, known_good: set, limit: 
             for domain in domains
             if domain in health
             and domain not in known_good
-            and float(health.get(domain, {}).get("retry_after", 0) or 0) <= now
+            and float(health.get(domain, {}).get("retry_after", 0) or 0) <= current
         ],
         key=lambda domain: float(health.get(domain, {}).get("last_checked", 0) or 0),
     )
+    cooling = sorted(
+        domain
+        for domain in domains
+        if domain in health
+        and domain not in known_good
+        and float(health.get(domain, {}).get("retry_after", 0) or 0) > current
+    )
 
-    selected = []
-    for domain in known + untried + due:
-        if domain not in selected:
-            selected.append(domain)
-        if len(selected) >= limit:
-            break
+    buckets = {"known_good": known, "untried": untried, "due_retry": due}
+    if limit <= 0 or len(domains) <= limit:
+        selected_by_bucket = {name: list(values) for name, values in buckets.items()}
+        selected = [
+            domain
+            for bucket in ("known_good", "untried", "due_retry")
+            for domain in selected_by_bucket[bucket]
+        ] + cooling
+        counts = {name: len(values) for name, values in selected_by_bucket.items()}
+        return {domain: domains[domain] for domain in selected}, {
+            "policy_version": "airport-exploration-v1",
+            "limit": limit,
+            "available": counts,
+            "targets": counts,
+            "selected": counts,
+            "unused": {name: 0 for name in counts},
+            "cooldown_available": len(cooling),
+            "cooldown_selected": len(cooling),
+        }
 
-    return {domain: domains[domain] for domain in selected}
+    targets = _airport_quota_targets(limit)
+    selected_by_bucket = {
+        name: values[: targets[name]] for name, values in buckets.items()
+    }
+    selected_set = {
+        domain for values in selected_by_bucket.values() for domain in values
+    }
+    remaining = limit - len(selected_set)
+    if remaining > 0:
+        for bucket in ("due_retry", "untried", "known_good"):
+            extras = [domain for domain in buckets[bucket] if domain not in selected_set]
+            take = extras[:remaining]
+            selected_by_bucket[bucket].extend(take)
+            selected_set.update(take)
+            remaining -= len(take)
+            if remaining <= 0:
+                break
+
+    selected = [
+        domain
+        for bucket in ("known_good", "untried", "due_retry")
+        for domain in selected_by_bucket[bucket]
+    ]
+    selected_counts = {name: len(values) for name, values in selected_by_bucket.items()}
+    stats = {
+        "policy_version": "airport-exploration-v1",
+        "limit": limit,
+        "available": {name: len(values) for name, values in buckets.items()},
+        "targets": targets,
+        "selected": selected_counts,
+        "unused": {name: max(targets[name] - selected_counts[name], 0) for name in targets},
+        "cooldown_available": len(cooling),
+        "cooldown_selected": 0,
+    }
+    return {domain: domains[domain] for domain in selected}, stats
+
+
+def select_airport_domains(domains: dict, health: dict, known_good: set, limit: int) -> dict:
+    selected, _ = select_airport_domains_with_stats(domains, health, known_good, limit)
+    return selected
 
 
 def assign(
@@ -201,9 +278,18 @@ def assign(
     # 是否允许特殊协议
     special_protocols = AirPort.enable_special_protocols()
 
+    publish_derivatives = (
+        os.environ.get("PUBLISH_COLLECTED_DERIVATIVES", "false").lower() == "true"
+    )
     tasks = (
         [
-            TaskConfig(name=utils.random_chars(length=8), sub=x, bin_name=bin_name, special_protocols=special_protocols)
+            TaskConfig(
+                name=utils.random_chars(length=8),
+                sub=x,
+                bin_name=bin_name,
+                special_protocols=special_protocols,
+                publish_derivatives=publish_derivatives,
+            )
             for x in subscriptions
             if x
         ]
@@ -288,13 +374,14 @@ def assign(
     total_pool = len(domains)
     runnable_domains = {domain: params for domain, params in domains.items() if params.get("validated", True)}
     total_domains = len(runnable_domains)
-    domains = select_airport_domains(
+    domains, selection_stats = select_airport_domains_with_stats(
         domains=runnable_domains, health=health, known_good=known_good, limit=max_domains
     )
     if len(domains) < total_domains:
         logger.info(
             f"airport domain rotation selected {len(domains)}/{total_domains} validated sites "
-            f"from a {total_pool}-site discovery pool (known good first, then untried and cooldown-expired)"
+            f"from a {total_pool}-site discovery pool with 60/20/20 exploration quotas; "
+            f"stats={json.dumps(selection_stats, sort_keys=True, separators=(',', ':'))}"
         )
 
     for domain, param in domains.items():
@@ -310,6 +397,7 @@ def assign(
                 rigid=rigid,
                 chuck=chuck,
                 special_protocols=special_protocols,
+                publish_derivatives=publish_derivatives,
             )
         )
 
@@ -363,6 +451,22 @@ def aggregate(args: argparse.Namespace) -> None:
         os.remove(generate_conf)
 
     results = utils.multi_thread_run(func=workflow.executewrapper, tasks=tasks, num_threads=args.num)
+    provenance_path = utils.trim(os.environ.get("CANDIDATE_PROVENANCE_FILE", ""))
+    if provenance_path:
+        from scripts.candidate_sources import provenance_for_task, write_provenance_staging
+
+        provenance_sources, provenance_records = [], []
+        for index, task in enumerate(tasks):
+            result = results[index] if index < len(results) else None
+            task_proxies = result[1] if result and len(result) > 1 and isinstance(result[1], list) else []
+            source_items, proxy_items = provenance_for_task(task, task_proxies)
+            provenance_sources.extend(source_items)
+            provenance_records.extend(proxy_items)
+        write_provenance_staging(
+            provenance_path,
+            sources=provenance_sources,
+            records=provenance_records,
+        )
     domain_health = load_domain_health()
     for index, task in enumerate(tasks):
         if not task.domain:

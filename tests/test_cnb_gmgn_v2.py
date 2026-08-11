@@ -1,0 +1,392 @@
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+from argparse import Namespace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import yaml
+
+from scripts import cnb_gmgn_v2
+from scripts.gmgn_measurement import RESOLVER_POLICY_VERSION
+from scripts.gmgn_processed_state import build_attempt
+from scripts.publish_transaction import PreviousState
+
+
+SOURCE_SHA = "1" * 64
+
+
+def auxiliary_targets() -> dict[str, dict]:
+    addresses = {
+        "control-gmgn-v1": "1.1.1.1",
+        "canary-gstatic-v1": "8.8.4.4",
+        "canary-cloudflare-v1": "1.0.0.1",
+        "egress-provider-v1": "9.9.9.9",
+    }
+    return {
+        name: {
+            "server": value["server"],
+            "port": value["port"],
+            "addresses": [addresses[name]],
+            "resolver_policy_version": RESOLVER_POLICY_VERSION,
+        }
+        for name, value in cnb_gmgn_v2.DIRECT_TARGETS.items()
+    }
+
+
+class TriggerAndPreflightTests(unittest.TestCase):
+    def temporary_directory(self):
+        preferred = os.environ.get("AGGREGATOR_TEST_TMPDIR")
+        if preferred:
+            Path(preferred).mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(dir=preferred or None)
+
+    def test_full_sha_tags_are_strict_and_retry_is_explicit(self) -> None:
+        normal = cnb_gmgn_v2.parse_trigger_tag(f"cnb-gmgn-v2-{SOURCE_SHA}")
+        self.assertEqual(normal["source_sha256"], SOURCE_SHA)
+        self.assertFalse(normal["retry"])
+        retry = cnb_gmgn_v2.parse_trigger_tag(
+            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-infra-2"
+        )
+        self.assertTrue(retry["retry"])
+        self.assertEqual(retry["retry_token"], "infra-2")
+        with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "malformed"):
+            cnb_gmgn_v2.parse_trigger_tag("cnb-gmgn-v2-1234")
+
+    def test_mihomo_version_probe_uses_a_minimal_secret_free_environment(self) -> None:
+        captured = {}
+
+        def runner(command, **kwargs):
+            captured["command"] = command
+            captured.update(kwargs)
+            return SimpleNamespace(returncode=0, stdout="Mihomo v1.19.9", stderr="")
+
+        secrets = {
+            "CNB_TOKEN": "cnb-secret",
+            "GITHUB_TOKEN": "github-secret",
+            "GMGN_IDENTITY_HMAC_KEY": "identity-secret",
+            "GIT_ASKPASS": "askpass-secret",
+        }
+        with self.temporary_directory() as directory:
+            binary = Path(directory) / "mihomo"
+            runtime = Path(directory) / "runtime"
+            with patch.dict(os.environ, secrets, clear=False):
+                version = cnb_gmgn_v2._mihomo_version(
+                    binary,
+                    work_dir=runtime,
+                    runner=runner,
+                )
+
+        self.assertEqual(version, "1.19.9")
+        self.assertTrue(set(secrets).isdisjoint(captured["env"]))
+        self.assertEqual(captured["stdout"], cnb_gmgn_v2.subprocess.PIPE)
+        self.assertEqual(captured["stderr"], cnb_gmgn_v2.subprocess.PIPE)
+        self.assertFalse(captured["check"])
+        for key in ("HOME", "TEMP", "TMP", "TMPDIR"):
+            self.assertEqual(captured["env"][key], str(runtime.resolve()))
+
+    def test_mihomo_runtime_uses_a_minimal_secret_free_environment(self) -> None:
+        captured = {}
+        process = MagicMock()
+
+        def runner(command, **kwargs):
+            captured["command"] = command
+            captured.update(kwargs)
+            return process
+
+        secrets = {
+            "CNB_TOKEN": "cnb-secret",
+            "GITHUB_TOKEN": "github-secret",
+            "GMGN_IDENTITY_HMAC_KEY": "identity-secret",
+            "GIT_ASKPASS": "askpass-secret",
+        }
+        with self.temporary_directory() as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir()
+            config = runtime / "mihomo-runtime.yaml"
+            with patch.dict(os.environ, secrets, clear=False):
+                actual = cnb_gmgn_v2._start_mihomo(
+                    Path(directory) / "mihomo",
+                    work_dir=runtime,
+                    config=config,
+                    log="private-log-handle",
+                    runner=runner,
+                )
+
+        self.assertIs(actual, process)
+        self.assertTrue(set(secrets).isdisjoint(captured["env"]))
+        self.assertEqual(captured["stdout"], "private-log-handle")
+        self.assertEqual(captured["stderr"], cnb_gmgn_v2.subprocess.STDOUT)
+        for key in ("HOME", "TEMP", "TMP", "TMPDIR"):
+            self.assertEqual(captured["env"][key], str(runtime.resolve()))
+
+    def test_prepare_binds_retry_relation_without_trusting_caller_attempt_id(self) -> None:
+        primary = build_attempt(SOURCE_SHA)
+        retry = build_attempt(SOURCE_SHA, "infra-prepare")
+        trigger = cnb_gmgn_v2.parse_trigger_tag(
+            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-infra-prepare"
+        )
+        preflight = {
+            "kind": cnb_gmgn_v2.PREFLIGHT_KIND,
+            "schema_version": cnb_gmgn_v2.PREFLIGHT_SCHEMA_VERSION,
+            "source_sha256": SOURCE_SHA,
+            "retry": True,
+            "attempt_id": retry.attempt_id,
+            "retry_of": primary.attempt_id,
+            "retry_token_sha256": retry.retry_token_sha256,
+            "decision": "retry_failed_infrastructure",
+            "should_run": True,
+            "observed_tip": "a" * 40,
+            "processed_ref": cnb_gmgn_v2.processed_ref(SOURCE_SHA),
+            "processed_tip": "b" * 40,
+        }
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            trigger_path = root / "trigger.json"
+            preflight_path = root / "preflight.json"
+
+            def write_inputs() -> None:
+                trigger_path.write_text(
+                    json.dumps(trigger), encoding="utf-8"
+                )
+                preflight_path.write_text(
+                    json.dumps(preflight), encoding="utf-8"
+                )
+
+            write_inputs()
+            bound = cnb_gmgn_v2._load_preflight_attempt(
+                preflight_path,
+                trigger_path,
+                expected_source_sha256=SOURCE_SHA,
+            )
+            self.assertEqual(bound.attempt_id, retry.attempt_id)
+            self.assertEqual(bound.retry_of, primary.attempt_id)
+            self.assertEqual(bound.retry_token_sha256, retry.retry_token_sha256)
+
+            preflight["attempt_id"] = "f" * 24
+            write_inputs()
+            with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "attempt ID"):
+                cnb_gmgn_v2._load_preflight_attempt(
+                    preflight_path,
+                    trigger_path,
+                    expected_source_sha256=SOURCE_SHA,
+                )
+
+            preflight["attempt_id"] = retry.attempt_id
+            preflight["retry_of"] = retry.attempt_id
+            write_inputs()
+            with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "retry_of"):
+                cnb_gmgn_v2._load_preflight_attempt(
+                    preflight_path,
+                    trigger_path,
+                    expected_source_sha256=SOURCE_SHA,
+                )
+
+    def test_history_accepted_source_outside_last_five_is_still_noop(self) -> None:
+        bundle = SimpleNamespace(
+            source_sha256="2" * 64,
+            files={
+                "status.json": json.dumps(
+                    {"source_sha256": "2" * 64}
+                ).encode("utf-8")
+            },
+        )
+        previous = PreviousState(True, "a" * 40, bundle)
+        run_index = {"entries": [{"source_sha256": str(index) * 64} for index in range(2, 7)]}
+        history = {
+            "recent_accepted_runs": [
+                {
+                    "run_id": "old-run",
+                    "source_sha256": SOURCE_SHA,
+                    "accepted_at": "2026-08-01T00:00:00Z",
+                }
+            ]
+        }
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            args = Namespace(
+                source_sha=SOURCE_SHA,
+                remote="https://example.invalid/repo.git",
+                work_dir=str(root / "work"),
+                output=str(root / "decision.json"),
+                noop_file=str(root / "noop"),
+                retry=True,
+                retry_token="infra-accepted",
+            )
+            with patch.object(
+                cnb_gmgn_v2,
+                "_remote_previous",
+                return_value=(previous, history, run_index),
+            ):
+                self.assertEqual(cnb_gmgn_v2._preflight(args), 0)
+            decision = json.loads((root / "decision.json").read_text(encoding="utf-8"))
+            self.assertEqual(decision["decision"], "noop_accepted")
+            self.assertFalse(decision["should_run"])
+            self.assertTrue((root / "noop").is_file())
+
+    def test_queued_primary_allows_explicit_infrastructure_retry(self) -> None:
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            args = Namespace(
+                source_sha=SOURCE_SHA,
+                remote="https://example.invalid/repo.git",
+                work_dir=str(root / "work"),
+                output=str(root / "decision.json"),
+                noop_file=str(root / "noop"),
+                retry=True,
+                retry_token="infra-2",
+            )
+            with patch.object(
+                cnb_gmgn_v2,
+                "_remote_previous",
+                return_value=(PreviousState(False, None, None), None, None),
+            ), patch.object(
+                cnb_gmgn_v2,
+                "_read_processed_state",
+                return_value=(None, None),
+            ), patch.object(
+                cnb_gmgn_v2,
+                "_git_command",
+                return_value=SimpleNamespace(returncode=0, stdout="a refs/tags/cnb-gmgn-v2-primary\n"),
+            ):
+                self.assertEqual(cnb_gmgn_v2._preflight(args), 0)
+            decision = json.loads((root / "decision.json").read_text(encoding="utf-8"))
+            self.assertEqual(decision["decision"], "retry_failed_infrastructure")
+            self.assertTrue(decision["should_run"])
+            self.assertFalse((root / "noop").exists())
+
+
+class GuardedRuntimeTests(unittest.TestCase):
+    def test_public_region_label_rejects_ip_disguised_as_region(self) -> None:
+        self.assertEqual(cnb_gmgn_v2._public_region_label(" Guangdong "), "Guangdong")
+        for leaked_region in ("runner-8.8.8.8", "2001:db8::1"):
+            with self.assertRaisesRegex(
+                cnb_gmgn_v2.CoordinatorError, "IP address"
+            ):
+                cnb_gmgn_v2._public_region_label(leaked_region)
+
+    def test_runtime_hosts_cover_every_dns_name_used_after_guard_activation(self) -> None:
+        pinned = {
+            "c1_" + "1" * 24: {
+                "server": "node.example",
+                "port": 443,
+                "addresses": ["8.8.8.8"],
+                "resolver_policy_version": RESOLVER_POLICY_VERSION,
+            }
+        }
+        auxiliary = auxiliary_targets()
+        hosts = cnb_gmgn_v2._runtime_hosts(
+            pinned,
+            auxiliary,
+            target_url="https://gmgn.ai/",
+        )
+        self.assertEqual(hosts["node.example"], "8.8.8.8")
+        for target in cnb_gmgn_v2.DIRECT_TARGETS.values():
+            self.assertIn(target["server"], hosts)
+        region_target = cnb_gmgn_v2._operational_target(
+            cnb_gmgn_v2.REGION_PROVIDER_TARGET, auxiliary
+        )
+        self.assertEqual(region_target["path"], "/geoip")
+        self.assertEqual(region_target["expected_status"], 200)
+
+    def test_runtime_host_collision_fails_closed_instead_of_rebinding(self) -> None:
+        pinned = {
+            "c1_" + "1" * 24: {
+                "server": "gmgn.ai",
+                "port": 443,
+                "addresses": ["8.8.8.8"],
+                "resolver_policy_version": RESOLVER_POLICY_VERSION,
+            }
+        }
+        with self.assertRaisesRegex(
+            cnb_gmgn_v2.CoordinatorError, "mapping is inconsistent"
+        ):
+            cnb_gmgn_v2._runtime_hosts(
+                pinned,
+                auxiliary_targets(),
+                target_url="https://gmgn.ai/",
+            )
+
+    def test_cnb_capability_smoke_mutates_netns_and_shard_budget_covers_policy(self) -> None:
+        document = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / ".cnb.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        pipeline = document["main"]["web_trigger_gmgn_v2_shadow"][0]
+        serialized = json.dumps(pipeline, ensure_ascii=False)
+        self.assertIn("--exercise-netns", serialized)
+        self.assertIn("scripts.probe_network_guard_linux", serialized)
+        self.assertEqual(pipeline["env"]["V2_DOCKER_CLI_VERSION"], "27.5.1")
+        self.assertIn("download.docker.com/linux/static/stable/x86_64", serialized)
+        self.assertIn(
+            "4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640",
+            serialized,
+        )
+        self.assertNotIn("--privileged", serialized)
+        self.assertNotIn("seccomp=unconfined", serialized)
+        probe_stage = next(
+            stage
+            for stage in pipeline["stages"]
+            if stage["name"] == "Probe four guarded GMGN V2 shards in parallel"
+        )
+        self.assertEqual(len(probe_stage["jobs"]), 4)
+        self.assertTrue(
+            all(job["timeout"] == "300m" for job in probe_stage["jobs"].values())
+        )
+        self.assertEqual(pipeline["lock"]["expires"], 28800)
+        self.assertEqual(pipeline["lock"]["timeout"], 28800)
+
+        capacity = cnb_gmgn_v2._validate_runtime_capacity(
+            4999, workers_per_shard=16
+        )
+        self.assertEqual(capacity["estimated_upper_seconds"], 14325.0)
+        with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "hard limit"):
+            cnb_gmgn_v2._validate_runtime_capacity(
+                5000, workers_per_shard=16
+            )
+
+    def test_region_selection_uses_the_budgeted_loopback_timeout(self) -> None:
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = (
+            b'{"ip":"1.1.1.1","country_code":"US",'
+            b'"region_code":"CA","asn":"AS13335"}'
+        )
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value = response
+
+        with (
+            patch.object(cnb_gmgn_v2, "_controller_request") as controller_request,
+            patch.object(cnb_gmgn_v2.urllib.request, "build_opener", return_value=opener),
+        ):
+            result = cnb_gmgn_v2._proxy_region(
+                controller="127.0.0.1:19090",
+                secret="test-secret",
+                mixed_port=19091,
+                proxy_name="proxy-a",
+                provider_target={"server": "region.example", "path": "/json"},
+            )
+
+        self.assertEqual(result["country_code"], "US")
+        self.assertEqual(result["region_code"], "CA")
+        controller_request.assert_called_once_with(
+            "127.0.0.1:19090",
+            "test-secret",
+            "PUT",
+            "/proxies/__gmgn_v2_probe__",
+            body={"name": "proxy-a"},
+            timeout=cnb_gmgn_v2.CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            opener.open.call_args.kwargs["timeout"],
+            cnb_gmgn_v2.REGION_LOOKUP_TIMEOUT_SECONDS,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

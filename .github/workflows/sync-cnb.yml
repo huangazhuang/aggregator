@@ -16,6 +16,21 @@ on:
         required: false
         default: false
         type: boolean
+      trigger_gmgn_v2_shadow:
+        description: Sync CNB main, then start one guarded GMGN V2 shadow run
+        required: false
+        default: false
+        type: boolean
+      gmgn_v2_source_sha:
+        description: Complete 64-character profile_sha256 from candidate status.json
+        required: false
+        default: ""
+        type: string
+      gmgn_v2_retry_token:
+        description: Optional explicit infrastructure retry token (letters, digits, dot, underscore, hyphen)
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -111,3 +126,62 @@ jobs:
             GIT_TERMINAL_PROMPT=0 \
             git push "${CNB_REPO_URL}" "refs/tags/${shadow_tag}:refs/tags/${shadow_tag}"
           echo "CNB GMGN probe trigger tag pushed: ${shadow_tag}"
+
+      - name: Trigger guarded CNB GMGN V2 shadow
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.trigger_gmgn_v2_shadow &&
+          steps.credentials.outputs.enabled == 'true'
+        env:
+          GMGN_V2_SOURCE_SHA: ${{ inputs.gmgn_v2_source_sha }}
+          GMGN_V2_RETRY_TOKEN: ${{ inputs.gmgn_v2_retry_token }}
+        shell: bash
+        run: |
+          source_sha="${GMGN_V2_SOURCE_SHA}"
+          retry_token="${GMGN_V2_RETRY_TOKEN}"
+          if [[ ! "${source_sha}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::gmgn_v2_source_sha must be the complete lowercase 64-character profile_sha256."
+            exit 1
+          fi
+          if [ -n "${retry_token}" ] && [[ ! "${retry_token}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "::error::gmgn_v2_retry_token has an invalid format."
+            exit 1
+          fi
+
+          if [ -n "${retry_token}" ]; then
+            primary_tag="cnb-gmgn-v2-${source_sha}"
+            primary="$(
+              GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+                GIT_TERMINAL_PROMPT=0 \
+                git ls-remote --refs --tags "${CNB_REPO_URL}" "refs/tags/${primary_tag}"
+            )"
+            if [ -z "${primary}" ]; then
+              echo "::error::An infrastructure retry requires an existing primary GMGN V2 trigger."
+              exit 1
+            fi
+            v2_tag="cnb-gmgn-v2-retry-${source_sha}-${retry_token}"
+          else
+            v2_tag="cnb-gmgn-v2-${source_sha}"
+          fi
+          set +e
+          existing="$(
+            GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+              GIT_TERMINAL_PROMPT=0 \
+              git ls-remote --refs --tags "${CNB_REPO_URL}" "refs/tags/${v2_tag}"
+          )"
+          lookup_rc=$?
+          set -e
+          if [ "${lookup_rc}" -ne 0 ]; then
+            echo "::error::Unable to determine whether the GMGN V2 trigger already exists."
+            exit "${lookup_rc}"
+          fi
+          if [ -n "${existing}" ]; then
+            echo "CNB GMGN V2 trigger already exists; no-op: ${v2_tag}"
+            exit 0
+          fi
+
+          git tag "${v2_tag}" HEAD
+          GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+            GIT_TERMINAL_PROMPT=0 \
+            git push "${CNB_REPO_URL}" "refs/tags/${v2_tag}:refs/tags/${v2_tag}"
+          echo "CNB GMGN V2 trigger tag pushed for source ${source_sha}."

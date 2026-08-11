@@ -530,9 +530,17 @@ main:
               --profile-url "${profile_url}"
             python3 -m json.tool public-cn-gmgn/status.json
             mkdir -p .cnb-runtime/gmgn-shadow/final-check
-            clash/clash-linux-amd -t \
-              -d .cnb-runtime/gmgn-shadow/final-check \
-              -f public-cn-gmgn/clash.yaml
+            if ! env -i \
+              PATH="${PATH}" \
+              HOME="$(pwd)/.cnb-runtime/gmgn-shadow/final-check" \
+              TMPDIR="$(pwd)/.cnb-runtime/gmgn-shadow/final-check" \
+              clash/clash-linux-amd -t \
+                -d .cnb-runtime/gmgn-shadow/final-check \
+                -f public-cn-gmgn/clash.yaml \
+                >.cnb-runtime/gmgn-shadow/final-check/mihomo-check.log 2>&1; then
+              printf '%s\n' 'ERROR: Mihomo rejected the GMGN profile.' >&2
+              exit 1
+            fi
 
         - name: Publish the independent GMGN priority profile
           timeout: 5m
@@ -556,8 +564,519 @@ main:
             git add README.md status.json clash.yaml
             git commit -m "Update GMGN-prioritized Clash profile"
             GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
-              git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${GMGN_OUTPUT_BRANCH}"
+            git push --force "${web_endpoint}/${CNB_REPO_SLUG}.git" "HEAD:${GMGN_OUTPUT_BRANCH}"
             printf 'GMGN priority subscription: %s\n' "${profile_url}"
+
+  web_trigger_gmgn_v2_shadow:
+    - &gmgn_v2_shadow
+      name: Manual GMGN V2 guarded shadow publication
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 8
+      docker:
+        image: python:3.12-bookworm
+      services: [docker]
+      lock:
+        key: aggregator-gmgn-v2-shadow
+        expires: 28800
+        wait: true
+        timeout: 28800
+        cancel-in-progress: false
+      env:
+        V2_SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
+        V2_SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
+        V2_SOURCE_METADATA_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/candidate-metadata.json
+        V2_OUTPUT_BRANCH: clash-cn-gmgn-v2-shadow
+        V2_CHILD_IMAGE: aggregator-gmgn-v2-child
+        V2_WORKERS_PER_SHARD: "16"
+        V2_DOCKER_CLI_VERSION: "27.5.1"
+        V2_DOCKER_CLI_SHA256: 4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640
+        V2_DOCKER_CLI_DIR: .cnb-runtime/gmgn-v2/docker-cli
+        PATH: .cnb-runtime/gmgn-v2/docker-cli:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+      stages:
+        - name: Parse and deduplicate the manual V2 trigger
+          timeout: 20m
+          script: |
+            set -eu
+            umask 077
+            python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.3
+            test -n "${CNB_BRANCH:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+            mkdir -p .cnb-runtime/gmgn-v2/preflight
+            mkdir -p "${V2_DOCKER_CLI_DIR}"
+            docker_archive=".cnb-runtime/gmgn-v2/docker-${V2_DOCKER_CLI_VERSION}.tgz"
+            python3 - "${V2_DOCKER_CLI_VERSION}" "${docker_archive}" <<'PY'
+            import pathlib
+            import sys
+            import urllib.request
+
+            version, destination = sys.argv[1:]
+            url = f"https://download.docker.com/linux/static/stable/x86_64/docker-{version}.tgz"
+            pathlib.Path(destination).write_bytes(urllib.request.urlopen(url, timeout=120).read())
+            PY
+            printf '%s  %s\n' "${V2_DOCKER_CLI_SHA256}" "${docker_archive}" | sha256sum -c -
+            tar -xzf "${docker_archive}" --strip-components=1 \
+              -C "${V2_DOCKER_CLI_DIR}" docker/docker
+            chmod 0755 "${V2_DOCKER_CLI_DIR}/docker"
+            command -v docker >/dev/null
+            test "$(docker version --format '{{.Client.Version}}')" = "${V2_DOCKER_CLI_VERSION}"
+            printf '%s\n' preflight > .cnb-runtime/gmgn-v2/current-stage.txt
+
+            python3 -m scripts.cnb_gmgn_v2 trigger \
+              --tag "${CNB_BRANCH}" \
+              --output .cnb-runtime/gmgn-v2/trigger.json
+            source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["source_sha256"])')"
+            retry="$(python3 -c 'import json; print("true" if json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["retry"] else "false")')"
+            retry_token="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["retry_token"] or "")')"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            remote_url="${web_endpoint}/${CNB_REPO_SLUG}.git"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}" clash/clash-linux-amd
+            if [ "${retry}" = true ]; then
+              env -u GMGN_IDENTITY_HMAC_KEY \
+                -u GMGN_IDENTITY_KEY_VERSION \
+                -u GMGN_IDENTITY_EPOCH \
+                GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+                python3 -m scripts.cnb_gmgn_v2 preflight \
+                  --source-sha "${source_sha}" \
+                  --remote "${remote_url}" \
+                  --work-dir .cnb-runtime/gmgn-v2/preflight \
+                  --output .cnb-runtime/gmgn-v2/preflight.json \
+                  --noop-file .cnb-runtime/gmgn-v2/noop \
+                  --retry \
+                  --retry-token "${retry_token}"
+            else
+              env -u GMGN_IDENTITY_HMAC_KEY \
+                -u GMGN_IDENTITY_KEY_VERSION \
+                -u GMGN_IDENTITY_EPOCH \
+                GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+                python3 -m scripts.cnb_gmgn_v2 preflight \
+                  --source-sha "${source_sha}" \
+                  --remote "${remote_url}" \
+                  --work-dir .cnb-runtime/gmgn-v2/preflight \
+                  --output .cnb-runtime/gmgn-v2/preflight.json \
+                  --noop-file .cnb-runtime/gmgn-v2/noop
+            fi
+            if test -f .cnb-runtime/gmgn-v2/noop; then
+              exit 0
+            fi
+
+            attempt_id="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["attempt_id"])')"
+            retry_of="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_of"] or "")')"
+            retry_token_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_token_sha256"] or "")')"
+            processed_tip="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["processed_tip"] or "absent")')"
+            processed_args=(
+              --source-sha "${source_sha}"
+              --attempt-id "${attempt_id}"
+              --state running
+              --remote "${remote_url}"
+              --work-dir .cnb-runtime/gmgn-v2/processed-running
+              --expected-tip "${processed_tip}"
+            )
+            if [ -n "${retry_of}" ]; then processed_args+=(--retry-of "${retry_of}"); fi
+            if [ -n "${retry_token_sha}" ]; then processed_args+=(--retry-token-sha256 "${retry_token_sha}"); fi
+            if [ "${processed_tip}" = absent ] && [ -n "${retry_of}" ]; then
+              processed_args+=(--allow-missing-primary)
+            fi
+            env -u GMGN_IDENTITY_HMAC_KEY \
+              -u GMGN_IDENTITY_KEY_VERSION \
+              -u GMGN_IDENTITY_EPOCH \
+              GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              python3 -m scripts.cnb_gmgn_v2 processed "${processed_args[@]}"
+
+            main_sha="$(git rev-parse HEAD)"
+            child_image="${V2_CHILD_IMAGE}:${main_sha}"
+            docker build --file Dockerfile.gmgn-v2 --tag "${child_image}" .
+            run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
+            container="gmgn-v2-cap-${run_token}"
+            cleanup() {
+              docker rm -f "${container}" >/dev/null 2>&1 || true
+            }
+            trap cleanup EXIT
+            docker create \
+              --name "${container}" \
+              --cap-add NET_ADMIN \
+              --cap-add SYS_ADMIN \
+              "${child_image}" \
+              python -m scripts.probe_network_guard_linux preflight \
+                --exercise-netns "gmgnv2-cap-${run_token}" \
+                --output /work/.cnb-runtime/capabilities.json
+            test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+            docker start --attach "${container}"
+            docker cp "${container}:/work/.cnb-runtime/capabilities.json" \
+              .cnb-runtime/gmgn-v2/capabilities.json
+
+        - name: Fetch the fixed candidate triple without secrets
+          timeout: 10m
+          script: |
+            set -eu
+            umask 077
+            if test -f .cnb-runtime/gmgn-v2/noop; then
+              exit 0
+            fi
+            printf '%s\n' fetch > .cnb-runtime/gmgn-v2/current-stage.txt
+            source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["source_sha256"])')"
+            main_sha="$(git rev-parse HEAD)"
+            child_image="${V2_CHILD_IMAGE}:${main_sha}"
+            run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
+            container="gmgn-v2-fetch-${run_token}"
+            cleanup() {
+              docker rm -f "${container}" >/dev/null 2>&1 || true
+            }
+            trap cleanup EXIT
+            docker create \
+              --name "${container}" \
+              "${child_image}" \
+              python -m scripts.cnb_gmgn_v2 fetch \
+                --profile-url "${V2_SOURCE_PROFILE_URL}" \
+                --status-url "${V2_SOURCE_STATUS_URL}" \
+                --metadata-url "${V2_SOURCE_METADATA_URL}" \
+                --expected-source-sha "${source_sha}" \
+                --output-dir /work/.cnb-runtime/candidate
+            if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+              | grep -Eq '^(CNB_TOKEN|GMGN_IDENTITY_HMAC_KEY)='; then
+              printf '%s\n' 'ERROR: fetch child inherited a forbidden secret.' >&2
+              exit 1
+            fi
+            test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+            docker start --attach "${container}"
+            mkdir -p .cnb-runtime/gmgn-v2/candidate
+            docker cp "${container}:/work/.cnb-runtime/candidate/." \
+              .cnb-runtime/gmgn-v2/candidate/
+
+        - name: Prepare the offline identity-bound V2 manifest
+          timeout: 10m
+          script: |
+            set -eu
+            umask 077
+            if test -f .cnb-runtime/gmgn-v2/noop; then
+              exit 0
+            fi
+            printf '%s\n' identity-config > .cnb-runtime/gmgn-v2/current-stage.txt
+            test -n "${GMGN_IDENTITY_HMAC_KEY:-}"
+            test -n "${GMGN_IDENTITY_KEY_VERSION:-}"
+            test -n "${GMGN_IDENTITY_EPOCH:-}"
+            printf '%s\n' prepare > .cnb-runtime/gmgn-v2/current-stage.txt
+            source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["source_sha256"])')"
+            main_sha="$(git rev-parse HEAD)"
+            child_image="${V2_CHILD_IMAGE}:${main_sha}"
+            run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
+            container="gmgn-v2-identity-${run_token}"
+            cleanup() {
+              docker rm -f "${container}" >/dev/null 2>&1 || true
+            }
+            trap cleanup EXIT
+            docker create \
+              --name "${container}" \
+              --network none \
+              --env GMGN_IDENTITY_HMAC_KEY \
+              --env GMGN_IDENTITY_KEY_VERSION \
+              --env GMGN_IDENTITY_EPOCH \
+              "${child_image}" \
+              python -m scripts.cnb_gmgn_v2 prepare \
+                --profile /work/input/clash.yaml \
+                --status /work/input/status.json \
+                --metadata /work/input/candidate-metadata.json \
+                --preflight /work/input/preflight.json \
+                --trigger /work/input/trigger.json \
+                --expected-source-sha "${source_sha}" \
+                --expected-main-sha "${main_sha}" \
+                --mihomo /opt/aggregator/clash/clash-linux-amd \
+                --identity-fixture /opt/aggregator/tests/fixtures/gmgn_identity_v1.json \
+                --output-dir /work/.cnb-runtime/prepared \
+                --workers "${V2_WORKERS_PER_SHARD}"
+            test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${container}")" = "none"
+            test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+            if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+              | grep -Eq '^CNB_TOKEN='; then
+              printf '%s\n' 'ERROR: identity child inherited CNB_TOKEN.' >&2
+              exit 1
+            fi
+            docker cp .cnb-runtime/gmgn-v2/candidate/clash.yaml \
+              "${container}:/work/input/clash.yaml"
+            docker cp .cnb-runtime/gmgn-v2/candidate/status.json \
+              "${container}:/work/input/status.json"
+            docker cp .cnb-runtime/gmgn-v2/candidate/candidate-metadata.json \
+              "${container}:/work/input/candidate-metadata.json"
+            docker cp .cnb-runtime/gmgn-v2/preflight.json \
+              "${container}:/work/input/preflight.json"
+            docker cp .cnb-runtime/gmgn-v2/trigger.json \
+              "${container}:/work/input/trigger.json"
+            docker start --attach "${container}"
+            mkdir -p .cnb-runtime/gmgn-v2/prepared
+            docker cp "${container}:/work/.cnb-runtime/prepared/." \
+              .cnb-runtime/gmgn-v2/prepared/
+
+        - name: Probe four guarded GMGN V2 shards in parallel
+          jobs:
+            shard-0:
+              timeout: 300m
+              script: |
+                set -eu
+                umask 077
+                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                printf '%s\n' probe-shard-0 > .cnb-runtime/gmgn-v2/current-stage.txt
+                main_sha="$(git rev-parse HEAD)"
+                child_image="${V2_CHILD_IMAGE}:${main_sha}"
+                run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}-0" | sha256sum | cut -c1-12)"
+                container="gmgn-v2-probe-0-${run_token}"
+                cleanup() { docker rm -f "${container}" >/dev/null 2>&1 || true; }
+                trap cleanup EXIT
+                docker create --name "${container}" \
+                  --cap-add NET_ADMIN --cap-add SYS_ADMIN \
+                  "${child_image}" \
+                  python -m scripts.cnb_gmgn_v2 probe \
+                    --manifest /work/input/manifest.json \
+                    --shard-input /work/input/shard.json \
+                    --shard-index 0 \
+                    --controller-secret /work/input/controller-secret.txt \
+                    --mihomo /opt/aggregator/clash/clash-linux-amd \
+                    --output-dir /work/.cnb-runtime/shard-0
+                if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+                  | grep -Eq '^(CNB_TOKEN|GMGN_IDENTITY_HMAC_KEY)='; then exit 1; fi
+                test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+                docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-0.json "${container}:/work/input/shard.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-0.txt "${container}:/work/input/controller-secret.txt"
+                docker start --attach "${container}"
+                mkdir -p .cnb-runtime/gmgn-v2/shards/shard-0
+                docker cp "${container}:/work/.cnb-runtime/shard-0/." .cnb-runtime/gmgn-v2/shards/shard-0/
+            shard-1:
+              timeout: 300m
+              script: |
+                set -eu
+                umask 077
+                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                printf '%s\n' probe-shard-1 > .cnb-runtime/gmgn-v2/current-stage.txt
+                main_sha="$(git rev-parse HEAD)"
+                child_image="${V2_CHILD_IMAGE}:${main_sha}"
+                run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}-1" | sha256sum | cut -c1-12)"
+                container="gmgn-v2-probe-1-${run_token}"
+                cleanup() { docker rm -f "${container}" >/dev/null 2>&1 || true; }
+                trap cleanup EXIT
+                docker create --name "${container}" \
+                  --cap-add NET_ADMIN --cap-add SYS_ADMIN \
+                  "${child_image}" \
+                  python -m scripts.cnb_gmgn_v2 probe \
+                    --manifest /work/input/manifest.json \
+                    --shard-input /work/input/shard.json \
+                    --shard-index 1 \
+                    --controller-secret /work/input/controller-secret.txt \
+                    --mihomo /opt/aggregator/clash/clash-linux-amd \
+                    --output-dir /work/.cnb-runtime/shard-1
+                if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+                  | grep -Eq '^(CNB_TOKEN|GMGN_IDENTITY_HMAC_KEY)='; then exit 1; fi
+                test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+                docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-1.json "${container}:/work/input/shard.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-1.txt "${container}:/work/input/controller-secret.txt"
+                docker start --attach "${container}"
+                mkdir -p .cnb-runtime/gmgn-v2/shards/shard-1
+                docker cp "${container}:/work/.cnb-runtime/shard-1/." .cnb-runtime/gmgn-v2/shards/shard-1/
+            shard-2:
+              timeout: 300m
+              script: |
+                set -eu
+                umask 077
+                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                printf '%s\n' probe-shard-2 > .cnb-runtime/gmgn-v2/current-stage.txt
+                main_sha="$(git rev-parse HEAD)"
+                child_image="${V2_CHILD_IMAGE}:${main_sha}"
+                run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}-2" | sha256sum | cut -c1-12)"
+                container="gmgn-v2-probe-2-${run_token}"
+                cleanup() { docker rm -f "${container}" >/dev/null 2>&1 || true; }
+                trap cleanup EXIT
+                docker create --name "${container}" \
+                  --cap-add NET_ADMIN --cap-add SYS_ADMIN \
+                  "${child_image}" \
+                  python -m scripts.cnb_gmgn_v2 probe \
+                    --manifest /work/input/manifest.json \
+                    --shard-input /work/input/shard.json \
+                    --shard-index 2 \
+                    --controller-secret /work/input/controller-secret.txt \
+                    --mihomo /opt/aggregator/clash/clash-linux-amd \
+                    --output-dir /work/.cnb-runtime/shard-2
+                if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+                  | grep -Eq '^(CNB_TOKEN|GMGN_IDENTITY_HMAC_KEY)='; then exit 1; fi
+                test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+                docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-2.json "${container}:/work/input/shard.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-2.txt "${container}:/work/input/controller-secret.txt"
+                docker start --attach "${container}"
+                mkdir -p .cnb-runtime/gmgn-v2/shards/shard-2
+                docker cp "${container}:/work/.cnb-runtime/shard-2/." .cnb-runtime/gmgn-v2/shards/shard-2/
+            shard-3:
+              timeout: 300m
+              script: |
+                set -eu
+                umask 077
+                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                printf '%s\n' probe-shard-3 > .cnb-runtime/gmgn-v2/current-stage.txt
+                main_sha="$(git rev-parse HEAD)"
+                child_image="${V2_CHILD_IMAGE}:${main_sha}"
+                run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}-3" | sha256sum | cut -c1-12)"
+                container="gmgn-v2-probe-3-${run_token}"
+                cleanup() { docker rm -f "${container}" >/dev/null 2>&1 || true; }
+                trap cleanup EXIT
+                docker create --name "${container}" \
+                  --cap-add NET_ADMIN --cap-add SYS_ADMIN \
+                  "${child_image}" \
+                  python -m scripts.cnb_gmgn_v2 probe \
+                    --manifest /work/input/manifest.json \
+                    --shard-input /work/input/shard.json \
+                    --shard-index 3 \
+                    --controller-secret /work/input/controller-secret.txt \
+                    --mihomo /opt/aggregator/clash/clash-linux-amd \
+                    --output-dir /work/.cnb-runtime/shard-3
+                if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+                  | grep -Eq '^(CNB_TOKEN|GMGN_IDENTITY_HMAC_KEY)='; then exit 1; fi
+                test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+                docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-3.json "${container}:/work/input/shard.json"
+                docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-3.txt "${container}:/work/input/controller-secret.txt"
+                docker start --attach "${container}"
+                mkdir -p .cnb-runtime/gmgn-v2/shards/shard-3
+                docker cp "${container}:/work/.cnb-runtime/shard-3/." .cnb-runtime/gmgn-v2/shards/shard-3/
+
+        - name: Redact measurements and exit identity offline
+          timeout: 10m
+          script: |
+            set -eu
+            umask 077
+            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            printf '%s\n' redact > .cnb-runtime/gmgn-v2/current-stage.txt
+            test -n "${GMGN_IDENTITY_HMAC_KEY:-}"
+            test -n "${GMGN_IDENTITY_KEY_VERSION:-}"
+            test -n "${GMGN_IDENTITY_EPOCH:-}"
+            main_sha="$(git rev-parse HEAD)"
+            child_image="${V2_CHILD_IMAGE}:${main_sha}"
+            run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}-redact" | sha256sum | cut -c1-12)"
+            container="gmgn-v2-redact-${run_token}"
+            cleanup() { docker rm -f "${container}" >/dev/null 2>&1 || true; }
+            trap cleanup EXIT
+            docker create --name "${container}" --network none \
+              --env GMGN_IDENTITY_HMAC_KEY \
+              --env GMGN_IDENTITY_KEY_VERSION \
+              --env GMGN_IDENTITY_EPOCH \
+              "${child_image}" \
+              python -m scripts.cnb_gmgn_v2 redact \
+                --manifest /work/input/manifest.json \
+                --shard-root /work/input/shards \
+                --identity-fixture /opt/aggregator/tests/fixtures/gmgn_identity_v1.json \
+                --output-dir /work/.cnb-runtime/redacted
+            test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${container}")" = "none"
+            test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+            if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
+              | grep -Eq '^CNB_TOKEN='; then exit 1; fi
+            docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
+            docker cp .cnb-runtime/gmgn-v2/shards "${container}:/work/input/shards"
+            docker start --attach "${container}"
+            mkdir -p .cnb-runtime/gmgn-v2/redacted
+            docker cp "${container}:/work/.cnb-runtime/redacted/." .cnb-runtime/gmgn-v2/redacted/
+
+        - name: Finalize and locally validate one immutable V2 bundle
+          timeout: 15m
+          script: |
+            set -eu
+            umask 077
+            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            printf '%s\n' finalize > .cnb-runtime/gmgn-v2/current-stage.txt
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            remote_url="${web_endpoint}/${CNB_REPO_SLUG}.git"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            env -u GMGN_IDENTITY_HMAC_KEY \
+              -u GMGN_IDENTITY_KEY_VERSION \
+              -u GMGN_IDENTITY_EPOCH \
+              GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              python3 -m scripts.cnb_gmgn_v2 finalize \
+                --manifest .cnb-runtime/gmgn-v2/prepared/manifest.json \
+                --snapshot .cnb-runtime/gmgn-v2/prepared/snapshot.json \
+                --redacted-root .cnb-runtime/gmgn-v2/redacted \
+                --private-shard-root .cnb-runtime/gmgn-v2/shards \
+                --shard-input-root .cnb-runtime/gmgn-v2/prepared/shards \
+                --remote "${remote_url}" \
+                --work-dir .cnb-runtime/gmgn-v2/finalize-work \
+                --bundle-dir .cnb-runtime/gmgn-v2/bundle \
+                --previous-tip-file .cnb-runtime/gmgn-v2/previous-tip.txt \
+                --noop-file .cnb-runtime/gmgn-v2/noop
+            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            env -u GMGN_IDENTITY_HMAC_KEY \
+              -u GMGN_IDENTITY_KEY_VERSION \
+              -u GMGN_IDENTITY_EPOCH \
+              -u CNB_TOKEN \
+              -u GITHUB_TOKEN \
+              -u GIT_ASKPASS \
+              python3 -m scripts.validate_public_outputs run \
+                --bundle-dir .cnb-runtime/gmgn-v2/bundle \
+                --mihomo clash/clash-linux-amd \
+                --evidence-dir .cnb-runtime/gmgn-v2/local-validation
+
+        - name: Transactionally publish only the V2 shadow branch
+          timeout: 30m
+          script: |
+            set -eu
+            umask 077
+            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            printf '%s\n' publish > .cnb-runtime/gmgn-v2/current-stage.txt
+            test -n "${CNB_TOKEN:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+            web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            remote_url="${web_endpoint}/${CNB_REPO_SLUG}.git"
+            raw_template="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/{revision}"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            expected_tip="$(tr -d '\r\n' < .cnb-runtime/gmgn-v2/previous-tip.txt)"
+            env -u GMGN_IDENTITY_HMAC_KEY \
+              -u GMGN_IDENTITY_KEY_VERSION \
+              -u GMGN_IDENTITY_EPOCH \
+              GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              python3 -m scripts.publish_transaction publish \
+                --bundle-dir .cnb-runtime/gmgn-v2/bundle \
+                --remote "${remote_url}" \
+                --raw-base-template "${raw_template}" \
+                --work-dir .cnb-runtime/gmgn-v2/publish-work \
+                --mihomo clash/clash-linux-amd \
+                --expected-previous-tip "${expected_tip}" \
+                --branch "${V2_OUTPUT_BRANCH}"
+            printf 'GMGN V2 shadow bundle: %s/%s/-/git/raw/%s/status.json\n' \
+              "${web_endpoint}" "${CNB_REPO_SLUG}" "${V2_OUTPUT_BRANCH}"
+
+      failStages:
+        - name: Report a safe V2 failure category
+          timeout: 2m
+          script: |
+            set -eu
+            stage=unknown
+            if test -s .cnb-runtime/gmgn-v2/current-stage.txt; then
+              stage="$(tr -cd 'A-Za-z0-9._-\n' < .cnb-runtime/gmgn-v2/current-stage.txt | head -n 1)"
+            fi
+            printf 'GMGN V2 shadow failed closed at safe stage category: %s\n' "${stage:-unknown}"
+            printf '%s\n' 'No private fragment, proxy configuration, raw region, token, or identity key was published.'
+            if test -s .cnb-runtime/gmgn-v2/preflight.json && \
+               ! test -f .cnb-runtime/gmgn-v2/noop && \
+               test -n "${CNB_TOKEN:-}" && test -n "${CNB_REPO_SLUG:-}"; then
+              web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+              remote_url="${web_endpoint}/${CNB_REPO_SLUG}.git"
+              askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+              chmod +x "${askpass}"
+              source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["source_sha256"])')"
+              attempt_id="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["attempt_id"])')"
+              retry_of="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_of"] or "")')"
+              retry_token_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_token_sha256"] or "")')"
+              processed_state=rejected
+              case "${stage:-unknown}" in
+                preflight|identity-config|fetch|probe-shard-*|redact|finalize|publish) processed_state=failed_infrastructure ;;
+              esac
+              processed_args=(--source-sha "${source_sha}" --attempt-id "${attempt_id}" --state "${processed_state}" --remote "${remote_url}" --work-dir .cnb-runtime/gmgn-v2/processed-failed)
+              if [ -n "${retry_of}" ]; then processed_args+=(--retry-of "${retry_of}"); fi
+              if [ -n "${retry_token_sha}" ]; then processed_args+=(--retry-token-sha256 "${retry_token_sha}"); fi
+              env -u GMGN_IDENTITY_HMAC_KEY -u GMGN_IDENTITY_KEY_VERSION -u GMGN_IDENTITY_EPOCH \
+                GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+                python3 -m scripts.cnb_gmgn_v2 processed "${processed_args[@]}" || \
+                printf '%s\n' 'WARNING: processed-state failure transition could not be recorded.' >&2
+            fi
 
   web_trigger_china_probe:
     - *china_probe
@@ -572,3 +1091,7 @@ main:
 "cnb-gmgn-shadow-*":
   tag_push:
     - *gmgn_shadow
+
+"cnb-gmgn-v2-*":
+  tag_push:
+    - *gmgn_v2_shadow

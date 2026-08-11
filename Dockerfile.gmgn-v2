@@ -1,0 +1,16 @@
+FROM python:3.12-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates iproute2 iptables \
+    && python -m pip install --no-cache-dir --disable-pip-version-check PyYAML==6.0.3
+
+WORKDIR /opt/aggregator
+ENV PYTHONPATH=/opt/aggregator \
+    PYTHONUNBUFFERED=1
+
+COPY scripts/ /opt/aggregator/scripts/
+COPY tests/fixtures/gmgn_identity_v1.json /opt/aggregator/tests/fixtures/gmgn_identity_v1.json
+COPY clash/clash-linux-amd /opt/aggregator/clash/clash-linux-amd
+
+RUN chmod 0755 /opt/aggregator/clash/clash-linux-amd \
+    && mkdir -p /work/input /work/.cnb-runtime

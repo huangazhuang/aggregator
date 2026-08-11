@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import yaml
 
@@ -31,6 +31,20 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from scripts.pipeline_utils import BUILTIN_PROXY_NAMES, dump_clash_yaml
+from scripts.gmgn_history import load_history, reduce_history, write_history_atomic
+from scripts.gmgn_selection import (
+    public_selection_status,
+    render_selection_profile,
+    select_candidates_v2,
+    validate_selection_input,
+)
+from scripts.proxy_identity import (
+    assert_unique_public_id_bindings,
+    canonical_proxy_fingerprint,
+    validate_identity_version,
+    validate_proxy_fingerprint,
+    validate_public_id,
+)
 from subscribe.asia import is_preferred_asian_proxy
 
 
@@ -57,6 +71,8 @@ SELECTION_FRAGMENT_FIELDS = frozenset(
     }
 )
 PUBLISH_SCHEMA_VERSION = 1
+HISTORY_IDENTITY_MAP_KIND = "cnb-gmgn-history-identity-map"
+HISTORY_IDENTITY_MAP_SCHEMA_VERSION = 1
 FORMAL_MANIFEST_KIND = "cnb-gmgn-shadow-manifest"
 FORMAL_MANIFEST_SCHEMA_VERSION = 2
 REQUIRED_SHARD_COUNT = 4
@@ -161,18 +177,9 @@ def boolean_argument(value: Any) -> bool:
 
 
 def proxy_fingerprint(proxy: dict[str, Any]) -> str:
-    """Return a stable identity without depending on a mutable display name."""
+    """Compatibility wrapper around the sole GMGN canonical identity owner."""
 
-    payload = copy.deepcopy(proxy)
-    payload.pop("name", None)
-    serialized = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return canonical_proxy_fingerprint(proxy)
 
 
 def _normalized_block_counts(summary: dict[str, Any]) -> list[int] | None:
@@ -842,6 +849,201 @@ def build_readme(status: dict[str, Any]) -> str:
     )
 
 
+def validate_history_identity_map(raw: Any) -> dict[str, Any]:
+    """Validate the private precomputed-ID handoff consumed by the publisher."""
+
+    required_fields = {
+        "kind",
+        "schema_version",
+        "identity_key_version",
+        "identity_epoch",
+        "candidates",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != required_fields:
+        raise RuntimeError("history identity map fields are incomplete or unexpected")
+    if (
+        raw["kind"] != HISTORY_IDENTITY_MAP_KIND
+        or raw["schema_version"] != HISTORY_IDENTITY_MAP_SCHEMA_VERSION
+    ):
+        raise RuntimeError("history identity map kind or schema is unsupported")
+    key_version = validate_identity_version(
+        raw["identity_key_version"], "identity_key_version"
+    )
+    epoch = validate_identity_version(raw["identity_epoch"], "identity_epoch")
+    candidates = raw["candidates"]
+    if not isinstance(candidates, Mapping):
+        raise RuntimeError("history identity map candidates must be an object")
+    normalized: dict[str, str] = {}
+    bindings: list[tuple[str, str]] = []
+    for raw_fingerprint, raw_candidate_id in candidates.items():
+        fingerprint = validate_proxy_fingerprint(raw_fingerprint)
+        candidate = validate_public_id(raw_candidate_id, "candidate")
+        if fingerprint in normalized:
+            raise RuntimeError("history identity map contains duplicate fingerprints")
+        normalized[fingerprint] = candidate
+        bindings.append((candidate, fingerprint))
+    assert_unique_public_id_bindings(bindings)
+    return {
+        "kind": HISTORY_IDENTITY_MAP_KIND,
+        "schema_version": HISTORY_IDENTITY_MAP_SCHEMA_VERSION,
+        "identity_key_version": key_version,
+        "identity_epoch": epoch,
+        "candidates": normalized,
+    }
+
+
+def stage_history_adapter(
+    *,
+    enabled: bool,
+    previous_history_path: str,
+    staged_history_path: str,
+    manifest: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    selection: dict[str, Any],
+    accepted_at: str,
+    identity_map: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Default-off C3 bridge; C5 remains the authority that commits a bundle."""
+
+    if not enabled:
+        return None
+    if not previous_history_path or not staged_history_path:
+        raise RuntimeError(
+            "enabled history adapter requires previous and staged history paths"
+        )
+    previous_path = Path(previous_history_path).resolve()
+    staged_path = Path(staged_history_path).resolve()
+    if previous_path == staged_path:
+        raise RuntimeError("history adapter must not overwrite previous history")
+    if identity_map is None:
+        raise RuntimeError("enabled history adapter requires a precomputed identity map")
+    identities = validate_history_identity_map(identity_map)
+    previous = load_history(previous_path)
+    if (
+        identities["identity_key_version"] != previous["identity_key_version"]
+        or identities["identity_epoch"] != previous["identity_epoch"]
+    ):
+        raise RuntimeError("history identity map version disagrees with previous history")
+
+    selected_states = {
+        str(item["fingerprint"]): {
+            "asia-core": "asia_core",
+            "asia-flexible": "asia_flexible",
+            "asia-observation-retained": "asia_flexible",
+            "non-asia-strict": "non_asia_stable",
+        }[str(item["selection_tier"])]
+        for item in selection["selected"]
+    }
+    measurements: dict[str, Any] = {}
+    decisions: dict[str, Any] = {}
+    source_events: dict[str, str] = {}
+    seen_ids: set[str] = set()
+    candidate_fingerprints = {
+        validate_proxy_fingerprint(candidate.get("fingerprint")) for candidate in candidates
+    }
+    if set(identities["candidates"]) != candidate_fingerprints:
+        raise RuntimeError("history identity map does not exactly cover candidates")
+    for candidate in candidates:
+        fingerprint = validate_proxy_fingerprint(candidate.get("fingerprint"))
+        public_id = identities["candidates"][fingerprint]
+        if public_id in seen_ids:
+            raise RuntimeError("history adapter received duplicate canonical identities")
+        seen_ids.add(public_id)
+        selected_state = selected_states.get(fingerprint)
+        preferred_asia = bool(candidate["summary"]["preferred_asia"])
+        if not preferred_asia and selected_state is None:
+            continue
+        measurements[public_id] = copy.deepcopy(candidate["summary"])
+        source_events[public_id] = "present"
+        decisions[public_id] = {
+            "is_asia": preferred_asia,
+            "proposed_state": selected_state
+            or ("asia_manual_candidate" if preferred_asia else "unknown_region"),
+            "source_alias": str(candidate["source_name"]),
+            "selected": selected_state is not None,
+            "region_cache": None,
+        }
+    staged = reduce_history(
+        previous,
+        run_context={
+            "run_id": manifest["run_id"],
+            "source_sha256": manifest["source_sha256"],
+            "accepted_at": accepted_at,
+            "valid_run": True,
+            "accepted": True,
+            "identity_key_version": identities["identity_key_version"],
+            "identity_epoch": identities["identity_epoch"],
+            "selection_policy_version": previous["selection_policy_version"],
+        },
+        source_events=source_events,
+        measurements=measurements,
+        decisions=decisions,
+    )
+    write_history_atomic(staged_path, staged)
+    return staged
+
+
+def _private_v2_path(path: Path, *, label: str) -> Path:
+    resolved = path.resolve()
+    lowered = {part.casefold() for part in resolved.parts}
+    if ".cnb-runtime" not in lowered or ".git" in lowered or any(
+        part.startswith("public-cn") for part in lowered
+    ):
+        raise RuntimeError(
+            f"{label} must stay in a private .cnb-runtime directory"
+        )
+    return resolved
+
+
+def stage_selection_v2_adapter(
+    *,
+    enabled: bool,
+    selection_input_path: str,
+    output_dir: str,
+    private_decisions_path: str = "",
+) -> dict[str, Any] | None:
+    """Default-off C4 bridge; C5 remains the transaction/publish owner."""
+
+    if not enabled:
+        return None
+    if not selection_input_path or not output_dir:
+        raise RuntimeError(
+            "enabled V2 selection adapter requires input and output paths"
+        )
+    input_path = _private_v2_path(
+        Path(selection_input_path), label="V2 selection input"
+    )
+    if not input_path.is_file():
+        raise RuntimeError("V2 selection input does not exist")
+    payload = validate_selection_input(load_json_mapping(input_path))
+    result = select_candidates_v2(payload)
+    destination = Path(output_dir).resolve()
+    if ".git" in {part.casefold() for part in destination.parts}:
+        raise RuntimeError("V2 selection output cannot be written inside .git")
+    write_text_atomic(destination / "clash.yaml", render_selection_profile(result))
+    write_json_atomic(destination / "status.json", public_selection_status(result))
+    write_json_atomic(destination / "node-status.json", result["node_status"])
+    if private_decisions_path:
+        decisions_path = _private_v2_path(
+            Path(private_decisions_path), label="V2 private selection decisions"
+        )
+        write_json_atomic(
+            decisions_path,
+            {
+                "kind": "cnb-gmgn-staged-selection-decisions",
+                "schema_version": 1,
+                "run_id": result["run_id"],
+                "source_sha256": result["source_sha256"],
+                "identity_key_version": result["identity_key_version"],
+                "identity_epoch": result["identity_epoch"],
+                "selection_policy_version": result["selection_policy_version"],
+                "decisions": result["history_decisions"],
+            },
+        )
+        decisions_path.chmod(0o600)
+    return result
+
+
 def publish_gmgn(args: argparse.Namespace) -> int:
     manifest, candidates = load_selection_candidates(
         Path(args.manifest).resolve(),
@@ -952,10 +1154,40 @@ def publish_gmgn(args: argparse.Namespace) -> int:
     }
     readme = build_readme(status)
 
+    history_adapter_enabled = bool(getattr(args, "history_adapter_enabled", False))
+    history_identity_map_path = str(getattr(args, "history_identity_map", "") or "")
+    history_identity_map = None
+    if history_adapter_enabled:
+        if not history_identity_map_path:
+            raise RuntimeError(
+                "enabled history adapter requires --history-identity-map"
+            )
+        history_identity_map = load_json_mapping(
+            Path(history_identity_map_path).resolve()
+        )
+    stage_history_adapter(
+        enabled=history_adapter_enabled,
+        previous_history_path=str(getattr(args, "previous_history", "") or ""),
+        staged_history_path=str(getattr(args, "staged_history", "") or ""),
+        manifest=manifest,
+        candidates=candidates,
+        selection=selection,
+        accepted_at=status["run_at"],
+        identity_map=history_identity_map,
+    )
+
     output_dir = Path(args.output_dir).resolve()
     write_text_atomic(output_dir / "clash.yaml", rendered)
     write_json_atomic(output_dir / "status.json", status)
     write_text_atomic(output_dir / "README.md", readme)
+    stage_selection_v2_adapter(
+        enabled=bool(getattr(args, "selection_v2_adapter_enabled", False)),
+        selection_input_path=str(getattr(args, "selection_v2_input", "") or ""),
+        output_dir=str(getattr(args, "selection_v2_output_dir", "") or ""),
+        private_decisions_path=str(
+            getattr(args, "selection_v2_private_decisions", "") or ""
+        ),
+    )
     print(
         f"Published {published_count} GMGN candidates: stable {len(selection['stable'])}, "
         f"Asia flexible {len(selection['asia_flexible'])}, observation "
@@ -978,6 +1210,30 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="true|false",
     )
     parser.add_argument("--profile-url", default="")
+    parser.add_argument(
+        "--history-adapter-enabled",
+        default=False,
+        type=boolean_argument,
+        metavar="true|false",
+        help="stage history.json v1 without changing current selection or groups",
+    )
+    parser.add_argument("--previous-history", default="")
+    parser.add_argument("--staged-history", default="")
+    parser.add_argument(
+        "--history-identity-map",
+        default="",
+        help="private precomputed candidate-ID map from the controlled identity stage",
+    )
+    parser.add_argument(
+        "--selection-v2-adapter-enabled",
+        default=False,
+        type=boolean_argument,
+        metavar="true|false",
+        help="stage the independent V2 ten-group bundle; disabled by default",
+    )
+    parser.add_argument("--selection-v2-input", default="")
+    parser.add_argument("--selection-v2-output-dir", default="")
+    parser.add_argument("--selection-v2-private-decisions", default="")
     return parser
 
 

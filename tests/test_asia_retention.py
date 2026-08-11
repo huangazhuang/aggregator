@@ -15,7 +15,7 @@ from scripts.cnb_mihomo_filter import (
     summarize_probe_record,
 )
 from scripts.filter_reachability import select_reachability_passes
-from subscribe.asia import is_preferred_asian_proxy
+from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
 class PreferredAsiaRecognitionTests(unittest.TestCase):
@@ -28,12 +28,33 @@ class PreferredAsiaRecognitionTests(unittest.TestCase):
             "KR Seoul 05",
             "ASIA-KEEP generic-node",
             "日-06",
+            "TPE-01",
+            "KHH 02",
+            "NRT-03",
+            "KIX 04",
+            "ICN-05",
+            "SIN 06",
         ):
             self.assertTrue(is_preferred_asian_proxy({"name": name}), name)
 
     def test_does_not_treat_status_or_unrelated_nodes_as_preferred(self) -> None:
-        for name in ("下次更新时间", "剩余流量 20 GB", "US Los Angeles", "Germany 01"):
+        for name in (
+            "下次更新时间",
+            "剩余流量 20 GB",
+            "US Los Angeles",
+            "Germany 01",
+            "新用户专区",
+            "日常更新",
+            "KRYPTO NODE",
+            "SINGLE FAST",
+        ):
             self.assertFalse(is_preferred_asian_proxy({"name": name}), name)
+
+    def test_airport_codes_map_to_safe_region_hints(self) -> None:
+        self.assertEqual(preferred_asia_region_hints({"name": "TPE-01"}), ("TW",))
+        self.assertEqual(preferred_asia_region_hints({"name": "NRT-01"}), ("JP",))
+        self.assertEqual(preferred_asia_region_hints({"name": "ICN-01"}), ("KR",))
+        self.assertEqual(preferred_asia_region_hints({"name": "SIN-01"}), ("SG",))
 
 
 class AsiaSourceTests(unittest.TestCase):

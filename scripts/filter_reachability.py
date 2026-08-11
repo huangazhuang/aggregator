@@ -23,6 +23,9 @@ import utils  # noqa: E402
 from scripts.pipeline_utils import calculate_publish_floor
 
 
+REPORT_FILE = Path("data/github-check-report.json")
+
+
 def fail_closed(message: str, lines: list[str] | None = None) -> None:
     print(f"::error::{message}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
@@ -173,6 +176,21 @@ def main() -> int:
         print(lines[-1])
 
     passed = select_reachability_passes(checks, tested, valid_masks)
+    ordinary_passed = sum(1 for proxy in passed if not utils.is_preferred_asian_proxy(proxy))
+    report = {
+        "kind": "github-reachability-report",
+        "schema_version": 1,
+        "policy_version": "github-reachability-v1",
+        "tested": len(tested),
+        "passed": ordinary_passed,
+        "failed": len(tested) - ordinary_passed,
+        "bypassed_asia": sum(protected),
+    }
+    REPORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_FILE.write_text(
+        json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
     lines.append(
         f"kept {len(passed)}/{len(checks)} proxies (protected Asia {sum(protected)})"
     )

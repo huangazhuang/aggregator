@@ -17,7 +17,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -34,3 +34,27 @@ jobs:
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+
+      - name: Check GMGN V2 validator entry points
+        run: |
+          python -m scripts.validate_public_outputs candidate --help
+          python -m scripts.validate_public_outputs run --help
+          python -m scripts.validate_public_outputs series --help
+          python -m scripts.validate_public_outputs migration --help
+
+  gmgn-v2-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build guarded GMGN V2 child image
+        run: docker build --file Dockerfile.gmgn-v2 --tag aggregator-gmgn-v2:test .
+
+      - name: Smoke-test trusted offline entry points
+        run: |
+          docker run --rm --network none aggregator-gmgn-v2:test \
+            python -m scripts.cnb_gmgn_v2 --help
+          docker run --rm --network none aggregator-gmgn-v2:test \
+            python -m scripts.validate_public_outputs --help

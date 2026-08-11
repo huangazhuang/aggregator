@@ -82,6 +82,13 @@ class TaskConfig:
     # 接口地址前缀，如 /api/v1/ 或 /api?scheme=
     api_prefix: str = "/api/v1/"
 
+    # Whether credentials derived from this source may enter a public candidate snapshot.
+    publish_derivatives: bool = False
+
+    # Optional key in scripts.asia_source_registry. Registered sources are
+    # freshness checked, endpoint validated, and capped before provenance.
+    candidate_source: str = ""
+
 
 def execute(task_conf: TaskConfig) -> list:
     if not task_conf or not isinstance(task_conf, TaskConfig):
@@ -130,6 +137,28 @@ def execute(task_conf: TaskConfig) -> list:
         chatgpt=task_conf.chatgpt,
         special_protocols=task_conf.special_protocols,
     )
+
+    if task_conf.candidate_source:
+        from scripts.asia_source_registry import AsiaSourceError, enforce_registered_source_policy
+        from scripts.proxy_identity import IdentityError
+
+        try:
+            selection = enforce_registered_source_policy(task_conf.candidate_source, proxies)
+            proxies = list(selection.selected)
+            logger.info(
+                f"applied registered source policy: name=[{task_conf.name}]"
+                f"\traw=[{selection.report['raw_count']}]"
+                f"\tselected=[{selection.report['selected_count']}]"
+            )
+        except (AsiaSourceError, IdentityError) as exc:
+            # The C1 source-health reducer will retain a recent last-good
+            # source after this empty observation. Never bypass a stale,
+            # unsafe, over-budget, or identity-unavailable source.
+            logger.error(
+                f"registered source rejected: name=[{task_conf.name}]"
+                f"\treason=[{type(exc).__name__}]"
+            )
+            proxies = []
 
     logger.info(
         f"finished fetch proxy: name=[{task_conf.name}]\tid=[{task_conf.index}]\tdomain=[{obj.ref}]\tcount=[{len(proxies)}]"
@@ -211,7 +240,17 @@ def exists(tasks: list, task: TaskConfig) -> bool:
                 item.exclude = "|".join([item.exclude, task.exclude]).removeprefix("|")
             if task.include:
                 item.include = "|".join([item.include, task.include]).removeprefix("|")
-        break
+            # Deduplication must not discard the safer/broader semantics of a
+            # duplicate configured source. A single explicit public grant is
+            # sufficient, while any Asia-oriented no-liveness configuration
+            # must keep the shared task from dropping those candidates early.
+            item.publish_derivatives = item.publish_derivatives or task.publish_derivatives
+            item.liveness = item.liveness and task.liveness
+            if not item.candidate_source:
+                item.candidate_source = task.candidate_source
+            elif task.candidate_source and item.candidate_source != task.candidate_source:
+                logger.error("duplicate subscription has conflicting registered source policies")
+            break
 
     return found
 

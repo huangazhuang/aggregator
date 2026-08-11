@@ -1,0 +1,38 @@
+{
+  "kind": "gmgn-identity-test-vector",
+  "schema_version": 1,
+  "identity_key_version": "test-key-v1",
+  "identity_epoch": "identity-v1",
+  "test_hmac_key_hex": "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f",
+  "proxy": {
+    "name": "Fixture Tokyo #01",
+    "type": "vless",
+    "server": "ExAmPle.COM.",
+    "port": 443,
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "network": "ws",
+    "tls": true,
+    "servername": "example.com",
+    "ws-opts": {
+      "path": "/gmgn",
+      "headers": {
+        "Host": "example.com"
+      }
+    },
+    "provenance": [
+      {
+        "source_id": "fixture-source"
+      }
+    ],
+    "candidate_id": "ignored-derived-field"
+  },
+  "public_ipv4": "8.8.8.8",
+  "public_ipv6": "2001:4860:4860::8888",
+  "expected": {
+    "candidate_id": "c1_a8b24a8f3798fe1a9cc2d336",
+    "server_id": "srv1_00c98d41c72a3d02fb9b17f8",
+    "endpoint_id": "ep1_e8ed6a20de8e1a295825fcc9",
+    "exit_id": "exit1_9eaa04f446f91cdcd6df6e41",
+    "exit_id_ipv6": "exit1_410a219c485ef5ce8f88f777"
+  }
+}

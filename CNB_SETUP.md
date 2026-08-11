@@ -46,6 +46,25 @@ CNB 使用中国标准时间。每天 `10:00` 和 `22:00` 仍会自动从 GitHub
 
 gstatic 探测流水线申请 2 个 CPU，同步流水线申请 1 个 CPU。手动 GMGN 四分片测速申请 4 个 CPU，但当前不设定时任务，只在校准、优先手测订阅刷新和性能调优时运行。按当前频率运行，月用量仍应明显低于 CNB 社区版每月 160 CPU 核时的免费额度。
 
+## GMGN V2 guarded shadow 上线前门禁
+
+仓库代码包含独立的手动 V2 shadow 路径，但它仍是验收通道，不是当前用户订阅入口，也没有自动定时触发。它只允许写入 `clash-cn-gmgn-v2-shadow`；在连续影子验收和用户确认迁移前，不会覆盖现有 gstatic、GMGN 正式分支或推荐链接。
+
+第一次真实 V2 shadow 前，必须在 CNB 创建独立的密钥仓库，并在其中用 `secret.yml` 保存 `GMGN_IDENTITY_HMAC_KEY`、`GMGN_IDENTITY_KEY_VERSION` 和 `GMGN_IDENTITY_EPOCH`。随后按 CNB 官方密钥仓库语法，在 `web_trigger_gmgn_v2_shadow` 对应 Pipeline 对象内加入静态引用：
+
+```yaml
+imports:
+  - https://cnb.cool/<你的密钥仓库 slug>/-/blob/main/secret.yml
+```
+
+密钥仓库 URL 因组织而异，不能在代码中猜测或提交占位地址；不要把真实 HMAC key 写入本仓库、普通仓库变量、日志或运行摘要。未配置 `imports:` 时，identity/redact 阶段会因缺少密钥而失败关闭，不会发布 V2 shadow。
+
+GitHub 和 CNB 必须使用**同一组身份配置**：GitHub Actions Secret `GMGN_IDENTITY_HMAC_KEY` 与 CNB 密钥仓库中的同名值必须是完全相同的 key 字节；GitHub Variables 与 CNB secret 中的 `GMGN_IDENTITY_KEY_VERSION`、`GMGN_IDENTITY_EPOCH` 也必须逐字一致。不要在两端分别随机生成 key，也不要只配置 version/epoch 而遗漏 GitHub Secret。当前代码没有公开 fallback key；在 GitHub Secret 尚未配置时必须保持 Candidate V2 总开关关闭。两端会在处理真实节点前用固定测试向量校验四类 public ID，不一致即失败关闭。
+
+每个 source SHA 还会使用非订阅、非用户入口的 `clash-cn-gmgn-v2-processed/<source_sha>` 受控 ref 保存脱敏的 `queued/running/failed_infrastructure/rejected` 状态和 `retry_of`。该 ref 只允许一个 `state.json`，通过 CAS/force-with-lease 更新；accepted 的唯一权威仍是 V2 shadow bundle/history，避免双写。它不包含代理、出口 IP、原始错误、token 或 HMAC key，也不能作为 Clash 订阅链接。
+
+V2 Pipeline 还会在无密钥子容器中真实执行一次临时 network namespace 的 add/delete capability smoke，然后四个分片各自在独立 namespace 内运行。Runner 不支持 `NET_ADMIN`/`SYS_ADMIN`、Docker service、iptables 或 namespace 创建/清理时，任务必须直接失败；不得改用 `--privileged` 或 `seccomp=unconfined` 降级绕过。完成密钥引用和 capability smoke 后，才从 GitHub 手动同步页传入完整 64 位 candidate profile SHA 触发第一轮真实 shadow。
+
 ## GMGN 影子报告与独立优先手测订阅
 
 仓库保留完全隔离的 GMGN 影子报告，用于观察真实分布、运行稳定性和规则容量；同一次四分片测速还会生成独立的优先手测订阅，但不会把 gstatic 默认订阅原地切换到 GMGN：
@@ -57,7 +76,7 @@ gstatic 探测流水线申请 2 个 CPU，同步流水线申请 1 个 CPU。手�
 - 4 个分片必须全部完成、源 SHA 和规则参数完全一致，才会原子生成报告；缺少任意分片都会失败，不发布半份数据；
 - 每轮结束都会复查 Mihomo 进程和控制器健康；基础设施中途退出不会伪装成一批节点超时。合并时还会逐项核对节点计数、轮次计数、错误计数与脱敏字段；
 - 任务会等待最多 20 分钟获取带 SHA 校验的 GitHub 快照，并接受最近 10 小时内的输出，以覆盖 6 小时刷新周期和较长的收集任务；更旧或哈希不一致的源仍会拒绝；
-- 4×16 布局按全超时估算可覆盖约 5000 个候选。超过单 Runner 的 110 分钟安全预算时会在测速前明确失败，届时再增加分片或拆分仓库，而不是跑到最后才超时；
+- 4×16 布局按测量、回环控制器切换、出口地区查询均取超时上界估算，可覆盖 4999 个候选；当前保守上界约 14325 秒，预算门槛为 15000 秒，单分片任务超时为 300 分钟。超过预算会在测速前明确失败，届时再增加分片或拆分仓库，而不是跑到最后才超时；
 - 脱敏结果发布到独立的 `clash-cn-gmgn-shadow` 分支。该分支不是 Clash 订阅，也不会写入或覆盖 `clash-cn-output`；可导入 Clash 的选拔结果另行发布到 `clash-cn-gmgn-output`。
 
 手动运行方式：打开 GitHub Actions 的 `Sync GitHub main to CNB`，将 `trigger_gmgn_shadow` 设为 `true`。报告地址：

@@ -35,9 +35,17 @@ on:
         options:
           - "false"
           - "true"
+      candidate_v2:
+        description: "Build the candidate snapshot V2 through isolated collection/identity/publish jobs."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: clash-verge-auto
@@ -46,13 +54,15 @@ concurrency:
 env:
   TZ: Asia/Shanghai
   OUTPUT_BRANCH: clash-verge-output
+  CANDIDATE_STAGING_BRANCH: clash-verge-output-staging
   PROFILE_FILE: clash.yaml
   REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
   REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
   FULL_FORK_SCAN: ${{ github.event.inputs.full_fork_scan || 'false' }}
+  ENABLE_CANDIDATE_V2: ${{ github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false' }}
+  ENABLE_ASIA_SOURCE_AWESOME_VPN: ${{ vars.ENABLE_ASIA_SOURCE_AWESOME_VPN || 'false' }}
   FORK_SCAN_PAGES: ${{ vars.FORK_SCAN_PAGES || '2' }}
   SCHEDULE_NAME: ${{ github.event.schedule || '' }}
-  GH_TOKEN: ${{ github.token }}
   ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS || 'true' }}
   # Rotate through the large airport pool instead of re-registering all ~2000
   # historical domains every day. Successful sites are always prioritized.
@@ -63,13 +73,14 @@ env:
   GMGN_CHECK_URL: ${{ vars.GMGN_CHECK_URL || 'https://gmgn.ai/' }}
   STRICT_MIN_NODES: ${{ vars.STRICT_MIN_NODES || '20' }}
   STRICT_MIN_RETAIN_RATIO: ${{ vars.STRICT_MIN_RETAIN_RATIO || '0.25' }}
-  # Optional self-hosted mainland-China TCP probe (Aliyun FC). Without this
-  # secret, GitHub skips the China-side prefilter and keeps the full candidate set.
-  PROBE_URL: ${{ secrets.PROBE_URL }}
-  PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
-
 jobs:
-  build:
+  collect:
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROBE_URL: ${{ secrets.PROBE_URL }}
+      PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
 
@@ -77,7 +88,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Setup Python
@@ -97,7 +108,20 @@ jobs:
       - name: Restore previous data
         run: |
           mkdir -p data
-          git fetch origin "${OUTPUT_BRANCH}:refs/remotes/origin/${OUTPUT_BRANCH}" --depth=1 || true
+          set +e
+          previous_ref="$(git ls-remote --heads origin "refs/heads/${OUTPUT_BRANCH}")"
+          status=$?
+          set -e
+          if [ "${status}" -ne 0 ]; then
+            echo "Unable to determine whether ${OUTPUT_BRANCH} exists."
+            exit 1
+          fi
+          if [ -z "${previous_ref}" ]; then
+            echo "confirmed_absent" > data/previous-ref-state.txt
+          else
+            echo "present" > data/previous-ref-state.txt
+            git fetch origin "${OUTPUT_BRANCH}:refs/remotes/origin/${OUTPUT_BRANCH}" --depth=1
+          fi
 
           # crawler-subs.json / crawler-proxies.txt carry the crawler's accumulated
           # subscription pool across runs; without them every run starts cold.
@@ -111,6 +135,14 @@ jobs:
           if git show "origin/${OUTPUT_BRANCH}:status.json" > /tmp/previous-status.json 2>/dev/null; then
             cp /tmp/previous-status.json data/previous-status.json
             echo "Restored the previous publish status for strict-filter safeguards."
+          fi
+
+          if [ "$(cat data/previous-ref-state.txt)" = "present" ]; then
+            for name in "${PROFILE_FILE}" candidate-metadata.json; do
+              if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/previous-${name}" 2>/dev/null; then
+                cp "/tmp/previous-${name}" "data/previous-${name}"
+              fi
+            done
           fi
 
       - name: Build manual subscription config
@@ -153,6 +185,8 @@ jobs:
       - name: Generate Clash profile from manual subscriptions
         if: steps.mode.outputs.mode == 'manual'
         shell: bash
+        env:
+          CANDIDATE_PROVENANCE_FILE: data/manual-candidate-provenance.json
         run: |
           mkdir -p data
           export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
@@ -173,6 +207,9 @@ jobs:
       - name: Generate Clash profile from collected sources
         if: steps.mode.outputs.mode != 'manual'
         shell: bash
+        env:
+          CANDIDATE_PROVENANCE_FILE: data/collect-candidate-provenance.json
+          PUBLISH_COLLECTED_DERIVATIVES: "true"
         run: |
           export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
           base_args=(--all --targets clash --num 64 --delay 10000 --easygoing --pages 3)
@@ -221,6 +258,8 @@ jobs:
       - name: Generate Clash profile from crawlers
         if: steps.mode.outputs.mode != 'manual'
         shell: bash
+        env:
+          CANDIDATE_PROVENANCE_FILE: data/crawler-candidate-provenance.json
         run: |
           export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
 
@@ -284,16 +323,184 @@ jobs:
             --alive-check "${REQUESTED_ALIVE_CHECK}" \
             --main-sha "${GITHUB_SHA}"
 
-      - name: Publish profile branch
+      - name: Prepare candidate V2 identity handoff
+        if: env.ENABLE_CANDIDATE_V2 == 'true'
         shell: bash
         run: |
+          mkdir -p candidate-private
+          profile_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}/${PROFILE_FILE}"
+          metadata_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}/candidate-metadata.json"
+          args=(
+            --profile "data/${PROFILE_FILE}"
+            --output candidate-private/identity-input.json
+            --mode "${{ steps.mode.outputs.mode }}"
+            --main-sha "${GITHUB_SHA}"
+            --profile-url "${profile_url}"
+            --candidate-metadata-url "${metadata_url}"
+            --previous-state "$(cat data/previous-ref-state.txt)"
+            --github-check-report data/github-check-report.json
+          )
+          found=false
+          for name in manual-candidate-provenance.json collect-candidate-provenance.json crawler-candidate-provenance.json; do
+            if [ -s "data/${name}" ]; then
+              args+=(--provenance "data/${name}")
+              found=true
+            fi
+          done
+          if [ "${found}" != "true" ]; then
+            echo "No candidate provenance staging was produced."
+            exit 1
+          fi
+          if [ "$(cat data/previous-ref-state.txt)" = "present" ]; then
+            args+=(
+              --previous-profile "data/previous-${PROFILE_FILE}"
+              --previous-status data/previous-status.json
+              --previous-metadata data/previous-candidate-metadata.json
+            )
+          fi
+          python -m scripts.candidate_snapshot prepare "${args[@]}"
+
+      - name: Upload legacy public staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: clash-verge-public-staging
+          path: public
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload candidate identity handoff
+        if: env.ENABLE_CANDIDATE_V2 == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-identity-input
+          path: candidate-private/identity-input.json
+          if-no-files-found: error
+          retention-days: 1
+
+  candidate_identity:
+    if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+    needs: collect
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout trusted identity code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+          cache: "pip"
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: pip3 install -r requirements.lock
+
+      - name: Download fixed safe identity input
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-identity-input
+          path: candidate-private
+
+      - name: Build and validate candidate snapshot V2
+        env:
+          GMGN_IDENTITY_HMAC_KEY: ${{ secrets.GMGN_IDENTITY_HMAC_KEY }}
+          GMGN_IDENTITY_KEY_VERSION: ${{ vars.GMGN_IDENTITY_KEY_VERSION }}
+          GMGN_IDENTITY_EPOCH: ${{ vars.GMGN_IDENTITY_EPOCH }}
+        run: |
+          python -m scripts.candidate_snapshot build \
+            --input candidate-private/identity-input.json \
+            --output-dir candidate-public
+
+      - name: Upload validated candidate public staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-public-staging
+          path: candidate-public
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: >-
+      ${{
+        always() &&
+        needs.collect.result == 'success' &&
+        (
+          (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') != 'true' ||
+          needs.candidate_identity.result == 'success'
+        )
+      }}
+    needs: [collect, candidate_identity]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout publish target
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Download legacy public staging
+        uses: actions/download-artifact@v4
+        with:
+          name: clash-verge-public-staging
+          path: public
+
+      - name: Download candidate V2 public staging
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-public-staging
+          path: candidate-public
+
+      - name: Select validated public staging
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+        run: |
+          # candidate-metadata.json belongs only to the V2 snapshot. When V2 is
+          # explicitly disabled, the orphan rebuild intentionally restores the
+          # exact legacy V1 file set instead of carrying a stale, unbound sidecar.
+          # A failed V2 identity build never reaches this publish job, so the
+          # existing V2 branch tip remains the last-good rollback point.
+          cp candidate-public/README.md public/README.md
+          cp candidate-public/${PROFILE_FILE} public/${PROFILE_FILE}
+          cp candidate-public/last-run.txt public/last-run.txt
+          cp candidate-public/status.json public/status.json
+          cp candidate-public/candidate-metadata.json public/candidate-metadata.json
+
+      - name: Set up Python for candidate remote smoke
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate remote smoke dependency
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
+
+      - name: Build and stage profile commit
+        id: publication
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Rebuild the branch as a single orphan commit each run: the profile is
-          # ~1MB per publish and an append-only history would grow the repo by
-          # gigabytes per year. Raw URLs always resolve to the branch tip, so
-          # consumers are unaffected by the force push.
+          output_ref="refs/heads/${OUTPUT_BRANCH}"
+          previous_output="$(git ls-remote --heads origin "${output_ref}")"
+          if [ "$(printf '%s\n' "${previous_output}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+            echo "Output branch lookup was ambiguous." >&2
+            exit 1
+          fi
+          previous_tip="$(printf '%s\n' "${previous_output}" | awk 'NF {print $1}')"
+
           publish_dir="$(mktemp -d)"
           git worktree add --detach "${publish_dir}"
           cd "${publish_dir}"
@@ -301,12 +508,7 @@ jobs:
           git reset
           cd "${GITHUB_WORKSPACE}"
 
-          cp public/README.md "${publish_dir}/README.md"
-          cp "public/${PROFILE_FILE}" "${publish_dir}/${PROFILE_FILE}"
-          cp public/last-run.txt "${publish_dir}/last-run.txt"
-          cp public/status.json "${publish_dir}/status.json"
-
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
+          for name in README.md "${PROFILE_FILE}" last-run.txt status.json candidate-metadata.json subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
             if [ -f "public/${name}" ]; then
               cp "public/${name}" "${publish_dir}/${name}"
             fi
@@ -314,13 +516,159 @@ jobs:
 
           cd "${publish_dir}"
           git add README.md "${PROFILE_FILE}" last-run.txt status.json
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
+          for name in candidate-metadata.json subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
             if [ -f "${name}" ]; then
               git add "${name}"
             fi
           done
           git commit -m "Update Clash Verge profile" --allow-empty
-          git push --force origin "HEAD:${OUTPUT_BRANCH}"
+          candidate_commit="$(git rev-parse HEAD)"
+
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then
+            if [ -n "${previous_tip}" ]; then
+              git fetch --no-tags --depth=1 origin "${output_ref}"
+            fi
+            staging_ref="refs/heads/${CANDIDATE_STAGING_BRANCH}"
+            previous_staging="$(git ls-remote --heads origin "${staging_ref}")"
+            if [ "$(printf '%s\n' "${previous_staging}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+              echo "Candidate staging branch lookup was ambiguous." >&2
+              exit 1
+            fi
+            staging_tip="$(printf '%s\n' "${previous_staging}" | awk 'NF {print $1}')"
+            git push \
+              --force-with-lease="${staging_ref}:${staging_tip}" \
+              origin "${candidate_commit}:${staging_ref}"
+          else
+            git push --force origin "${candidate_commit}:${output_ref}"
+            staging_ref=""
+          fi
+
+          {
+            echo "publish_dir=${publish_dir}"
+            echo "candidate_commit=${candidate_commit}"
+            echo "previous_tip=${previous_tip}"
+            echo "output_ref=${output_ref}"
+            echo "staging_ref=${staging_ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke exact candidate staging commit
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="${{ steps.publication.outputs.candidate_commit }}"
+          publish_dir="${{ steps.publication.outputs.publish_dir }}"
+          raw_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${revision}"
+          python -m scripts.validate_public_outputs candidate \
+            --profile "${publish_dir}/${PROFILE_FILE}" \
+            --status "${publish_dir}/status.json" \
+            --metadata "${publish_dir}/candidate-metadata.json" \
+            --profile-url "${raw_base}/${PROFILE_FILE}" \
+            --status-url "${raw_base}/status.json" \
+            --metadata-url "${raw_base}/candidate-metadata.json" \
+            --expected-revision "${revision}" \
+            --expected-main-sha "${GITHUB_SHA}" \
+            --scope staging \
+            --evidence-dir candidate-remote-smoke/staging
+
+      - name: Lease-promote and smoke candidate output branch
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_commit="${{ steps.publication.outputs.candidate_commit }}"
+          previous_tip="${{ steps.publication.outputs.previous_tip }}"
+          output_ref="${{ steps.publication.outputs.output_ref }}"
+          publish_dir="${{ steps.publication.outputs.publish_dir }}"
+
+          rollback_candidate_output() {
+            failure_rc="${1:-1}"
+            if [ "${failure_rc}" -eq 0 ]; then
+              failure_rc=1
+            fi
+
+            # The candidate commit is the only tip this run is allowed to
+            # replace. If another writer changed the branch, the lease rejects
+            # the rollback instead of overwriting that external update.
+            set +e
+            if [ -n "${previous_tip}" ]; then
+              git push \
+                --force-with-lease="${output_ref}:${candidate_commit}" \
+                origin "${previous_tip}:${output_ref}"
+            else
+              git push \
+                --force-with-lease="${output_ref}:${candidate_commit}" \
+                origin ":${output_ref}"
+            fi
+            rollback_push_rc=$?
+            set -e
+            if [ "${rollback_push_rc}" -ne 0 ]; then
+              echo "Candidate output rollback was rejected; the remote tip changed or the transport failed." >&2
+              exit "${failure_rc}"
+            fi
+
+            set +e
+            restored_output="$(git ls-remote --heads origin "${output_ref}")"
+            restored_lookup_rc=$?
+            set -e
+            if [ "${restored_lookup_rc}" -ne 0 ]; then
+              echo "Candidate output rollback tip could not be verified." >&2
+              exit "${failure_rc}"
+            fi
+            if [ "$(printf '%s\n' "${restored_output}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+              echo "Candidate output rollback tip lookup was ambiguous." >&2
+              exit "${failure_rc}"
+            fi
+            restored_tip="$(printf '%s\n' "${restored_output}" | awk 'NF {print $1}')"
+            if [ "${restored_tip}" != "${previous_tip}" ]; then
+              echo "Candidate output rollback could not be verified." >&2
+              exit "${failure_rc}"
+            fi
+            echo "Candidate publication verification failed; previous output was restored." >&2
+            exit "${failure_rc}"
+          }
+
+          git push \
+            --force-with-lease="${output_ref}:${previous_tip}" \
+            origin "${candidate_commit}:${output_ref}"
+
+          set +e
+          actual_output="$(git ls-remote --heads origin "${output_ref}")"
+          actual_lookup_rc=$?
+          set -e
+          if [ "${actual_lookup_rc}" -ne 0 ]; then
+            echo "Candidate output tip could not be read after promotion." >&2
+            rollback_candidate_output 1
+          fi
+          if [ "$(printf '%s\n' "${actual_output}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+            echo "Candidate output tip lookup was ambiguous after promotion." >&2
+            rollback_candidate_output 1
+          fi
+          actual_tip="$(printf '%s\n' "${actual_output}" | awk 'NF {print $1}')"
+          if [ "${actual_tip}" != "${candidate_commit}" ]; then
+            echo "Candidate output tip differs after promotion." >&2
+            rollback_candidate_output 1
+          fi
+
+          raw_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}"
+          set +e
+          python -m scripts.validate_public_outputs candidate \
+            --profile "${publish_dir}/${PROFILE_FILE}" \
+            --status "${publish_dir}/status.json" \
+            --metadata "${publish_dir}/candidate-metadata.json" \
+            --profile-url "${raw_base}/${PROFILE_FILE}" \
+            --status-url "${raw_base}/status.json" \
+            --metadata-url "${raw_base}/candidate-metadata.json" \
+            --expected-revision "${OUTPUT_BRANCH}" \
+            --expected-main-sha "${GITHUB_SHA}" \
+            --scope current \
+            --evidence-dir candidate-remote-smoke/current
+          smoke_rc=$?
+          set -e
+          if [ "${smoke_rc}" -ne 0 ]; then
+            echo "Candidate current smoke failed." >&2
+            rollback_candidate_output "${smoke_rc}"
+          fi
 
       - name: Summary
         shell: bash

@@ -18,13 +18,18 @@ from scripts.cnb_gmgn_publish import (
     GROUP_MANUAL,
     GROUP_OBSERVATION,
     GROUP_STABLE,
+    HISTORY_IDENTITY_MAP_KIND,
+    HISTORY_IDENTITY_MAP_SCHEMA_VERSION,
     candidate_sort_key,
     load_previous_profile,
     load_selection_candidates,
     proxy_fingerprint,
     publish_gmgn,
     select_candidates,
+    stage_history_adapter,
 )
+from scripts.gmgn_history import empty_history, load_history, write_history_atomic
+from scripts.proxy_identity import IdentitySettings, candidate_id as public_candidate_id
 
 
 def proxy(name: str, *, asia: bool, index: int) -> dict:
@@ -892,6 +897,105 @@ class PublicationTests(PublishTestCase):
             groups = {group["name"]: group for group in profile["proxy-groups"]}
             self.assertIn(retained["source_name"], groups[GROUP_OBSERVATION]["proxies"])
             self.assertNotIn(retained["source_name"], groups[GROUP_ASIA_FLEXIBLE]["proxies"])
+
+    def test_history_adapter_is_default_off_and_can_stage_without_changing_selector(self):
+        self.assertIsNone(
+            stage_history_adapter(
+                enabled=False,
+                previous_history_path="missing-history.json",
+                staged_history_path="missing-output.json",
+                manifest={},
+                candidates=[],
+                selection={},
+                accepted_at="",
+            )
+        )
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            settings = IdentitySettings(b"publisher-history-test", "test-key-v1", "identity-v1")
+            previous_path = root / "previous-history.json"
+            staged_path = root / "staged-history.json"
+            write_history_atomic(
+                previous_path,
+                empty_history(
+                    identity_key_version=settings.identity_key_version,
+                    identity_epoch=settings.identity_epoch,
+                    selection_policy_version="selection-adapter-test",
+                ),
+            )
+            item = candidate(
+                "adapter", asia=True, index=501, within=14, first=7, second=7
+            )
+            selection = select_candidates([item])
+            source_sha = hashlib.sha256(b"adapter-source").hexdigest()
+            public_id = public_candidate_id(
+                item["proxy"],
+                key=settings.key,
+                identity_key_version=settings.identity_key_version,
+                identity_epoch=settings.identity_epoch,
+            )
+            identity_map = {
+                "kind": HISTORY_IDENTITY_MAP_KIND,
+                "schema_version": HISTORY_IDENTITY_MAP_SCHEMA_VERSION,
+                "identity_key_version": settings.identity_key_version,
+                "identity_epoch": settings.identity_epoch,
+                "candidates": {item["fingerprint"]: public_id},
+            }
+            staged = stage_history_adapter(
+                enabled=True,
+                previous_history_path=str(previous_path),
+                staged_history_path=str(staged_path),
+                manifest={"run_id": "adapter-run", "source_sha256": source_sha},
+                candidates=[item],
+                selection=selection,
+                accepted_at="2026-08-11T00:00:00Z",
+                identity_map=identity_map,
+            )
+            self.assertEqual(staged["nodes"][public_id]["current_state"], "asia_core")
+            self.assertEqual(load_history(staged_path), staged)
+
+            publisher_source = Path("scripts/cnb_gmgn_publish.py").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("GMGN_IDENTITY_HMAC_KEY", publisher_source)
+            self.assertNotIn("IdentitySettings.from_environment", publisher_source)
+
+            with self.assertRaisesRegex(RuntimeError, "precomputed identity map"):
+                stage_history_adapter(
+                    enabled=True,
+                    previous_history_path=str(previous_path),
+                    staged_history_path=str(root / "missing-map.json"),
+                    manifest={"run_id": "adapter-run-2", "source_sha256": hashlib.sha256(b"adapter-source-2").hexdigest()},
+                    candidates=[item],
+                    selection=selection,
+                    accepted_at="2026-08-11T06:00:00Z",
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "must not overwrite"):
+                stage_history_adapter(
+                    enabled=True,
+                    previous_history_path=str(previous_path),
+                    staged_history_path=str(previous_path),
+                    manifest={"run_id": "adapter-run-2", "source_sha256": hashlib.sha256(b"adapter-source-2").hexdigest()},
+                    candidates=[item],
+                    selection=selection,
+                    accepted_at="2026-08-11T06:00:00Z",
+                    identity_map=identity_map,
+                )
+
+            wrong_version = copy.deepcopy(identity_map)
+            wrong_version["identity_epoch"] = "identity-v2"
+            with self.assertRaisesRegex(RuntimeError, "version disagrees"):
+                stage_history_adapter(
+                    enabled=True,
+                    previous_history_path=str(previous_path),
+                    staged_history_path=str(root / "wrong-version.json"),
+                    manifest={"run_id": "adapter-run-2", "source_sha256": hashlib.sha256(b"adapter-source-2").hexdigest()},
+                    candidates=[item],
+                    selection=selection,
+                    accepted_at="2026-08-11T06:00:00Z",
+                    identity_map=wrong_version,
+                )
 
 
 if __name__ == "__main__":

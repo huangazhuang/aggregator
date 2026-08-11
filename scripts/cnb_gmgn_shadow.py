@@ -45,6 +45,7 @@ from scripts.cnb_mihomo_filter import (
     wait_for_mihomo,
 )
 from scripts.pipeline_utils import dump_clash_yaml, normalize_reality_short_ids
+from scripts.proxy_identity import canonical_proxy_fingerprint
 
 
 SHADOW_SCHEMA_VERSION = 2
@@ -297,18 +298,9 @@ def load_fresh_source_snapshot(
 
 
 def proxy_fingerprint(proxy: dict[str, Any]) -> str:
-    """Return a stable private fingerprint used only for balanced sharding."""
+    """Compatibility wrapper around the C3 canonical identity owner."""
 
-    payload = copy.deepcopy(proxy)
-    payload.pop("name", None)
-    serialized = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return canonical_proxy_fingerprint(proxy)
 
 
 def partition_proxies(

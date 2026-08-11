@@ -34,6 +34,8 @@ import clash
 import subconverter
 
 PATH = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+if PATH not in sys.path:
+    sys.path.insert(0, PATH)
 
 
 @dataclass
@@ -389,6 +391,12 @@ def assign(
         # 是否对节点测活
         liveness = site.get("liveness", True)
 
+        # 私有订阅默认不得公开派生代理，公共 crawler 必须显式开启。
+        publish_derivatives = site.get("publish_derivatives", False) is True
+
+        # Optional controlled external source policy from the shared registry.
+        candidate_source = utils.trim(site.get("candidate_source", ""))
+
         # 拒绝跳过证书验证
         disable_insecure = site.get("secure", False)
 
@@ -462,6 +470,8 @@ def assign(
                 special_protocols=special_protocols,
                 invite_code=invite_code,
                 api_prefix=api_prefix,
+                publish_derivatives=publish_derivatives,
+                candidate_source=candidate_source,
             )
             found = workflow.exists(tasks=tasks, task=task)
             if found:
@@ -554,6 +564,32 @@ def aggregate(args: argparse.Namespace) -> None:
 
     logger.info(f"start fetch all subscriptions, count: [{len(tasks)}]")
     results = utils.multi_process_run(func=workflow.executewrapper, tasks=tasks)
+
+    provenance_path = utils.trim(os.environ.get("CANDIDATE_PROVENANCE_FILE", ""))
+    if provenance_path:
+        from scripts.candidate_sources import provenance_for_task, write_provenance_staging
+
+        observed_at = None
+        provenance_sources, provenance_records = [], []
+        results_by_taskid = {
+            int(result[0]): result[1]
+            for result in results
+            if result and len(result) > 1 and isinstance(result[0], int) and isinstance(result[1], list)
+        }
+        for task in tasks:
+            task_proxies = results_by_taskid.get(task.taskid, [])
+            source_items, proxy_items = provenance_for_task(
+                task,
+                task_proxies,
+                observed_at=observed_at,
+            )
+            provenance_sources.extend(source_items)
+            provenance_records.extend(proxy_items)
+        write_provenance_staging(
+            provenance_path,
+            sources=provenance_sources,
+            records=provenance_records,
+        )
 
     subscribes, datasets = {}, {}
     for i in range(len(results)):

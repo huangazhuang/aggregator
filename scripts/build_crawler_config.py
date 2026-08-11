@@ -9,6 +9,7 @@ import re
 import urllib.request
 from pathlib import Path
 
+from scripts.asia_source_registry import external_asia_domains
 from subscribe.asia import preferred_asia_include_pattern
 
 
@@ -37,6 +38,7 @@ BASE_CRAWL_CONFIG = {
     "push_to": ["crawler"],
     "ignorede": True,
     "liveness": True,
+    "publish_derivatives": True,
     "rate": 20.0,
 }
 PREFERRED_ASIA_INCLUDE = preferred_asia_include_pattern()
@@ -172,6 +174,7 @@ def asia_domains() -> list[dict]:
             "push_to": ["crawler"],
             "ignorede": True,
             "liveness": False,
+            "publish_derivatives": True,
             "rate": 20.0,
             "secure": False,
         }
@@ -215,11 +218,13 @@ def build_config() -> dict:
                 "push_to": ["crawler"],
                 "ignorede": True,
                 "liveness": True,
+                "publish_derivatives": True,
                 "rate": 20.0,
                 "secure": False,
             }
         ]
-        + asia_domains(),
+        + asia_domains()
+        + external_asia_domains(),
         "crawl": {
             "enable": True,
             "threshold": 10,
