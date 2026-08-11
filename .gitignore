@@ -138,3 +138,11 @@ config.local.json
 # local dev workspace
 docs/
 clash/local-check.yaml
+
+# Generated CNB runtime and publication workspaces.  The runtime tree may
+# contain complete proxy credentials and must never be staged from the main
+# repository working tree.
+/.cnb-runtime/
+/public-cn/
+/public-cn-shadow/
+/public-cn-gmgn/

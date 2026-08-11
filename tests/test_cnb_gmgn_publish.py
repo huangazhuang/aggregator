@@ -1,4 +1,6 @@
 import argparse
+import copy
+import hashlib
 import io
 import json
 import os
@@ -143,6 +145,12 @@ class PublishTestCase(unittest.TestCase):
             "source_asia_count": sum(
                 bool(item["summary"]["preferred_asia"]) for item in candidates
             ),
+            "runner": {
+                "runner_country": "China",
+                "runner_region": "Shanghai",
+                "runner_org": "example",
+                "runner_geo_provider": "test",
+            },
             "shards": shard_metadata,
         }
         manifest_path = root / "manifest.json"
@@ -187,7 +195,7 @@ class PublishTestCase(unittest.TestCase):
         *,
         stable_names: list[str] | None = None,
         observation_names: list[str] | None = None,
-    ) -> None:
+    ) -> Path:
         stable_names = stable_names if stable_names is not None else [
             str(item["name"]) for item in proxies
         ]
@@ -203,10 +211,21 @@ class PublishTestCase(unittest.TestCase):
                 },
             ],
         }
-        path.write_text(
-            yaml.safe_dump(profile, allow_unicode=True, sort_keys=False),
+        rendered = yaml.safe_dump(profile, allow_unicode=True, sort_keys=False)
+        path.write_text(rendered, encoding="utf-8")
+        status_path = path.with_name(f"{path.stem}-status.json")
+        status_path.write_text(
+            json.dumps(
+                {
+                    "kind": "cnb-gmgn-publish-status",
+                    "schema_version": 1,
+                    "published_count": len(proxies),
+                    "profile_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+            ),
             encoding="utf-8",
         )
+        return status_path
 
     @staticmethod
     def args(
@@ -215,12 +234,18 @@ class PublishTestCase(unittest.TestCase):
         output_dir: Path,
         *,
         previous_profile: str = "",
+        previous_status: str = "",
+        previous_publication_exists: bool | None = None,
     ) -> argparse.Namespace:
+        if previous_publication_exists is None:
+            previous_publication_exists = bool(previous_profile or previous_status)
         return argparse.Namespace(
             manifest=str(manifest_path),
             fragments=[str(path) for path in fragment_paths],
             output_dir=str(output_dir),
             previous_profile=previous_profile,
+            previous_status=previous_status,
+            previous_publication_exists=previous_publication_exists,
             profile_url="https://example.invalid/clash.yaml",
         )
 
@@ -423,6 +448,49 @@ class SelectionPolicyTests(PublishTestCase):
 
 
 class FragmentValidationTests(PublishTestCase):
+    def test_requires_exact_formal_shadow_manifest_kind_and_schema(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            item = candidate("core", asia=True, index=1, within=14, first=7, second=7)
+            manifest, fragments = self.write_bundle(root, [item])
+            original = json.loads(manifest.read_text(encoding="utf-8"))
+
+            for field, value, message in (
+                ("kind", "cnb-gmgn-selection-manifest", "manifest kind"),
+                ("schema_version", 1, "manifest schema"),
+                ("schema_version", 3, "manifest schema"),
+            ):
+                with self.subTest(field=field, value=value):
+                    mutated = dict(original)
+                    mutated[field] = value
+                    manifest.write_text(json.dumps(mutated), encoding="utf-8")
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        load_selection_candidates(manifest, fragments)
+
+    def test_runner_metadata_accepts_only_four_redacted_string_fields(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            item = candidate("core", asia=True, index=1, within=14, first=7, second=7)
+            manifest, fragments = self.write_bundle(root, [item])
+            original = json.loads(manifest.read_text(encoding="utf-8"))
+
+            mutations = []
+            missing = copy.deepcopy(original)
+            del missing["runner"]["runner_region"]
+            mutations.append((missing, "incomplete or unexpected"))
+            extra = copy.deepcopy(original)
+            extra["runner"]["runner_ip"] = "192.0.2.1"
+            mutations.append((extra, "incomplete or unexpected"))
+            non_string = copy.deepcopy(original)
+            non_string["runner"]["runner_org"] = 123
+            mutations.append((non_string, "must contain strings"))
+
+            for mutated, message in mutations:
+                with self.subTest(message=message):
+                    manifest.write_text(json.dumps(mutated), encoding="utf-8")
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        load_selection_candidates(manifest, fragments)
+
     def test_requires_all_four_private_fragments(self):
         with self.temporary_directory() as directory:
             root = Path(directory)
@@ -505,43 +573,150 @@ class FragmentValidationTests(PublishTestCase):
 
 
 class PreviousProfileTests(PublishTestCase):
-    def test_http_404_means_no_first_profile(self):
-        error = urllib.error.HTTPError(
-            "https://example.invalid/clash.yaml",
-            404,
-            "Not Found",
+    @staticmethod
+    def http_error(request, code: int) -> urllib.error.HTTPError:
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        return urllib.error.HTTPError(
+            url,
+            code,
+            "Not Found" if code == 404 else "Server Error",
             {},
             io.BytesIO(b""),
         )
+
+    def test_confirmed_missing_branch_is_first_publish_without_fetching_raw_urls(self):
         with patch(
-            "scripts.cnb_gmgn_publish.urllib.request.urlopen", side_effect=error
-        ):
-            previous = load_previous_profile("https://example.invalid/clash.yaml")
+            "scripts.cnb_gmgn_publish.urllib.request.urlopen"
+        ) as urlopen:
+            previous = load_previous_profile(
+                "https://example.invalid/clash.yaml",
+                "https://example.invalid/status.json",
+                previous_publication_exists=False,
+            )
 
         self.assertFalse(previous["exists"])
         self.assertEqual(previous["published_count"], 0)
+        urlopen.assert_not_called()
+
+    def test_existing_branch_404_is_fail_closed_immediately(self):
+        def missing(request, timeout=None):
+            raise self.http_error(request, 404)
+
+        with patch(
+            "scripts.cnb_gmgn_publish.urllib.request.urlopen",
+            side_effect=missing,
+        ) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "output branch exists"):
+                load_previous_profile(
+                    "https://example.invalid/clash.yaml",
+                    "https://example.invalid/status.json",
+                    previous_publication_exists=True,
+                )
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_one_sided_404_is_fail_closed(self):
+        def inconsistent(request, timeout=None):
+            if "clash.yaml" in request.full_url:
+                raise self.http_error(request, 404)
+            return io.BytesIO(b"{}")
+
+        with patch(
+            "scripts.cnb_gmgn_publish.urllib.request.urlopen",
+            side_effect=inconsistent,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "output branch exists"):
+                load_previous_profile(
+                    "https://example.invalid/clash.yaml",
+                    "https://example.invalid/status.json",
+                    previous_publication_exists=True,
+                )
 
     def test_non_404_network_failure_is_fail_closed(self):
-        error = urllib.error.HTTPError(
-            "https://example.invalid/clash.yaml",
-            500,
-            "Server Error",
-            {},
-            io.BytesIO(b""),
-        )
+        def failure(request, timeout=None):
+            raise self.http_error(request, 500)
+
         with patch(
-            "scripts.cnb_gmgn_publish.urllib.request.urlopen", side_effect=error
+            "scripts.cnb_gmgn_publish.urllib.request.urlopen", side_effect=failure
         ):
             with self.assertRaisesRegex(RuntimeError, "HTTP 500"):
-                load_previous_profile("https://example.invalid/clash.yaml")
+                load_previous_profile(
+                    "https://example.invalid/clash.yaml",
+                    "https://example.invalid/status.json",
+                    previous_publication_exists=True,
+                )
 
     def test_corrupt_previous_profile_is_rejected(self):
         with self.temporary_directory() as directory:
-            path = Path(directory) / "broken.yaml"
-            path.write_text("proxies: [", encoding="utf-8")
+            root = Path(directory)
+            path = root / "broken.yaml"
+            content = b"proxies: ["
+            path.write_bytes(content)
+            status_path = root / "status.json"
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "cnb-gmgn-publish-status",
+                        "schema_version": 1,
+                        "published_count": 1,
+                        "profile_sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             with self.assertRaisesRegex(RuntimeError, "invalid YAML"):
-                load_previous_profile(str(path))
+                load_previous_profile(
+                    str(path),
+                    str(status_path),
+                    previous_publication_exists=True,
+                )
+
+    def test_previous_profile_sha_mismatch_is_fail_closed(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            profile_path = root / "previous.yaml"
+            status_path = self.write_previous_profile(
+                profile_path,
+                [proxy("previous", asia=True, index=1)],
+            )
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["profile_sha256"] = "0" * 64
+            status_path.write_text(json.dumps(status), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "SHA-256 does not match"):
+                load_previous_profile(
+                    str(profile_path),
+                    str(status_path),
+                    previous_publication_exists=True,
+                )
+
+    def test_previous_profile_count_mismatch_is_fail_closed(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            profile_path = root / "previous.yaml"
+            status_path = self.write_previous_profile(
+                profile_path,
+                [proxy("previous", asia=True, index=1)],
+            )
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["published_count"] = 2
+            status_path.write_text(json.dumps(status), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "count does not match"):
+                load_previous_profile(
+                    str(profile_path),
+                    str(status_path),
+                    previous_publication_exists=True,
+                )
+
+    def test_previous_profile_and_status_must_be_configured_together(self):
+        with self.assertRaisesRegex(RuntimeError, "requires both"):
+            load_previous_profile(
+                "https://example.invalid/clash.yaml",
+                "",
+                previous_publication_exists=True,
+            )
 
 
 class PublicationTests(PublishTestCase):
@@ -575,7 +750,9 @@ class PublicationTests(PublishTestCase):
                 for index in range(30)
             ]
             previous_path = root / "previous.yaml"
-            self.write_previous_profile(previous_path, previous_proxies)
+            previous_status_path = self.write_previous_profile(
+                previous_path, previous_proxies
+            )
             items = [
                 candidate(
                     f"current-{index}",
@@ -596,6 +773,7 @@ class PublicationTests(PublishTestCase):
                         fragments,
                         root / "output",
                         previous_profile=str(previous_path),
+                        previous_status=str(previous_status_path),
                     )
                 )
 
@@ -627,7 +805,9 @@ class PublicationTests(PublishTestCase):
             manifest, fragments = self.write_bundle(root, items)
             old_proxy = proxy("old-gstatic-only", asia=False, index=999)
             previous_path = root / "previous.yaml"
-            self.write_previous_profile(previous_path, [old_proxy])
+            previous_status_path = self.write_previous_profile(
+                previous_path, [old_proxy]
+            )
             output = root / "output"
 
             self.assertEqual(
@@ -637,6 +817,7 @@ class PublicationTests(PublishTestCase):
                         fragments,
                         output,
                         previous_profile=str(previous_path),
+                        previous_status=str(previous_status_path),
                     )
                 ),
                 0,
@@ -690,7 +871,7 @@ class PublicationTests(PublishTestCase):
             items = [retained, *other_items]
             manifest, fragments = self.write_bundle(root, items)
             previous_path = root / "previous.yaml"
-            self.write_previous_profile(
+            previous_status_path = self.write_previous_profile(
                 previous_path,
                 [retained["proxy"]],
                 stable_names=[retained["source_name"]],
@@ -703,6 +884,7 @@ class PublicationTests(PublishTestCase):
                     fragments,
                     output,
                     previous_profile=str(previous_path),
+                    previous_status=str(previous_status_path),
                 )
             )
 

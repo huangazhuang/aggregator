@@ -354,6 +354,7 @@ main:
             set -eu
             python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.2
             chmod +x clash/clash-linux-amd
+            umask 077
             mkdir -p \
               .cnb-runtime/gmgn-shadow/selection \
               public-cn-shadow/fragments \
@@ -384,6 +385,7 @@ main:
               timeout: 120m
               script: |
                 set -eu
+                umask 077
                 python3 -m scripts.cnb_gmgn_shadow probe \
                   --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
                   --shard-index 0 \
@@ -391,12 +393,14 @@ main:
                   --work-dir .cnb-runtime/gmgn-shadow/run-0 \
                   --output public-cn-shadow/fragments/shard-0.json \
                   --selection-output .cnb-runtime/gmgn-shadow/selection/shard-0.json \
+                  --private-output-root .cnb-runtime/gmgn-shadow/selection \
                   --controller-port 19090 \
                   --mixed-port 17890
             shard-1:
               timeout: 120m
               script: |
                 set -eu
+                umask 077
                 python3 -m scripts.cnb_gmgn_shadow probe \
                   --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
                   --shard-index 1 \
@@ -404,12 +408,14 @@ main:
                   --work-dir .cnb-runtime/gmgn-shadow/run-1 \
                   --output public-cn-shadow/fragments/shard-1.json \
                   --selection-output .cnb-runtime/gmgn-shadow/selection/shard-1.json \
+                  --private-output-root .cnb-runtime/gmgn-shadow/selection \
                   --controller-port 19091 \
                   --mixed-port 17891
             shard-2:
               timeout: 120m
               script: |
                 set -eu
+                umask 077
                 python3 -m scripts.cnb_gmgn_shadow probe \
                   --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
                   --shard-index 2 \
@@ -417,12 +423,14 @@ main:
                   --work-dir .cnb-runtime/gmgn-shadow/run-2 \
                   --output public-cn-shadow/fragments/shard-2.json \
                   --selection-output .cnb-runtime/gmgn-shadow/selection/shard-2.json \
+                  --private-output-root .cnb-runtime/gmgn-shadow/selection \
                   --controller-port 19092 \
                   --mixed-port 17892
             shard-3:
               timeout: 120m
               script: |
                 set -eu
+                umask 077
                 python3 -m scripts.cnb_gmgn_shadow probe \
                   --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
                   --shard-index 3 \
@@ -430,6 +438,7 @@ main:
                   --work-dir .cnb-runtime/gmgn-shadow/run-3 \
                   --output public-cn-shadow/fragments/shard-3.json \
                   --selection-output .cnb-runtime/gmgn-shadow/selection/shard-3.json \
+                  --private-output-root .cnb-runtime/gmgn-shadow/selection \
                   --controller-port 19093 \
                   --mixed-port 17893
 
@@ -481,10 +490,32 @@ main:
           timeout: 5m
           script: |
             set -eu
+            test -n "${CNB_TOKEN:-}"
             test -n "${CNB_REPO_SLUG:-}"
             web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
+            remote_url="${web_endpoint}/${CNB_REPO_SLUG}.git"
+            askpass="$(pwd)/scripts/cnb_git_askpass.sh"
+            chmod +x "${askpass}"
+            previous_branch_ref="refs/heads/${GMGN_OUTPUT_BRANCH}"
+            previous_branch_result=".cnb-runtime/gmgn-shadow/previous-gmgn-branch.txt"
+            if GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
+              git ls-remote --exit-code "${remote_url}" "${previous_branch_ref}" \
+                > "${previous_branch_result}"; then
+              previous_publication_exists=true
+            else
+              branch_check_status=$?
+              if [ "${branch_check_status}" -eq 2 ]; then
+                previous_publication_exists=false
+              else
+                printf 'Cannot determine whether %s exists (git ls-remote exit %s).\n' \
+                  "${previous_branch_ref}" "${branch_check_status}" >&2
+                exit "${branch_check_status}"
+              fi
+            fi
             profile_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${GMGN_OUTPUT_BRANCH}/clash.yaml"
-            previous_profile_url="${profile_url}?cnb_previous=$(date +%s)"
+            previous_cache_key="$(date +%s)"
+            previous_profile_url="${profile_url}?cnb_previous=${previous_cache_key}"
+            previous_status_url="${web_endpoint}/${CNB_REPO_SLUG}/-/git/raw/${GMGN_OUTPUT_BRANCH}/status.json?cnb_previous=${previous_cache_key}"
             python3 -m scripts.cnb_gmgn_publish \
               --manifest .cnb-runtime/gmgn-shadow/prepared/manifest.json \
               --fragments \
@@ -494,6 +525,8 @@ main:
                 .cnb-runtime/gmgn-shadow/selection/shard-3.json \
               --output-dir public-cn-gmgn \
               --previous-profile "${previous_profile_url}" \
+              --previous-status "${previous_status_url}" \
+              --previous-publication-exists "${previous_publication_exists}" \
               --profile-url "${profile_url}"
             python3 -m json.tool public-cn-gmgn/status.json
             mkdir -p .cnb-runtime/gmgn-shadow/final-check

@@ -16,6 +16,7 @@ import json
 import math
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -56,6 +57,8 @@ SELECTION_FRAGMENT_FIELDS = frozenset(
     }
 )
 PUBLISH_SCHEMA_VERSION = 1
+FORMAL_MANIFEST_KIND = "cnb-gmgn-shadow-manifest"
+FORMAL_MANIFEST_SCHEMA_VERSION = 2
 REQUIRED_SHARD_COUNT = 4
 TOTAL_ROUNDS = 20
 QUALIFIED_DELAY_MS = 1000
@@ -84,10 +87,14 @@ BLOCK_FIELD_NAMES = (
     "within_limit_count_rounds_11_15",
     "within_limit_count_rounds_16_20",
 )
-ALLOWED_MANIFEST_KINDS = {
-    "cnb-gmgn-shadow-manifest",
-    "cnb-gmgn-selection-manifest",
-}
+RUNNER_FIELDS = frozenset(
+    {
+        "runner_country",
+        "runner_region",
+        "runner_org",
+        "runner_geo_provider",
+    }
+)
 
 
 def utc_now() -> str:
@@ -140,6 +147,17 @@ def finite_number(value: Any, label: str) -> float:
     if not math.isfinite(number):
         raise RuntimeError(f"{label} must be a finite number")
     return number
+
+
+def boolean_argument(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
 
 
 def proxy_fingerprint(proxy: dict[str, Any]) -> str:
@@ -290,9 +308,9 @@ def validate_proxy(raw_proxy: Any, *, shard_index: int) -> dict[str, Any]:
 
 
 def validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    if manifest.get("kind") not in ALLOWED_MANIFEST_KINDS:
+    if manifest.get("kind") != FORMAL_MANIFEST_KIND:
         raise RuntimeError("unsupported GMGN manifest kind")
-    if non_negative_int(manifest.get("schema_version"), "manifest schema_version") < 1:
+    if manifest.get("schema_version") != FORMAL_MANIFEST_SCHEMA_VERSION:
         raise RuntimeError("unsupported GMGN manifest schema")
     if non_negative_int(manifest.get("shard_count"), "shard_count") != REQUIRED_SHARD_COUNT:
         raise RuntimeError("formal GMGN publication requires exactly four shards")
@@ -313,6 +331,12 @@ def validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     for field in ("run_id", "main_sha", "source_sha256"):
         if not str(manifest.get(field) or "").strip():
             raise RuntimeError(f"manifest is missing {field}")
+
+    runner = manifest.get("runner")
+    if not isinstance(runner, dict) or frozenset(runner) != RUNNER_FIELDS:
+        raise RuntimeError("manifest runner metadata is incomplete or unexpected")
+    if not all(isinstance(runner[field], str) for field in RUNNER_FIELDS):
+        raise RuntimeError("manifest runner metadata must contain strings")
 
     raw_shards = manifest.get("shards")
     if not isinstance(raw_shards, list) or len(raw_shards) != REQUIRED_SHARD_COUNT:
@@ -432,45 +456,110 @@ def load_selection_candidates(
     return manifest, candidates
 
 
-def _read_previous_profile(source: str) -> bytes | None:
-    if not source:
-        return None
+def _cache_busted_previous_source(source: str) -> str:
+    if not source.startswith(("http://", "https://")):
+        return source
+    separator = "&" if "?" in source else "?"
+    nonce = str(time.time_ns())
+    return f"{source}{separator}previous_publication_check={nonce}"
+
+
+def _read_previous_resource(
+    source: str,
+    *,
+    label: str,
+) -> bytes:
+    checked_source = _cache_busted_previous_source(source)
     if source.startswith(("http://", "https://")):
         request = urllib.request.Request(
-            source, headers={"User-Agent": "aggregator-cnb-gmgn-publish/1.0"}
+            checked_source,
+            headers={
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "User-Agent": "aggregator-cnb-gmgn-publish/1.0",
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                return None
+                raise RuntimeError(
+                    f"previous GMGN {label} is missing although the output branch exists; "
+                    "refusing publication"
+                ) from exc
             raise RuntimeError(
-                f"cannot load previous GMGN profile: HTTP {exc.code}"
+                f"cannot load previous GMGN {label}: HTTP {exc.code}"
             ) from exc
         except Exception as exc:
-            raise RuntimeError(f"cannot load previous GMGN profile: {exc}") from exc
+            raise RuntimeError(f"cannot load previous GMGN {label}: {exc}") from exc
 
-    path = Path(source).resolve()
+    path = Path(checked_source).resolve()
     if not path.is_file():
-        raise RuntimeError(f"previous GMGN profile does not exist: {path}")
+        raise RuntimeError(
+            f"previous GMGN {label} is missing although the output branch exists: {path}"
+        )
     try:
         return path.read_bytes()
     except Exception as exc:
-        raise RuntimeError(f"cannot read previous GMGN profile: {exc}") from exc
+        raise RuntimeError(f"cannot read previous GMGN {label}: {exc}") from exc
 
 
-def load_previous_profile(source: str) -> dict[str, Any]:
-    content = _read_previous_profile(source)
-    if content is None:
-        return {
-            "exists": False,
-            "published_count": 0,
-            "stable_fingerprints": set(),
-            "observation_fingerprints": set(),
-        }
+def empty_previous_profile() -> dict[str, Any]:
+    return {
+        "exists": False,
+        "published_count": 0,
+        "stable_fingerprints": set(),
+        "observation_fingerprints": set(),
+    }
+
+
+def load_previous_profile(
+    profile_source: str,
+    status_source: str,
+    *,
+    previous_publication_exists: bool,
+) -> dict[str, Any]:
+    if not isinstance(previous_publication_exists, bool):
+        raise RuntimeError("previous publication existence must be a boolean")
+    if not previous_publication_exists:
+        return empty_previous_profile()
+    if not profile_source or not status_source:
+        raise RuntimeError(
+            "existing GMGN publication requires both previous profile and status sources"
+        )
+
+    status_content = _read_previous_resource(status_source, label="status")
+    profile_content = _read_previous_resource(profile_source, label="profile")
+
     try:
-        profile = yaml.safe_load(content.decode("utf-8", errors="strict"))
+        previous_status = json.loads(status_content.decode("utf-8", errors="strict"))
+    except Exception as exc:
+        raise RuntimeError(f"previous GMGN status is invalid JSON: {exc}") from exc
+    if not isinstance(previous_status, dict):
+        raise RuntimeError("previous GMGN status must be a JSON object")
+    if previous_status.get("kind") != "cnb-gmgn-publish-status":
+        raise RuntimeError("previous GMGN status has an unsupported kind")
+    if previous_status.get("schema_version") != PUBLISH_SCHEMA_VERSION:
+        raise RuntimeError("previous GMGN status has an unsupported schema")
+    expected_profile_sha256 = str(
+        previous_status.get("profile_sha256") or ""
+    ).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_profile_sha256):
+        raise RuntimeError("previous GMGN status has a malformed profile SHA-256")
+    actual_profile_sha256 = hashlib.sha256(profile_content).hexdigest()
+    if actual_profile_sha256 != expected_profile_sha256:
+        raise RuntimeError(
+            "previous GMGN profile SHA-256 does not match its status; refusing publication"
+        )
+    expected_published_count = non_negative_int(
+        previous_status.get("published_count"), "previous published_count"
+    )
+    if expected_published_count < 1:
+        raise RuntimeError("previous GMGN status contains no published proxies")
+
+    try:
+        profile = yaml.safe_load(profile_content.decode("utf-8", errors="strict"))
     except Exception as exc:
         raise RuntimeError(f"previous GMGN profile is invalid YAML: {exc}") from exc
     if not isinstance(profile, dict):
@@ -483,6 +572,10 @@ def load_previous_profile(source: str) -> dict[str, Any]:
         raise RuntimeError("previous GMGN profile contains no valid proxies")
     if not isinstance(groups, list):
         raise RuntimeError("previous GMGN profile contains no proxy groups")
+    if len(proxies) != expected_published_count:
+        raise RuntimeError(
+            "previous GMGN profile proxy count does not match its status; refusing publication"
+        )
 
     proxies_by_name: dict[str, dict[str, Any]] = {}
     for proxy in proxies:
@@ -520,7 +613,7 @@ def load_previous_profile(source: str) -> dict[str, Any]:
 
     return {
         "exists": True,
-        "published_count": len(proxies),
+        "published_count": expected_published_count,
         "stable_fingerprints": member_fingerprints(GROUP_STABLE),
         "observation_fingerprints": member_fingerprints(GROUP_OBSERVATION),
     }
@@ -754,7 +847,13 @@ def publish_gmgn(args: argparse.Namespace) -> int:
         Path(args.manifest).resolve(),
         [Path(path).resolve() for path in args.fragments],
     )
-    previous = load_previous_profile(str(getattr(args, "previous_profile", "") or ""))
+    previous = load_previous_profile(
+        str(getattr(args, "previous_profile", "") or ""),
+        str(getattr(args, "previous_status", "") or ""),
+        previous_publication_exists=getattr(
+            args, "previous_publication_exists", None
+        ),
+    )
     selection = select_candidates(candidates, previous, max_nodes=MAX_NODES)
     previous_count = int(previous["published_count"])
     required_count = max(
@@ -871,6 +970,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fragments", nargs="+", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--previous-profile", default="")
+    parser.add_argument("--previous-status", default="")
+    parser.add_argument(
+        "--previous-publication-exists",
+        required=True,
+        type=boolean_argument,
+        metavar="true|false",
+    )
     parser.add_argument("--profile-url", default="")
     return parser
 

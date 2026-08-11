@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 import secrets
 import statistics
@@ -48,6 +49,7 @@ from scripts.pipeline_utils import dump_clash_yaml, normalize_reality_short_ids
 
 SHADOW_SCHEMA_VERSION = 2
 SELECTION_FRAGMENT_SCHEMA_VERSION = 1
+FORMAL_TOTAL_ROUNDS = 20
 DEFAULT_THRESHOLDS = (20, 18, 16, 14, 12, 10)
 REGION_CLASSIFICATION = "source-label heuristic; egress region not verified"
 WITHIN_LIMIT_BLOCK_FIELDS = (
@@ -113,6 +115,70 @@ SHADOW_FRAGMENT_FIELDS = frozenset(
         "results",
     }
 )
+SHADOW_MANIFEST_FIELDS = frozenset(
+    {
+        "kind",
+        "schema_version",
+        "run_id",
+        "prepared_at",
+        "main_sha",
+        "source_run_at",
+        "source_sha256",
+        "source_age_seconds",
+        "source_count",
+        "source_asia_count",
+        "rejected_reality_count",
+        "target_url",
+        "expected_status",
+        "request_timeout_ms",
+        "qualified_delay_ms",
+        "total_rounds",
+        "round_gap_seconds",
+        "shard_count",
+        "workers_per_shard",
+        "estimated_worst_case_seconds",
+        "runner",
+        "shards",
+    }
+)
+SHADOW_MANIFEST_SHARD_FIELDS = frozenset(
+    {
+        "shard_index",
+        "proxy_count",
+        "preferred_asia_count",
+        "profile_file",
+        "profile_sha256",
+    }
+)
+SHADOW_RUNNER_FIELDS = frozenset(
+    {
+        "runner_country",
+        "runner_region",
+        "runner_org",
+        "runner_geo_provider",
+    }
+)
+SELECTION_FRAGMENT_FIELDS = frozenset(
+    {
+        "kind",
+        "schema_version",
+        "run_id",
+        "main_sha",
+        "source_sha256",
+        "target_url",
+        "expected_status",
+        "request_timeout_ms",
+        "qualified_delay_ms",
+        "total_rounds",
+        "shard_count",
+        "shard_index",
+        "shard_profile_sha256",
+        "proxy_count",
+        "preferred_asia_count",
+        "results",
+    }
+)
+SELECTION_RESULT_FIELDS = frozenset({"proxy", "summary"})
 
 
 def utc_now() -> str:
@@ -129,14 +195,28 @@ def file_sha256(path: Path) -> str:
 
 def write_json_atomic(path: Path, payload: Any, *, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    if mode is not None:
-        temporary.chmod(mode)
-    temporary.replace(path)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    create_mode = mode if mode is not None else 0o666
+    descriptor = os.open(temporary, flags, create_mode)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is not None:
+            temporary.chmod(mode)
+        temporary.replace(path)
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def write_text_atomic(path: Path, content: str) -> None:
@@ -379,6 +459,28 @@ def verify_mihomo_health(
     raise RuntimeError(f"Mihomo controller became unavailable: {last_error}")
 
 
+def wait_for_shadow_mihomo(
+    controller: str,
+    process: subprocess.Popen[Any],
+    log_path: Path,
+) -> None:
+    """Wait for startup without ever copying the private Mihomo log to stdout."""
+
+    try:
+        wait_for_mihomo(controller, process, log_path)
+    except Exception:
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"Mihomo exited during private shadow startup (code {exit_code}); "
+                "startup log contents were suppressed"
+            ) from None
+        raise RuntimeError(
+            "Mihomo private shadow API did not become ready; "
+            "startup log contents were suppressed"
+        ) from None
+
+
 def summarize_shadow_record(
     record: dict[str, Any], qualified_delay_ms: int, *, node_id: str | None = None
 ) -> dict[str, Any]:
@@ -528,6 +630,18 @@ def validate_prepare_settings(args: argparse.Namespace) -> None:
         total_rounds=args.total_rounds,
         shard_count=args.shard_count,
     )
+    if args.total_rounds != FORMAL_TOTAL_ROUNDS:
+        raise ValueError(
+            f"formal GMGN shadow runs require exactly {FORMAL_TOTAL_ROUNDS} rounds"
+        )
+    if not re.fullmatch(r"[0-9a-f]{40}", str(args.main_sha or ""), flags=re.I):
+        raise ValueError("main SHA must be a 40-character hexadecimal commit ID")
+    if args.target_url != "https://gmgn.ai/":
+        raise ValueError("formal GMGN target must be https://gmgn.ai/")
+    if args.expected_status != 200:
+        raise ValueError("formal GMGN expected status must be 200")
+    if args.request_timeout_ms != 3000 or args.qualified_delay_ms != 1000:
+        raise ValueError("formal GMGN delay settings must be 3000ms/1000ms")
     if not 100 <= args.expected_status <= 599:
         raise ValueError("expected HTTP status must be between 100 and 599")
     if args.source_max_age_seconds < 1:
@@ -640,6 +754,7 @@ def prepare_shadow(args: argparse.Namespace) -> int:
         "runner": redacted_runner_network(discover_runner_network()),
         "shards": shard_metadata,
     }
+    validate_shadow_manifest(manifest)
     manifest_path = output_dir / "manifest.json"
     write_json_atomic(manifest_path, manifest)
     print(
@@ -651,10 +766,126 @@ def prepare_shadow(args: argparse.Namespace) -> int:
 
 
 def load_json_mapping(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"cannot load JSON object from {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"{path} must contain a JSON object")
     return payload
+
+
+def validate_shadow_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate the complete pinned manifest before any shard file is opened."""
+
+    if manifest.get("kind") != "cnb-gmgn-shadow-manifest":
+        raise RuntimeError("unsupported shadow manifest")
+    if manifest.get("schema_version") != SHADOW_SCHEMA_VERSION:
+        raise RuntimeError("unsupported shadow manifest schema")
+    if frozenset(manifest) != SHADOW_MANIFEST_FIELDS:
+        raise RuntimeError("shadow manifest fields are incomplete or unexpected")
+    if not re.fullmatch(r"shadow_[0-9a-f]{32}", str(manifest.get("run_id", ""))):
+        raise RuntimeError("shadow manifest run_id is malformed")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("main_sha", "")), flags=re.I):
+        raise RuntimeError("shadow manifest main_sha is malformed")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get("source_sha256", ""))):
+        raise RuntimeError("shadow manifest source_sha256 is malformed")
+    for field in ("prepared_at", "source_run_at"):
+        try:
+            parse_run_at(manifest.get(field))
+        except Exception as exc:
+            raise RuntimeError(f"shadow manifest {field} is malformed") from exc
+    source_age = manifest.get("source_age_seconds")
+    if isinstance(source_age, bool) or not isinstance(source_age, int) or source_age < -300:
+        raise RuntimeError("shadow manifest source_age_seconds is invalid")
+
+    request_timeout_ms = non_negative_int(
+        manifest.get("request_timeout_ms"), "request_timeout_ms"
+    )
+    qualified_delay_ms = non_negative_int(
+        manifest.get("qualified_delay_ms"), "qualified_delay_ms"
+    )
+    total_rounds = non_negative_int(manifest.get("total_rounds"), "total_rounds")
+    shard_count = non_negative_int(manifest.get("shard_count"), "shard_count")
+    validate_common_settings(
+        request_timeout_ms=request_timeout_ms,
+        qualified_delay_ms=qualified_delay_ms,
+        total_rounds=total_rounds,
+        shard_count=shard_count,
+    )
+    if total_rounds != FORMAL_TOTAL_ROUNDS:
+        raise RuntimeError(
+            f"formal GMGN shadow manifests require exactly {FORMAL_TOTAL_ROUNDS} rounds"
+        )
+    if str(manifest.get("target_url")) != "https://gmgn.ai/":
+        raise RuntimeError("shadow manifest target_url must be https://gmgn.ai/")
+    if non_negative_int(manifest.get("expected_status"), "expected_status") != 200:
+        raise RuntimeError("shadow manifest expected_status must be 200")
+    if request_timeout_ms != 3000 or qualified_delay_ms != 1000:
+        raise RuntimeError("shadow manifest delay settings must be 3000ms/1000ms")
+    workers = non_negative_int(manifest.get("workers_per_shard"), "workers_per_shard")
+    if workers < 1:
+        raise RuntimeError("shadow manifest workers_per_shard must be at least 1")
+    round_gap = finite_number(manifest.get("round_gap_seconds"), "round_gap_seconds")
+    if round_gap < 0:
+        raise RuntimeError("shadow manifest round gap cannot be negative")
+    estimate = finite_number(
+        manifest.get("estimated_worst_case_seconds"),
+        "estimated_worst_case_seconds",
+    )
+    if estimate < 0:
+        raise RuntimeError("shadow manifest estimated duration cannot be negative")
+
+    source_count = non_negative_int(manifest.get("source_count"), "source_count")
+    source_asia_count = non_negative_int(
+        manifest.get("source_asia_count"), "source_asia_count"
+    )
+    non_negative_int(
+        manifest.get("rejected_reality_count"), "rejected_reality_count"
+    )
+    if source_count < 1 or source_asia_count > source_count:
+        raise RuntimeError("shadow manifest source counts are invalid")
+
+    runner = manifest.get("runner")
+    if not isinstance(runner, dict) or frozenset(runner) != SHADOW_RUNNER_FIELDS:
+        raise RuntimeError("shadow manifest runner metadata is incomplete or unexpected")
+    if not all(isinstance(runner[field], str) for field in SHADOW_RUNNER_FIELDS):
+        raise RuntimeError("shadow manifest runner metadata must contain strings")
+
+    raw_shards = manifest.get("shards")
+    if not isinstance(raw_shards, list) or len(raw_shards) != shard_count:
+        raise RuntimeError("shadow manifest shard metadata is incomplete")
+    shards: list[dict[str, Any]] = []
+    for raw_shard in raw_shards:
+        if not isinstance(raw_shard, dict) or frozenset(raw_shard) != SHADOW_MANIFEST_SHARD_FIELDS:
+            raise RuntimeError("shadow manifest shard fields are incomplete or unexpected")
+        shard = dict(raw_shard)
+        index = non_negative_int(shard.get("shard_index"), "shard_index")
+        proxy_count = non_negative_int(shard.get("proxy_count"), "proxy_count")
+        preferred_asia_count = non_negative_int(
+            shard.get("preferred_asia_count"), "preferred_asia_count"
+        )
+        if proxy_count < 1 or preferred_asia_count > proxy_count:
+            raise RuntimeError(f"shadow manifest shard {index} counts are invalid")
+        profile_file = str(shard.get("profile_file") or "")
+        profile_path = Path(profile_file)
+        if (
+            not profile_file
+            or profile_path.is_absolute()
+            or ".." in profile_path.parts
+        ):
+            raise RuntimeError(f"shadow manifest shard {index} profile path is unsafe")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(shard.get("profile_sha256", ""))):
+            raise RuntimeError(f"shadow manifest shard {index} profile SHA-256 is malformed")
+        shards.append(shard)
+    shards.sort(key=lambda item: int(item["shard_index"]))
+    if [int(item["shard_index"]) for item in shards] != list(range(shard_count)):
+        raise RuntimeError("shadow manifest shard indices are incomplete or duplicated")
+    if sum(int(item["proxy_count"]) for item in shards) != source_count:
+        raise RuntimeError("shadow manifest shard counts do not match the source count")
+    if sum(int(item["preferred_asia_count"]) for item in shards) != source_asia_count:
+        raise RuntimeError("shadow manifest shard Asia counts do not match the source count")
+    return shards
 
 
 def manifest_shard(manifest: dict[str, Any], shard_index: int) -> dict[str, Any]:
@@ -669,13 +900,34 @@ def validate_tcp_port(value: int, label: str) -> None:
         raise ValueError(f"{label} must be between 1 and 65535")
 
 
+def validate_private_output_paths(
+    redacted_output: Path,
+    selection_output: Path,
+    private_output_root: Path,
+) -> None:
+    root_parts = {part.lower() for part in private_output_root.parts}
+    if ".cnb-runtime" not in root_parts:
+        raise RuntimeError("private output root must contain a .cnb-runtime component")
+    if any(part == ".git" or part.startswith("public-cn") for part in root_parts):
+        raise RuntimeError("private output root cannot use .git or public-cn* components")
+
+    try:
+        selection_relative = selection_output.relative_to(private_output_root)
+    except ValueError as exc:
+        raise RuntimeError("selection output must be inside the private output root") from exc
+    if not selection_relative.parts:
+        raise RuntimeError("selection output must be a file inside the private output root")
+    try:
+        redacted_output.relative_to(private_output_root)
+    except ValueError:
+        return
+    raise RuntimeError("redacted output cannot be inside the private output root")
+
+
 def probe_shadow_shard(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest).resolve()
     manifest = load_json_mapping(manifest_path)
-    if manifest.get("kind") != "cnb-gmgn-shadow-manifest":
-        raise RuntimeError("unsupported shadow manifest")
-    if manifest.get("schema_version") != SHADOW_SCHEMA_VERSION:
-        raise RuntimeError("unsupported shadow manifest schema")
+    validate_shadow_manifest(manifest)
     shard = manifest_shard(manifest, args.shard_index)
     shard_profile = (manifest_path.parent / str(shard["profile_file"])).resolve()
     if file_sha256(shard_profile) != str(shard.get("profile_sha256") or ""):
@@ -712,8 +964,17 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
     selection_output_path = (
         Path(selection_output_value).resolve() if selection_output_value else None
     )
-    if selection_output_path == output_path:
-        raise RuntimeError("selection output must differ from the redacted fragment output")
+    private_output_root_value = str(
+        getattr(args, "private_output_root", "") or ""
+    )
+    if selection_output_path is not None:
+        if not private_output_root_value:
+            raise RuntimeError("selection output requires --private-output-root")
+        validate_private_output_paths(
+            output_path,
+            selection_output_path,
+            Path(private_output_root_value).resolve(),
+        )
     work_dir.mkdir(parents=True, exist_ok=True)
     controller = f"127.0.0.1:{args.controller_port}"
     runtime_profile = {
@@ -743,7 +1004,7 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
             stderr=subprocess.STDOUT,
         )
         try:
-            wait_for_mihomo(controller, process, runtime_log)
+            wait_for_shadow_mihomo(controller, process, runtime_log)
             trends = run_shadow_rounds(
                 controller,
                 proxies,
@@ -809,6 +1070,7 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
         "error_counts": aggregate_error_counts(records.values()),
         "results": results,
     }
+    validate_fragment(manifest, fragment, shard)
     write_json_atomic(output_path, fragment)
     if selection_output_path is not None:
         selection_fragment = {
@@ -837,6 +1099,7 @@ def probe_shadow_shard(args: argparse.Namespace) -> int:
                 for proxy in proxies
             ],
         }
+        validate_selection_fragment(manifest, selection_fragment, shard)
         write_json_atomic(selection_output_path, selection_fragment, mode=0o600)
     print(
         f"Completed GMGN shadow shard {args.shard_index}: {len(proxies)} proxies in "
@@ -1155,6 +1418,92 @@ def validate_fragment(
         raise RuntimeError(f"shard {shard_index} error counts do not match no-result total")
 
 
+def validate_selection_fragment(
+    manifest: dict[str, Any],
+    fragment: dict[str, Any],
+    expected_shard: dict[str, Any],
+) -> None:
+    """Validate private proxy identities without changing the publisher schema."""
+
+    validate_shadow_manifest(manifest)
+    shard_index = int(expected_shard["shard_index"])
+    if frozenset(fragment) != SELECTION_FRAGMENT_FIELDS:
+        raise RuntimeError(
+            f"selection shard {shard_index} fields are incomplete or unexpected"
+        )
+    expected = {
+        "kind": "cnb-gmgn-selection-fragment",
+        "schema_version": SELECTION_FRAGMENT_SCHEMA_VERSION,
+        "run_id": manifest["run_id"],
+        "main_sha": manifest["main_sha"],
+        "source_sha256": manifest["source_sha256"],
+        "target_url": manifest["target_url"],
+        "expected_status": manifest["expected_status"],
+        "request_timeout_ms": manifest["request_timeout_ms"],
+        "qualified_delay_ms": manifest["qualified_delay_ms"],
+        "total_rounds": manifest["total_rounds"],
+        "shard_count": manifest["shard_count"],
+        "shard_index": expected_shard["shard_index"],
+        "shard_profile_sha256": expected_shard["profile_sha256"],
+        "proxy_count": expected_shard["proxy_count"],
+        "preferred_asia_count": expected_shard["preferred_asia_count"],
+    }
+    for field, value in expected.items():
+        if fragment.get(field) != value:
+            raise RuntimeError(
+                f"selection shard {shard_index} field {field} mismatch: "
+                f"expected {value!r}, got {fragment.get(field)!r}"
+            )
+
+    raw_results = fragment.get("results")
+    if not isinstance(raw_results, list) or len(raw_results) != int(
+        expected_shard["proxy_count"]
+    ):
+        raise RuntimeError(f"selection shard {shard_index} result count mismatch")
+    names: set[str] = set()
+    node_ids: set[str] = set()
+    identities: set[tuple[str, str]] = set()
+    preferred_asia_count = 0
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict) or frozenset(raw_result) != SELECTION_RESULT_FIELDS:
+            raise RuntimeError(
+                f"selection shard {shard_index} result fields are incomplete or unexpected"
+            )
+        proxy = raw_result.get("proxy")
+        summary = raw_result.get("summary")
+        if not isinstance(proxy, dict):
+            raise RuntimeError(f"selection shard {shard_index} proxy must be an object")
+        name = str(proxy.get("name") or "").strip()
+        if not name or name in names:
+            raise RuntimeError(
+                f"selection shard {shard_index} contains missing or duplicate proxy names"
+            )
+        names.add(name)
+        validate_shadow_result(
+            summary,
+            shard_index=shard_index,
+            total_rounds=int(manifest["total_rounds"]),
+            qualified_delay_ms=int(manifest["qualified_delay_ms"]),
+        )
+        node_id = str(summary["node_id"])
+        if node_id in node_ids:
+            raise RuntimeError(f"selection shard {shard_index} contains duplicate node IDs")
+        node_ids.add(node_id)
+        fingerprint = proxy_fingerprint(proxy)
+        identity = (name, fingerprint)
+        if identity in identities:
+            raise RuntimeError(f"selection shard {shard_index} contains duplicate identities")
+        identities.add(identity)
+        preferred_asia = bool(is_preferred_asian_proxy(proxy))
+        if bool(summary["preferred_asia"]) != preferred_asia:
+            raise RuntimeError(
+                f"selection shard {shard_index} Asia classification disagrees with its proxy"
+            )
+        preferred_asia_count += int(preferred_asia)
+    if preferred_asia_count != int(expected_shard["preferred_asia_count"]):
+        raise RuntimeError(f"selection shard {shard_index} preferred Asia count mismatch")
+
+
 def build_shadow_readme(status: dict[str, Any], results_url: str) -> str:
     thresholds = status["within_limit_threshold_counts"]
     lines = [
@@ -1186,34 +1535,7 @@ def build_shadow_readme(status: dict[str, Any], results_url: str) -> str:
 def merge_shadow(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest).resolve()
     manifest = load_json_mapping(manifest_path)
-    if manifest.get("kind") != "cnb-gmgn-shadow-manifest":
-        raise RuntimeError("unsupported shadow manifest")
-    if manifest.get("schema_version") != SHADOW_SCHEMA_VERSION:
-        raise RuntimeError("unsupported shadow manifest schema")
-    validate_common_settings(
-        request_timeout_ms=int(manifest["request_timeout_ms"]),
-        qualified_delay_ms=int(manifest["qualified_delay_ms"]),
-        total_rounds=int(manifest["total_rounds"]),
-        shard_count=int(manifest["shard_count"]),
-    )
-    expected_shards = sorted(
-        (dict(item) for item in manifest.get("shards", [])),
-        key=lambda item: int(item["shard_index"]),
-    )
-    if len(expected_shards) != int(manifest.get("shard_count", 0)):
-        raise RuntimeError("manifest shard metadata is incomplete")
-    shard_indices = [int(item.get("shard_index", -1)) for item in expected_shards]
-    if shard_indices != list(range(len(expected_shards))):
-        raise RuntimeError("manifest shard indices are incomplete or duplicated")
-    if sum(non_negative_int(item.get("proxy_count"), "proxy_count") for item in expected_shards) != int(
-        manifest["source_count"]
-    ):
-        raise RuntimeError("manifest shard proxy counts do not match the source count")
-    if sum(
-        non_negative_int(item.get("preferred_asia_count"), "preferred_asia_count")
-        for item in expected_shards
-    ) != int(manifest["source_asia_count"]):
-        raise RuntimeError("manifest shard Asia counts do not match the source count")
+    expected_shards = validate_shadow_manifest(manifest)
     fragment_paths = [Path(path).resolve() for path in args.fragments]
     if len(fragment_paths) != len(expected_shards):
         raise RuntimeError("the number of fragments does not match the manifest")
@@ -1221,7 +1543,13 @@ def merge_shadow(args: argparse.Namespace) -> int:
     by_index: dict[int, dict[str, Any]] = {}
     for path in fragment_paths:
         fragment = load_json_mapping(path)
-        index = int(fragment.get("shard_index", -1))
+        if fragment.get("kind") != "cnb-gmgn-shadow-fragment":
+            raise RuntimeError(f"unsupported shadow fragment: {path}")
+        if fragment.get("schema_version") != SHADOW_SCHEMA_VERSION:
+            raise RuntimeError(f"unsupported shadow fragment schema: {path}")
+        if frozenset(fragment) != SHADOW_FRAGMENT_FIELDS:
+            raise RuntimeError(f"shadow fragment fields are incomplete or unexpected: {path}")
+        index = non_negative_int(fragment.get("shard_index"), "shard_index")
         if index in by_index:
             raise RuntimeError(f"duplicate fragment for shard {index}")
         by_index[index] = fragment
@@ -1354,6 +1682,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--work-dir", required=True)
     probe.add_argument("--output", required=True)
     probe.add_argument("--selection-output", default="")
+    probe.add_argument("--private-output-root", default="")
     probe.add_argument("--controller-port", type=int, required=True)
     probe.add_argument("--mixed-port", type=int, required=True)
     probe.set_defaults(handler=probe_shadow_shard)

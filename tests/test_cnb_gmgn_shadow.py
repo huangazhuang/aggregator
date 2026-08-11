@@ -1,4 +1,5 @@
 import argparse
+import copy
 import io
 import json
 import os
@@ -12,7 +13,9 @@ from pathlib import Path
 import yaml
 
 from scripts.cnb_gmgn_shadow import (
+    FORMAL_TOTAL_ROUNDS,
     SELECTION_FRAGMENT_SCHEMA_VERSION,
+    SELECTION_RESULT_FIELDS,
     SHADOW_SCHEMA_VERSION,
     build_parser,
     check_shadow_proxy,
@@ -29,8 +32,66 @@ from scripts.cnb_gmgn_shadow import (
     summarize_shadow_record,
     threshold_counts,
     validate_common_settings,
+    validate_prepare_settings,
+    validate_private_output_paths,
+    validate_selection_fragment,
+    validate_shadow_manifest,
+    wait_for_shadow_mihomo,
+    write_json_atomic,
     probe_shadow_shard,
 )
+
+
+TEST_RUN_ID = "shadow_" + "1" * 32
+TEST_MAIN_SHA = "a" * 40
+TEST_SOURCE_SHA = "b" * 64
+TEST_SHARD_SHA = "c" * 64
+
+
+def formal_manifest(shards: list[dict], *, total_rounds: int = 20) -> dict:
+    return {
+        "kind": "cnb-gmgn-shadow-manifest",
+        "schema_version": SHADOW_SCHEMA_VERSION,
+        "run_id": TEST_RUN_ID,
+        "prepared_at": "2026-08-10T00:05:00Z",
+        "main_sha": TEST_MAIN_SHA,
+        "source_run_at": "2026-08-10T00:00:00Z",
+        "source_sha256": TEST_SOURCE_SHA,
+        "source_age_seconds": 300,
+        "source_count": sum(int(shard["proxy_count"]) for shard in shards),
+        "source_asia_count": sum(
+            int(shard["preferred_asia_count"]) for shard in shards
+        ),
+        "rejected_reality_count": 0,
+        "target_url": "https://gmgn.ai/",
+        "expected_status": 200,
+        "request_timeout_ms": 3000,
+        "qualified_delay_ms": 1000,
+        "total_rounds": total_rounds,
+        "round_gap_seconds": 0.75,
+        "shard_count": len(shards),
+        "workers_per_shard": 1,
+        "estimated_worst_case_seconds": 100.0,
+        "runner": {
+            "runner_country": "China",
+            "runner_region": "Shanghai",
+            "runner_org": "example",
+            "runner_geo_provider": "test",
+        },
+        "shards": shards,
+    }
+
+
+def one_success_round_trends(success_round: int = 20) -> list[dict]:
+    return [
+        {
+            "round": round_index,
+            "within_limit_count": int(round_index == success_round),
+            "slow_response_count": 0,
+            "no_result_count": int(round_index != success_round),
+        }
+        for round_index in range(1, 21)
+    ]
 
 
 class ShadowMetricTests(unittest.TestCase):
@@ -123,6 +184,56 @@ class ShadowMetricTests(unittest.TestCase):
                 shard_count=4,
             )
 
+    def test_formal_prepare_rejects_nineteen_and_twenty_one_rounds(self):
+        for total_rounds in (19, 21):
+            with self.subTest(total_rounds=total_rounds):
+                args = argparse.Namespace(
+                    request_timeout_ms=3000,
+                    qualified_delay_ms=1000,
+                    total_rounds=total_rounds,
+                    shard_count=4,
+                    main_sha="a" * 40,
+                    target_url="https://gmgn.ai/",
+                    expected_status=200,
+                    source_max_age_seconds=36000,
+                    source_freshness_wait_seconds=0,
+                    source_freshness_poll_seconds=60,
+                    round_gap=0.75,
+                    workers_per_shard=16,
+                    max_estimated_probe_seconds=0,
+                )
+
+                with self.assertRaisesRegex(ValueError, "exactly 20 rounds"):
+                    validate_prepare_settings(args)
+
+    def test_formal_prepare_rejects_non_production_target_settings(self):
+        base = dict(
+            request_timeout_ms=3000,
+            qualified_delay_ms=1000,
+            total_rounds=20,
+            shard_count=4,
+            main_sha="a" * 40,
+            target_url="https://gmgn.ai/",
+            expected_status=200,
+            source_max_age_seconds=36000,
+            source_freshness_wait_seconds=0,
+            source_freshness_poll_seconds=60,
+            round_gap=0.75,
+            workers_per_shard=16,
+            max_estimated_probe_seconds=0,
+        )
+        for field, value in (
+            ("target_url", "https://example.com/"),
+            ("expected_status", 204),
+            ("request_timeout_ms", 2000),
+            ("qualified_delay_ms", 999),
+        ):
+            with self.subTest(field=field):
+                values = dict(base)
+                values[field] = value
+                with self.assertRaisesRegex(ValueError, "formal GMGN"):
+                    validate_prepare_settings(argparse.Namespace(**values))
+
     def test_controller_504_is_timeout_and_target_status_is_preserved(self):
         self.assertEqual(classify_error("Gateway Timeout", 504), "timeout")
         self.assertEqual(
@@ -184,6 +295,53 @@ class ShadowMetricTests(unittest.TestCase):
                     process=Process(),
                     shard_index=0,
                 )
+
+
+class ShadowPrivacyTests(unittest.TestCase):
+    def temporary_directory(self):
+        preferred = os.environ.get("AGGREGATOR_TEST_TMPDIR")
+        if preferred:
+            Path(preferred).mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(dir=preferred or None)
+
+    def test_private_atomic_json_is_created_with_restrictive_mode(self):
+        with self.temporary_directory() as directory:
+            path = Path(directory) / "private.json"
+            with patch(
+                "scripts.cnb_gmgn_shadow.os.open", wraps=os.open
+            ) as secure_open:
+                write_json_atomic(path, {"secret": "value"}, mode=0o600)
+
+            _temporary, flags, create_mode = secure_open.call_args.args
+            self.assertEqual(create_mode, 0o600)
+            self.assertTrue(flags & os.O_EXCL)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_private_startup_failure_never_echoes_mihomo_log_tail(self):
+        class Process:
+            returncode = 9
+
+            def poll(self):
+                return self.returncode
+
+        with patch(
+            "scripts.cnb_gmgn_shadow.wait_for_mihomo",
+            side_effect=RuntimeError(
+                "Mihomo exited: node=Japan-secret password=private-password"
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                wait_for_shadow_mihomo(
+                    "127.0.0.1:19090",
+                    Process(),
+                    Path("private-mihomo.log"),
+                )
+
+        message = str(raised.exception)
+        self.assertIn("contents were suppressed", message)
+        self.assertNotIn("Japan-secret", message)
+        self.assertNotIn("private-password", message)
 
 
 class ShadowPartitionTests(unittest.TestCase):
@@ -285,6 +443,8 @@ class ShadowProbeTests(unittest.TestCase):
                 "public.json",
                 "--selection-output",
                 "private.json",
+                "--private-output-root",
+                ".cnb-runtime/private",
                 "--controller-port",
                 "19090",
                 "--mixed-port",
@@ -293,6 +453,7 @@ class ShadowProbeTests(unittest.TestCase):
         )
 
         self.assertEqual(args.selection_output, "private.json")
+        self.assertEqual(args.private_output_root, ".cnb-runtime/private")
 
     def test_probe_rejects_an_old_manifest_schema_before_loading_a_shard(self):
         with self.temporary_directory() as directory:
@@ -310,6 +471,105 @@ class ShadowProbeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "manifest schema"):
                 probe_shadow_shard(args)
+
+    def test_probe_strictly_validates_manifest_before_loading_a_shard(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            manifest = formal_manifest(
+                [
+                    {
+                        "shard_index": 0,
+                        "proxy_count": 1,
+                        "preferred_asia_count": 0,
+                        "profile_file": "missing-shard.yaml",
+                        "profile_sha256": TEST_SHARD_SHA,
+                    }
+                ]
+            )
+            del manifest["runner"]
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "manifest fields"):
+                probe_shadow_shard(
+                    argparse.Namespace(manifest=str(manifest_path), shard_index=0)
+                )
+
+    def test_probe_rejects_non_twenty_round_manifests_before_shard_io(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            for total_rounds in (19, 21):
+                with self.subTest(total_rounds=total_rounds):
+                    manifest = formal_manifest(
+                        [
+                            {
+                                "shard_index": 0,
+                                "proxy_count": 1,
+                                "preferred_asia_count": 0,
+                                "profile_file": "missing-shard.yaml",
+                                "profile_sha256": TEST_SHARD_SHA,
+                            }
+                        ],
+                        total_rounds=total_rounds,
+                    )
+                    manifest_path = root / f"manifest-{total_rounds}.json"
+                    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+                    with self.assertRaisesRegex(RuntimeError, "exactly 20 rounds"):
+                        probe_shadow_shard(
+                            argparse.Namespace(
+                                manifest=str(manifest_path), shard_index=0
+                            )
+                        )
+
+    def test_private_output_root_rejects_public_git_and_escape_paths(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory).resolve()
+            valid_private = root / ".cnb-runtime" / "gmgn-shadow" / "selection"
+            redacted = root / "public-cn-shadow" / "fragment.json"
+            selection = valid_private / "selection.json"
+            validate_private_output_paths(redacted, selection, valid_private)
+
+            cases = (
+                (
+                    redacted,
+                    root / "private" / "selection.json",
+                    root / "private",
+                    r"\.cnb-runtime",
+                ),
+                (
+                    redacted,
+                    root / ".cnb-runtime" / "public-cn-secret" / "selection.json",
+                    root / ".cnb-runtime" / "public-cn-secret",
+                    "public-cn",
+                ),
+                (
+                    redacted,
+                    root / ".git" / ".cnb-runtime" / "selection.json",
+                    root / ".git" / ".cnb-runtime",
+                    r"\.git",
+                ),
+                (
+                    redacted,
+                    root / "outside.json",
+                    valid_private,
+                    "inside the private output root",
+                ),
+                (
+                    valid_private / "public-fragment.json",
+                    selection,
+                    valid_private,
+                    "redacted output",
+                ),
+            )
+            for public_path, private_path, private_root, message in cases:
+                with self.subTest(message=message):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        validate_private_output_paths(
+                            public_path.resolve(),
+                            private_path.resolve(),
+                            private_root.resolve(),
+                        )
 
     def test_probe_writes_private_proxy_selection_separately_from_redacted_fragment(self):
         with self.temporary_directory() as directory:
@@ -330,21 +590,8 @@ class ShadowProbeTests(unittest.TestCase):
                 yaml.safe_dump({"proxies": [proxy]}, allow_unicode=True, sort_keys=False),
                 encoding="utf-8",
             )
-            manifest = {
-                "kind": "cnb-gmgn-shadow-manifest",
-                "schema_version": SHADOW_SCHEMA_VERSION,
-                "run_id": "shadow_private_test",
-                "main_sha": "main-sha",
-                "source_sha256": "source-sha",
-                "target_url": "https://gmgn.ai/",
-                "expected_status": 200,
-                "request_timeout_ms": 3000,
-                "qualified_delay_ms": 1000,
-                "total_rounds": 2,
-                "round_gap_seconds": 0,
-                "shard_count": 1,
-                "workers_per_shard": 1,
-                "shards": [
+            manifest = formal_manifest(
+                [
                     {
                         "shard_index": 0,
                         "proxy_count": 1,
@@ -352,14 +599,16 @@ class ShadowProbeTests(unittest.TestCase):
                         "profile_file": "shards/shard-0.yaml",
                         "profile_sha256": file_sha256(shard_path),
                     }
-                ],
-            }
+                ]
+            )
+            manifest["round_gap_seconds"] = 0
             manifest_path = root / "manifest.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             mihomo = root / "mihomo"
             mihomo.write_text("", encoding="utf-8")
             public_path = root / "redacted-fragment.json"
-            private_path = root / "selection-fragment.json"
+            private_root = root / ".cnb-runtime" / "gmgn-shadow" / "selection"
+            private_path = private_root / "selection-fragment.json"
 
             class Process:
                 returncode = None
@@ -378,22 +627,9 @@ class ShadowProbeTests(unittest.TestCase):
 
             def fake_rounds(_controller, _proxies, records, **_kwargs):
                 record = records["private-node"]
-                record["samples_ms"] = [80, None]
-                record["error_counts"] = {"timeout": 1}
-                return [
-                    {
-                        "round": 1,
-                        "within_limit_count": 1,
-                        "slow_response_count": 0,
-                        "no_result_count": 0,
-                    },
-                    {
-                        "round": 2,
-                        "within_limit_count": 0,
-                        "slow_response_count": 0,
-                        "no_result_count": 1,
-                    },
-                ]
+                record["samples_ms"] = [80, *([None] * 19)]
+                record["error_counts"] = {"timeout": 19}
+                return one_success_round_trends(success_round=1)
 
             args = argparse.Namespace(
                 manifest=str(manifest_path),
@@ -402,12 +638,17 @@ class ShadowProbeTests(unittest.TestCase):
                 work_dir=str(root / "work"),
                 output=str(public_path),
                 selection_output=str(private_path),
+                private_output_root=str(private_root),
                 controller_port=19090,
                 mixed_port=17890,
             )
+            missing_private_root = copy.copy(args)
+            missing_private_root.private_output_root = ""
+            with self.assertRaisesRegex(RuntimeError, "requires --private-output-root"):
+                probe_shadow_shard(missing_private_root)
             with (
                 patch("scripts.cnb_gmgn_shadow.subprocess.Popen", return_value=Process()),
-                patch("scripts.cnb_gmgn_shadow.wait_for_mihomo"),
+                patch("scripts.cnb_gmgn_shadow.wait_for_shadow_mihomo"),
                 patch("scripts.cnb_gmgn_shadow.run_shadow_rounds", side_effect=fake_rounds),
                 patch("scripts.cnb_gmgn_shadow.verify_mihomo_health"),
             ):
@@ -459,14 +700,14 @@ class ShadowProbeTests(unittest.TestCase):
             self.assertEqual(
                 private_payload["schema_version"], SELECTION_FRAGMENT_SCHEMA_VERSION
             )
-            self.assertEqual(private_payload["run_id"], "shadow_private_test")
-            self.assertEqual(private_payload["main_sha"], "main-sha")
-            self.assertEqual(private_payload["source_sha256"], "source-sha")
+            self.assertEqual(private_payload["run_id"], TEST_RUN_ID)
+            self.assertEqual(private_payload["main_sha"], TEST_MAIN_SHA)
+            self.assertEqual(private_payload["source_sha256"], TEST_SOURCE_SHA)
             self.assertEqual(private_payload["target_url"], "https://gmgn.ai/")
             self.assertEqual(private_payload["expected_status"], 200)
             self.assertEqual(private_payload["request_timeout_ms"], 3000)
             self.assertEqual(private_payload["qualified_delay_ms"], 1000)
-            self.assertEqual(private_payload["total_rounds"], 2)
+            self.assertEqual(private_payload["total_rounds"], 20)
             self.assertEqual(private_payload["shard_count"], 1)
             self.assertEqual(private_payload["shard_index"], 0)
             self.assertEqual(
@@ -480,6 +721,27 @@ class ShadowProbeTests(unittest.TestCase):
             self.assertEqual(selection["proxy"]["password"], "private-password")
             self.assertEqual(selection["proxy"]["uuid"], "private-uuid")
             self.assertEqual(selection["summary"], public_payload["results"][0])
+            self.assertEqual(set(selection), SELECTION_RESULT_FIELDS)
+            self.assertRegex(selection["summary"]["node_id"], r"^n1_[0-9a-f]{24}$")
+
+            mutations = []
+            extra_identity = copy.deepcopy(private_payload)
+            extra_identity["results"][0]["source_name"] = "must-not-change-schema"
+            mutations.append((extra_identity, "result fields"))
+            missing_name = copy.deepcopy(private_payload)
+            missing_name["results"][0]["proxy"]["name"] = ""
+            mutations.append((missing_name, "proxy names"))
+            malformed_node_id = copy.deepcopy(private_payload)
+            malformed_node_id["results"][0]["summary"]["node_id"] = "private-node"
+            mutations.append((malformed_node_id, "malformed node ID"))
+            for mutated, message in mutations:
+                with self.subTest(message=message):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        validate_selection_fragment(
+                            manifest,
+                            mutated,
+                            manifest["shards"][0],
+                        )
 
 
 class ShadowWorkflowTests(unittest.TestCase):
@@ -503,12 +765,16 @@ class ShadowWorkflowTests(unittest.TestCase):
         self.assertNotIn("SHADOW_SHARDS", shadow["env"])
         self.assertEqual(shadow["stages"][0]["timeout"], "30m")
         prepare_script = str(shadow["stages"][0]["script"])
+        self.assertEqual(prepare_script.count("umask 077"), 1)
         self.assertIn("--shard-count 4", prepare_script)
         self.assertIn("--source-freshness-wait-seconds", prepare_script)
         self.assertIn("--max-estimated-probe-seconds", prepare_script)
         jobs = shadow["stages"][1]["jobs"]
         self.assertEqual(set(jobs), {"shard-0", "shard-1", "shard-2", "shard-3"})
         self.assertTrue(all(job["timeout"] == "120m" for job in jobs.values()))
+        self.assertTrue(
+            all(str(job["script"]).count("umask 077") == 1 for job in jobs.values())
+        )
         scripts = "\n".join(str(job["script"]) for job in jobs.values())
         for port in (19090, 19091, 19092, 19093, 17890, 17891, 17892, 17893):
             self.assertEqual(scripts.count(str(port)), 1)
@@ -519,6 +785,12 @@ class ShadowWorkflowTests(unittest.TestCase):
                 ),
                 1,
             )
+        self.assertEqual(
+            scripts.count(
+                "--private-output-root .cnb-runtime/gmgn-shadow/selection"
+            ),
+            4,
+        )
 
         stages = {stage["name"]: stage for stage in shadow["stages"]}
         build = str(stages["Build the independent GMGN priority profile"]["script"])
@@ -526,7 +798,16 @@ class ShadowWorkflowTests(unittest.TestCase):
         shadow_publish = str(stages["Publish the isolated GMGN shadow report"]["script"])
         self.assertIn("python3 -m scripts.cnb_gmgn_publish", build)
         self.assertIn("--previous-profile", build)
-        self.assertIn("?cnb_previous=$(date +%s)", build)
+        self.assertIn('previous_cache_key="$(date +%s)"', build)
+        self.assertIn(
+            'previous_profile_url="${profile_url}?cnb_previous=${previous_cache_key}"',
+            build,
+        )
+        self.assertIn("--previous-status", build)
+        self.assertIn("git ls-remote --exit-code", build)
+        self.assertIn('"refs/heads/${GMGN_OUTPUT_BRANCH}"', build)
+        self.assertIn("branch_check_status", build)
+        self.assertIn("--previous-publication-exists", build)
         self.assertIn("clash/clash-linux-amd -t", build)
         self.assertIn("-f public-cn-gmgn/clash.yaml", build)
         for index in range(4):
@@ -538,6 +819,25 @@ class ShadowWorkflowTests(unittest.TestCase):
         self.assertNotIn("gmgn-shadow-results.json", publish)
         self.assertNotIn(".cnb-runtime/gmgn-shadow/selection", shadow_publish)
         self.assertNotIn("clash.yaml", shadow_publish)
+
+    def test_generated_cnb_workspaces_are_ignored_from_main_repository(self):
+        repository_root = Path(__file__).resolve().parents[1]
+        ignore_rules = {
+            line.strip()
+            for line in (repository_root / ".gitignore").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+
+        self.assertTrue(
+            {
+                "/.cnb-runtime/",
+                "/public-cn/",
+                "/public-cn-shadow/",
+                "/public-cn-gmgn/",
+            }.issubset(ignore_rules)
+        )
 
     def test_shadow_tag_trigger_resolves_to_the_isolated_pipeline(self):
         repository_root = Path(__file__).resolve().parents[1]
@@ -569,93 +869,56 @@ class ShadowMergeTests(unittest.TestCase):
 
     @staticmethod
     def manifest() -> dict:
-        return {
-            "kind": "cnb-gmgn-shadow-manifest",
-            "schema_version": SHADOW_SCHEMA_VERSION,
-            "run_id": "shadow_test",
-            "main_sha": "main-sha",
-            "source_run_at": "2026-08-10T00:00:00Z",
-            "source_sha256": "source-sha",
-            "target_url": "https://gmgn.ai/",
-            "expected_status": 200,
-            "request_timeout_ms": 3000,
-            "qualified_delay_ms": 1000,
-            "total_rounds": 2,
-            "round_gap_seconds": 0.75,
-            "shard_count": 1,
-            "workers_per_shard": 1,
-            "estimated_worst_case_seconds": 100,
-            "source_count": 1,
-            "source_asia_count": 1,
-            "runner": {
-                "runner_public_ip": "203.0.113.10",
-                "runner_country": "China",
-                "runner_region": "Shanghai",
-                "runner_org": "example",
-                "runner_geo_provider": "test",
-            },
-            "shards": [
+        return formal_manifest(
+            [
                 {
                     "shard_index": 0,
                     "proxy_count": 1,
                     "preferred_asia_count": 1,
                     "profile_file": "shards/shard-0.yaml",
-                    "profile_sha256": "shard-sha",
+                    "profile_sha256": TEST_SHARD_SHA,
                 }
-            ],
-        }
+            ]
+        )
 
     @staticmethod
     def fragment() -> dict:
         return {
             "kind": "cnb-gmgn-shadow-fragment",
             "schema_version": SHADOW_SCHEMA_VERSION,
-            "run_id": "shadow_test",
-            "main_sha": "main-sha",
-            "source_sha256": "source-sha",
+            "run_id": TEST_RUN_ID,
+            "main_sha": TEST_MAIN_SHA,
+            "source_sha256": TEST_SOURCE_SHA,
             "target_url": "https://gmgn.ai/",
             "expected_status": 200,
             "request_timeout_ms": 3000,
             "qualified_delay_ms": 1000,
-            "total_rounds": 2,
+            "total_rounds": 20,
             "shard_count": 1,
             "shard_index": 0,
-            "shard_profile_sha256": "shard-sha",
+            "shard_profile_sha256": TEST_SHARD_SHA,
             "proxy_count": 1,
             "preferred_asia_count": 1,
             "duration_seconds": 1.0,
-            "round_trends": [
-                {
-                    "round": 1,
-                    "within_limit_count": 0,
-                    "slow_response_count": 0,
-                    "no_result_count": 1,
-                },
-                {
-                    "round": 2,
-                    "within_limit_count": 1,
-                    "slow_response_count": 0,
-                    "no_result_count": 0,
-                },
-            ],
-            "error_counts": {"timeout": 1},
+            "round_trends": one_success_round_trends(),
+            "error_counts": {"timeout": 19},
             "results": [
                 {
                     "node_id": "n1_000000000000000000000003",
                     "preferred_asia": True,
-                    "attempts": 2,
+                    "attempts": 20,
                     "response_count": 1,
                     "within_limit_count": 1,
                     "first_half_within_limit_count": 0,
                     "second_half_within_limit_count": 1,
-                    "within_limit_count_rounds_1_5": 1,
+                    "within_limit_count_rounds_1_5": 0,
                     "within_limit_count_rounds_6_10": 0,
                     "within_limit_count_rounds_11_15": 0,
-                    "within_limit_count_rounds_16_20": 0,
+                    "within_limit_count_rounds_16_20": 1,
                     "slow_response_count": 0,
-                    "no_result_count": 1,
-                    "response_rate": 0.5,
-                    "within_limit_rate": 0.5,
+                    "no_result_count": 19,
+                    "response_rate": 0.05,
+                    "within_limit_rate": 0.05,
                     "min_delay_ms": 80,
                     "median_delay_ms": 80,
                     "p90_delay_ms": 80,
@@ -678,6 +941,44 @@ class ShadowMergeTests(unittest.TestCase):
             )
 
             with self.assertRaises(RuntimeError):
+                merge_shadow(args)
+
+    def test_merge_rejects_non_twenty_round_manifest_before_fragments(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            for total_rounds in (19, 21):
+                with self.subTest(total_rounds=total_rounds):
+                    manifest = self.manifest()
+                    manifest["total_rounds"] = total_rounds
+                    manifest_path = root / f"manifest-{total_rounds}.json"
+                    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                    args = argparse.Namespace(
+                        manifest=str(manifest_path),
+                        fragments=[],
+                        output_dir=str(root / "output"),
+                        results_url="",
+                    )
+
+                    with self.assertRaisesRegex(RuntimeError, "exactly 20 rounds"):
+                        merge_shadow(args)
+
+    def test_merge_rejects_fragment_schema_before_result_processing(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            fragment = self.fragment()
+            fragment["schema_version"] = SHADOW_SCHEMA_VERSION - 1
+            manifest_path = root / "manifest.json"
+            fragment_path = root / "fragment.json"
+            manifest_path.write_text(json.dumps(self.manifest()), encoding="utf-8")
+            fragment_path.write_text(json.dumps(fragment), encoding="utf-8")
+            args = argparse.Namespace(
+                manifest=str(manifest_path),
+                fragments=[str(fragment_path)],
+                output_dir=str(root / "output"),
+                results_url="",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "fragment schema"):
                 merge_shadow(args)
 
     def test_complete_merge_emits_only_redacted_node_data(self):
@@ -713,7 +1014,7 @@ class ShadowMergeTests(unittest.TestCase):
             self.assertEqual(
                 payload["results"][0]["second_half_within_limit_count"], 1
             )
-            self.assertEqual(payload["round_trends"][1]["within_limit_count"], 1)
+            self.assertEqual(payload["round_trends"][19]["within_limit_count"], 1)
 
     def test_merge_rejects_incomplete_or_unredacted_node_result(self):
         for mutation in ("incomplete", "secret-field", "inconsistent-window"):
@@ -763,20 +1064,7 @@ class ShadowMergeTests(unittest.TestCase):
         with self.temporary_directory() as directory:
             root = Path(directory)
             fragment = self.fragment()
-            fragment["round_trends"] = [
-                {
-                    "round": 1,
-                    "within_limit_count": 1,
-                    "slow_response_count": 0,
-                    "no_result_count": 0,
-                },
-                {
-                    "round": 2,
-                    "within_limit_count": 0,
-                    "slow_response_count": 0,
-                    "no_result_count": 1,
-                },
-            ]
+            fragment["round_trends"] = one_success_round_trends(success_round=1)
             manifest_path = root / "manifest.json"
             fragment_path = root / "fragment.json"
             manifest_path.write_text(json.dumps(self.manifest()), encoding="utf-8")
@@ -791,12 +1079,31 @@ class ShadowMergeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "half-window totals"):
                 merge_shadow(args)
 
+    def test_merge_rejects_block_windows_that_disagree_with_round_trends(self):
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            fragment = self.fragment()
+            fragment["round_trends"] = one_success_round_trends(success_round=11)
+            manifest_path = root / "manifest.json"
+            fragment_path = root / "fragment.json"
+            manifest_path.write_text(json.dumps(self.manifest()), encoding="utf-8")
+            fragment_path.write_text(json.dumps(fragment), encoding="utf-8")
+            args = argparse.Namespace(
+                manifest=str(manifest_path),
+                fragments=[str(fragment_path)],
+                output_dir=str(root / "output"),
+                results_url="",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "five-round block totals"):
+                merge_shadow(args)
+
     def test_round_trends_merge_by_round_number(self):
         fragments = [self.fragment(), self.fragment()]
-        merged = merge_round_trends(fragments, 2)
+        merged = merge_round_trends(fragments, 20)
 
         self.assertEqual(merged[0]["no_result_count"], 2)
-        self.assertEqual(merged[1]["within_limit_count"], 2)
+        self.assertEqual(merged[19]["within_limit_count"], 2)
 
 
 if __name__ == "__main__":
