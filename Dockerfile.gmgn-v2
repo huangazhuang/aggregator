@@ -9,6 +9,8 @@ ENV PYTHONPATH=/opt/aggregator \
     PYTHONUNBUFFERED=1
 
 COPY scripts/ /opt/aggregator/scripts/
+COPY subscribe/__init__.py /opt/aggregator/subscribe/__init__.py
+COPY subscribe/asia.py /opt/aggregator/subscribe/asia.py
 COPY tests/fixtures/gmgn_identity_v1.json /opt/aggregator/tests/fixtures/gmgn_identity_v1.json
 COPY clash/clash-linux-amd /opt/aggregator/clash/clash-linux-amd
 

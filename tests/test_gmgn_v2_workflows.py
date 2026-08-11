@@ -29,6 +29,12 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
             ROOT / "scripts/gmgn_processed_state.py"
         ).read_text(encoding="utf-8")
         cls.setup_text = (ROOT / "CNB_SETUP.md").read_text(encoding="utf-8")
+        cls.dockerfile_text = (ROOT / "Dockerfile.gmgn-v2").read_text(
+            encoding="utf-8"
+        )
+        cls.dockerignore_text = (
+            ROOT / "Dockerfile.gmgn-v2.dockerignore"
+        ).read_text(encoding="utf-8")
 
     def test_manual_v2_trigger_is_default_off_and_requires_full_source_sha(self) -> None:
         dispatch = self.sync[True]["workflow_dispatch"]["inputs"]
@@ -137,6 +143,27 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("--network none", serialized)
         self.assertNotIn("GMGN_IDENTITY_HMAC_KEY", serialized)
         self.assertNotIn("CNB_TOKEN", serialized)
+
+    def test_v2_child_image_includes_only_the_required_subscribe_runtime(self) -> None:
+        self.assertEqual(
+            [
+                line
+                for line in self.dockerfile_text.splitlines()
+                if line.startswith("COPY subscribe/")
+            ],
+            [
+                "COPY subscribe/__init__.py /opt/aggregator/subscribe/__init__.py",
+                "COPY subscribe/asia.py /opt/aggregator/subscribe/asia.py",
+            ],
+        )
+        self.assertEqual(
+            [
+                line
+                for line in self.dockerignore_text.splitlines()
+                if line.startswith("!subscribe")
+            ],
+            ["!subscribe/", "!subscribe/__init__.py", "!subscribe/asia.py"],
+        )
 
 
 if __name__ == "__main__":
