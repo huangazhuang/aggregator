@@ -21,6 +21,10 @@ from scripts.asia_source_registry import (
     fetch_source_revision,
     source_spec,
 )
+from scripts.candidate_snapshot import (
+    CandidateSnapshotError,
+    validate_legacy_candidate_baseline,
+)
 from scripts.proxy_identity import IdentitySettings, validate_public_id
 
 
@@ -232,8 +236,15 @@ def build_report(
             current_metadata,
             current_metadata_bytes,
         )
-    elif not allow_legacy_current:
-        raise EvaluationError("current candidate metadata is required")
+    else:
+        if not allow_legacy_current:
+            raise EvaluationError("current candidate metadata is required")
+        try:
+            validate_legacy_candidate_baseline(current_profile_bytes, current_status)
+        except CandidateSnapshotError as exc:
+            raise EvaluationError(
+                "current snapshot is neither complete candidate V2 nor valid legacy V1"
+            ) from exc
 
     report = evaluate_source_gain(
         source_key,

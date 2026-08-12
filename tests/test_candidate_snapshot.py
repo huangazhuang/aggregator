@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
@@ -16,6 +17,7 @@ from scripts.candidate_snapshot import (
     evaluate_candidate_publish_gate,
     prepare_candidate_identity_input,
     validate_candidate_snapshot,
+    validate_legacy_candidate_baseline,
     write_candidate_snapshot,
 )
 from scripts.candidate_sources import (
@@ -93,6 +95,28 @@ def staging(
         previous_metadata=previous.metadata if previous else None,
         resolver=public_resolver,
     )
+
+
+def legacy_profile_bytes(nodes: list[dict], groups: list[dict] | None = None) -> bytes:
+    profile = {"proxies": nodes}
+    if groups is not None:
+        profile["proxy-groups"] = groups
+    return yaml.safe_dump(profile, allow_unicode=True, sort_keys=False).encode("utf-8")
+
+
+def legacy_status(profile_bytes: bytes, *, protected_asia_count: int | None = None) -> dict:
+    value = {
+        "run_at": RUN0,
+        "mode": "collect",
+        "alive_check": "true",
+        "proxy_count": len(yaml.safe_load(profile_bytes)["proxies"]),
+        "profile_url": "https://example.invalid/clash.yaml",
+        "profile_sha256": hashlib.sha256(profile_bytes).hexdigest(),
+        "main_sha": MAIN_SHA,
+    }
+    if protected_asia_count is not None:
+        value["protected_asia_count"] = protected_asia_count
+    return value
 
 
 class CandidateEndpointSafetyTests(unittest.TestCase):
@@ -227,6 +251,241 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
         metadata = snapshot.ordered_candidates[0].metadata
         self.assertEqual(metadata["aliases"], [])
         self.assertNotIn("fake-secret", json.dumps(snapshot.metadata))
+
+
+class CandidateLegacyBootstrapTests(unittest.TestCase):
+    def test_valid_legacy_profile_is_a_counts_only_retention_baseline(self) -> None:
+        old_jp = proxy("JP legacy", "old-jp.example", "old-secret")
+        old_global = proxy("legacy global", "old-global.example", "old-global-secret")
+        old_bytes = legacy_profile_bytes(
+            [old_jp, old_global],
+            [{"name": "legacy-select", "type": "select", "proxies": ["JP legacy", "DIRECT"]}],
+        )
+        baseline = validate_legacy_candidate_baseline(
+            old_bytes,
+            legacy_status(old_bytes, protected_asia_count=1),
+        )
+        self.assertEqual(baseline["state"], "legacy_v1")
+        self.assertEqual(baseline["candidate_count"], 2)
+        self.assertEqual(baseline["protected_asia_count"], 1)
+        self.assertEqual(baseline["region_hint_counts"]["JP"], 1)
+        self.assertEqual(baseline["profile_sha256"], hashlib.sha256(old_bytes).hexdigest())
+
+        new_jp = proxy("JP current", "new-jp.example", "new-secret")
+        new_global = proxy("current global", "new-global.example", "new-global-secret")
+        source = task("current", "https://raw.githubusercontent.com/acme/current/main/sub.yaml")
+        sources, records = provenance_for_task(
+            source,
+            [new_jp, new_global],
+            observed_at="2026-08-02T00:00:00Z",
+        )
+        identity_input = prepare_candidate_identity_input(
+            legacy_profile_bytes([new_jp, new_global]),
+            {"sources": sources, "records": records},
+            run_at="2026-08-02T00:00:00Z",
+            mode="collect",
+            main_sha="b" * 40,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="legacy_v1",
+            previous_status=legacy_status(old_bytes, protected_asia_count=1),
+            previous_profile_bytes=old_bytes,
+            resolver=public_resolver,
+        )
+        self.assertIsNone(identity_input["previous_profile"])
+        self.assertIsNone(identity_input["previous_status"])
+        self.assertIsNone(identity_input["previous_metadata"])
+        self.assertEqual(identity_input["previous_baseline"], baseline)
+        self.assertNotIn("old-secret", json.dumps(identity_input))
+        snapshot = build_candidate_snapshot(identity_input, settings=IDENTITY)
+
+        self.assertEqual(
+            snapshot.status["previous"],
+            {name: baseline[name] for name in ("state", "snapshot_id", "candidate_count", "protected_asia_count", "region_hint_counts")},
+        )
+        self.assertEqual(snapshot.status["changes"]["candidate_count"], 0)
+        aliases = [alias for entry in snapshot.ordered_candidates for alias in entry.metadata["aliases"]]
+        self.assertNotIn("JP legacy", aliases)
+        self.assertNotIn("legacy global", aliases)
+        self.assertTrue(all(entry.metadata["first_seen_at"] == "2026-08-02T00:00:00Z" for entry in snapshot.ordered_candidates))
+        self.assertTrue(all(item["health_state"] == "healthy" for item in snapshot.metadata["sources"].values()))
+
+    def test_legacy_status_without_asia_count_recomputes_regions(self) -> None:
+        nodes = [
+            proxy("KR legacy", "kr.example", "secret-kr"),
+            proxy("plain", "plain.example", "secret-plain"),
+        ]
+        profile_bytes = legacy_profile_bytes(nodes)
+        baseline = validate_legacy_candidate_baseline(profile_bytes, legacy_status(profile_bytes))
+        self.assertEqual(baseline["protected_asia_count"], 1)
+        self.assertEqual(baseline["region_hint_counts"]["KR"], 1)
+        self.assertEqual(baseline["region_hint_counts"]["unknown"], 1)
+
+    def test_legacy_prepare_does_not_resolve_old_endpoints(self) -> None:
+        old_nodes = [
+            proxy(f"JP legacy {index}", f"old-{index}.invalid", f"old-secret-{index}")
+            for index in range(64)
+        ]
+        old_bytes = legacy_profile_bytes(old_nodes)
+        current = proxy("JP current", "current.example", "current-secret")
+        source = task("current", "https://raw.githubusercontent.com/acme/current/main/sub.yaml")
+        sources, records = provenance_for_task(source, [current], observed_at=RUN0)
+        resolved: list[str] = []
+
+        def resolver(host: str, _port: int) -> list[str]:
+            resolved.append(host)
+            if host.startswith("old-"):
+                raise AssertionError("legacy endpoint was unexpectedly resolved")
+            return ["8.8.8.8"]
+
+        identity_input = prepare_candidate_identity_input(
+            legacy_profile_bytes([current]),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="legacy_v1",
+            previous_status=legacy_status(old_bytes, protected_asia_count=64),
+            previous_profile_bytes=old_bytes,
+            resolver=resolver,
+        )
+
+        self.assertEqual(set(resolved), {"current.example"})
+        self.assertNotIn("proxies", identity_input["previous_baseline"])
+        self.assertNotIn("old-secret", json.dumps(identity_input))
+
+    def test_legacy_baseline_summary_tampering_fails_closed(self) -> None:
+        old = proxy("JP legacy", "old.example", "old-secret")
+        old_bytes = legacy_profile_bytes([old])
+        current = proxy("JP current", "current.example", "current-secret")
+        source = task("current", "https://raw.githubusercontent.com/acme/current/main/sub.yaml")
+        sources, records = provenance_for_task(source, [current], observed_at=RUN0)
+        identity_input = prepare_candidate_identity_input(
+            legacy_profile_bytes([current]),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="legacy_v1",
+            previous_status=legacy_status(old_bytes, protected_asia_count=1),
+            previous_profile_bytes=old_bytes,
+            resolver=public_resolver,
+        )
+
+        tampered_count = copy.deepcopy(identity_input)
+        tampered_count["previous_baseline"]["candidate_count"] = 2
+        with self.assertRaisesRegex(CandidateSnapshotError, "region counts are inconsistent|binding mismatch"):
+            build_candidate_snapshot(tampered_count, settings=IDENTITY)
+
+        tampered_hash = copy.deepcopy(identity_input)
+        tampered_hash["previous_baseline"]["profile_sha256"] = "0" * 64
+        with self.assertRaisesRegex(CandidateSnapshotError, "binding mismatch"):
+            build_candidate_snapshot(tampered_hash, settings=IDENTITY)
+
+    def test_legacy_baseline_rejects_hash_count_proxy_and_group_corruption(self) -> None:
+        node = proxy("JP legacy", "jp.example", "secret-jp")
+        good_bytes = legacy_profile_bytes([node])
+        cases: list[tuple[bytes, dict, str]] = []
+
+        bad_hash = legacy_status(good_bytes, protected_asia_count=1)
+        bad_hash["profile_sha256"] = "0" * 64
+        cases.append((good_bytes, bad_hash, "hash mismatch"))
+
+        bad_count = legacy_status(good_bytes, protected_asia_count=1)
+        bad_count["proxy_count"] = 2
+        cases.append((good_bytes, bad_count, "count mismatch"))
+
+        unknown_status = dict(
+            legacy_status(good_bytes, protected_asia_count=1),
+            unexpected_contract_marker=True,
+        )
+        cases.append((good_bytes, unknown_status, "fields are unsupported"))
+
+        duplicate_bytes = legacy_profile_bytes([node, dict(node)])
+        cases.append((duplicate_bytes, legacy_status(duplicate_bytes, protected_asia_count=2), "invalid or duplicate"))
+
+        invalid_proxy = dict(node)
+        invalid_proxy["port"] = 0
+        invalid_bytes = legacy_profile_bytes([invalid_proxy])
+        cases.append((invalid_bytes, legacy_status(invalid_bytes, protected_asia_count=1), "proxy"))
+
+        duplicate_groups = legacy_profile_bytes(
+            [node],
+            [
+                {"name": "select", "type": "select", "proxies": ["JP legacy"]},
+                {"name": "select", "type": "select", "proxies": ["DIRECT"]},
+            ],
+        )
+        cases.append((duplicate_groups, legacy_status(duplicate_groups, protected_asia_count=1), "group names"))
+
+        dangling = legacy_profile_bytes(
+            [node],
+            [{"name": "select", "type": "select", "proxies": ["missing"]}],
+        )
+        cases.append((dangling, legacy_status(dangling, protected_asia_count=1), "dangling"))
+
+        for profile_bytes, status, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(CandidateSnapshotError, message):
+                validate_legacy_candidate_baseline(profile_bytes, status)
+
+    def test_legacy_state_rejects_v2_or_mixed_previous_artifacts(self) -> None:
+        node = proxy("JP legacy", "jp.example", "secret-jp")
+        profile_bytes = legacy_profile_bytes([node])
+        source = task("current", "https://raw.githubusercontent.com/acme/current/main/sub.yaml")
+        sources, records = provenance_for_task(source, [node], observed_at=RUN0)
+        status = legacy_status(profile_bytes, protected_asia_count=1)
+
+        v2_looking = dict(status, kind="github-candidate-status")
+        with self.assertRaisesRegex(CandidateSnapshotError, "fields are unsupported"):
+            prepare_candidate_identity_input(
+                profile_bytes,
+                {"sources": sources, "records": records},
+                run_at=RUN0,
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="legacy_v1",
+                previous_status=v2_looking,
+                previous_profile_bytes=profile_bytes,
+                resolver=public_resolver,
+            )
+
+        with self.assertRaisesRegex(CandidateSnapshotError, "artifacts are inconsistent"):
+            prepare_candidate_identity_input(
+                profile_bytes,
+                {"sources": sources, "records": records},
+                run_at=RUN0,
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="legacy_v1",
+                previous_status=status,
+                previous_metadata={"kind": "github-candidate-metadata"},
+                previous_profile_bytes=profile_bytes,
+                resolver=public_resolver,
+            )
+
+        with self.assertRaisesRegex(CandidateSnapshotError, "incomplete"):
+            prepare_candidate_identity_input(
+                profile_bytes,
+                {"sources": sources, "records": records},
+                run_at=RUN0,
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="present",
+                previous_profile=yaml.safe_load(profile_bytes),
+                previous_status=status,
+                previous_metadata=None,
+                resolver=public_resolver,
+            )
 
 
 class CandidateSourceHealthTests(unittest.TestCase):

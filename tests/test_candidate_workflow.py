@@ -61,6 +61,122 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("candidate-identity-input", self.text)
         self.assertIn("candidate-public-staging", self.text)
 
+    def test_previous_output_is_classified_as_absent_v2_or_explicit_legacy(self) -> None:
+        collect_steps = {
+            step.get("name"): step for step in self.jobs["collect"]["steps"]
+        }
+        restore = collect_steps["Restore previous data"]
+        script = restore["run"]
+
+        self.assertEqual(restore["shell"], "bash")
+        self.assertEqual(restore["id"], "previous")
+        self.assertEqual(
+            self.jobs["collect"]["outputs"]["observed_output_tip"],
+            "${{ steps.previous.outputs.observed_output_tip }}",
+        )
+        self.assertIn("set -euo pipefail", script)
+        self.assertIn(
+            'previous_ref="$(git ls-remote --heads origin "refs/heads/${OUTPUT_BRANCH}")"',
+            script,
+        )
+        self.assertIn('if [ "${lookup_rc}" -ne 0 ]; then', script)
+        self.assertIn('if [ "${previous_ref_count}" -gt 1 ]; then', script)
+        self.assertIn('previous_tip="$(printf \'%s\\n\' "${previous_ref}" | awk \'NF {print $1}\')"', script)
+        self.assertIn(
+            'echo "observed_output_tip=${previous_tip}" >> "${GITHUB_OUTPUT}"',
+            script,
+        )
+        self.assertRegex(
+            script,
+            re.compile(
+                r'if \[ -z "\$\{previous_tip\}" \]; then\s+'
+                r'echo "confirmed_absent" > data/previous-ref-state\.txt\s+'
+                r'else',
+            ),
+        )
+        self.assertIn(
+            'restore_required_previous_blob "${PROFILE_FILE}" "data/previous-${PROFILE_FILE}"',
+            script,
+        )
+        self.assertIn(
+            'restore_required_previous_blob "status.json" data/previous-status.json',
+            script,
+        )
+        metadata_branch = script[script.index('metadata_entry='):]
+        legacy_marker = metadata_branch.index(
+            'echo "legacy_v1" > data/previous-ref-state.txt'
+        )
+        metadata_cardinality = metadata_branch.index(
+            'if [ "$(printf \'%s\\n\' "${metadata_entry}" | sed \'/^$/d\' | wc -l)" -ne 1 ]; then'
+        )
+        metadata_restore = metadata_branch.index(
+            "restore_required_previous_blob candidate-metadata.json data/previous-candidate-metadata.json"
+        )
+        present_marker = metadata_branch.index(
+            'echo "present" > data/previous-ref-state.txt'
+        )
+        self.assertLess(legacy_marker, metadata_cardinality)
+        self.assertLess(metadata_cardinality, metadata_restore)
+        self.assertLess(metadata_restore, present_marker)
+
+        # A present ref without metadata is never relabelled as a first publish.
+        self.assertNotIn('echo "confirmed_absent"', metadata_branch)
+
+    def test_previous_required_files_are_restored_from_the_observed_tip_fail_closed(self) -> None:
+        restore = next(
+            step
+            for step in self.jobs["collect"]["steps"]
+            if step.get("name") == "Restore previous data"
+        )["run"]
+
+        self.assertIn(
+            'fetched_tip="$(git rev-parse "refs/remotes/origin/${OUTPUT_BRANCH}")"',
+            restore,
+        )
+        self.assertIn('if [ "${fetched_tip}" != "${previous_tip}" ]; then', restore)
+        self.assertIn('entry="$(git ls-tree "${previous_tip}" -- "${name}")"', restore)
+        self.assertIn('if [ -z "${entry}" ]; then', restore)
+        self.assertIn('if [ "$(git cat-file -t "${previous_tip}:${name}")" != "blob" ]; then', restore)
+        self.assertIn('if ! git show "${previous_tip}:${name}" > "${destination}"; then', restore)
+        self.assertNotIn(
+            'git show "origin/${OUTPUT_BRANCH}:${name}" > "data/previous-',
+            restore,
+        )
+
+    def test_candidate_prepare_routes_legacy_without_forging_v2_metadata(self) -> None:
+        prepare = next(
+            step
+            for step in self.jobs["collect"]["steps"]
+            if step.get("name") == "Prepare candidate V2 identity handoff"
+        )["run"]
+
+        self.assertIn('case "${previous_state}" in', prepare)
+        present = re.search(
+            r'present\)\s+(?P<body>[\s\S]*?)\s+;;',
+            prepare,
+        )
+        legacy = re.search(
+            r'legacy_v1\)\s+(?P<body>[\s\S]*?)\s+;;',
+            prepare,
+        )
+        absent = re.search(
+            r'confirmed_absent\)\s+(?P<body>[\s\S]*?)\s+;;',
+            prepare,
+        )
+        self.assertIsNotNone(present)
+        self.assertIsNotNone(legacy)
+        self.assertIsNotNone(absent)
+        self.assertIn("--previous-profile", present.group("body"))
+        self.assertIn("--previous-status", present.group("body"))
+        self.assertIn("--previous-metadata", present.group("body"))
+        self.assertIn("--previous-profile", legacy.group("body"))
+        self.assertIn("--previous-status", legacy.group("body"))
+        self.assertNotIn("--previous-metadata", legacy.group("body"))
+        self.assertNotIn("--previous-profile", absent.group("body"))
+        self.assertNotIn("--previous-status", absent.group("body"))
+        self.assertNotIn("--previous-metadata", absent.group("body"))
+        self.assertIn('python -m scripts.candidate_snapshot prepare "${args[@]}"', prepare)
+
     def test_all_jobs_are_pinned_to_the_triggering_main_sha(self) -> None:
         for job_name in ("collect", "candidate_identity", "publish"):
             checkout = next(
@@ -144,6 +260,55 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn('rollback_candidate_output "${smoke_rc}"', promote)
         self.assertIn('exit "${failure_rc}"', promote)
         self.assertNotIn("git push --force origin", promote)
+
+    def test_publish_uses_the_collect_observed_tip_and_rejects_stale_work(self) -> None:
+        publish_job = self.jobs["publish"]
+        build_step = next(
+            step
+            for step in publish_job["steps"]
+            if step.get("name") == "Build and stage profile commit"
+        )
+        build = build_step["run"]
+
+        self.assertEqual(
+            build_step["env"]["OBSERVED_OUTPUT_TIP"],
+            "${{ needs.collect.outputs.observed_output_tip }}",
+        )
+        self.assertIn('previous_tip="${OBSERVED_OUTPUT_TIP}"', build)
+        self.assertIn(
+            "grep -Eq '^[0-9a-f]{40}$'",
+            build,
+        )
+        self.assertIn(
+            'current_output="$(git ls-remote --heads origin "${output_ref}")"',
+            build,
+        )
+        self.assertIn("current_lookup_rc=$?", build)
+        self.assertIn('if [ "${current_lookup_rc}" -ne 0 ]; then', build)
+        self.assertIn(
+            'current_tip="$(printf \'%s\\n\' "${current_output}" | awk \'NF {print $1}\')"',
+            build,
+        )
+        self.assertRegex(
+            build,
+            re.compile(
+                r'if \[ "\$\{current_tip\}" != "\$\{previous_tip\}" \]; then\s+'
+                r'echo "Output branch changed after collection; refusing to publish stale data\." >&2\s+'
+                r'exit 1',
+            ),
+        )
+
+        # A second lookup may verify the handoff, but it must never replace the
+        # collect-time observed tip as the lease or rollback baseline.
+        self.assertNotIn(
+            'previous_tip="$(printf \'%s\\n\' "${current_output}"',
+            build,
+        )
+        self.assertIn(
+            '--force-with-lease="${output_ref}:${previous_tip}"',
+            build,
+        )
+        self.assertNotIn('git push --force origin "${candidate_commit}:${output_ref}"', build)
 
 
 if __name__ == "__main__":

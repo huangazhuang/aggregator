@@ -37,6 +37,7 @@ from scripts.proxy_identity import (
     IdentitySettings,
     assert_unique_public_id_bindings,
     canonical_endpoint,
+    canonical_port,
     canonical_proxy_fingerprint,
     canonical_server,
     compute_public_ids,
@@ -48,7 +49,7 @@ from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
 IDENTITY_INPUT_KIND = "github-candidate-identity-input"
-IDENTITY_INPUT_SCHEMA_VERSION = 1
+IDENTITY_INPUT_SCHEMA_VERSION = 2
 CANDIDATE_STATUS_KIND = "github-candidate-status"
 CANDIDATE_STATUS_SCHEMA_VERSION = 2
 CANDIDATE_METADATA_KIND = "github-candidate-metadata"
@@ -65,6 +66,31 @@ ASIA_RETAIN_RATIO = 0.70
 REGION_RETAIN_RATIO = 0.50
 SOURCE_QUORUM_RATIO = 0.80
 REGION_ORDER = ("HK", "JP", "KR", "SG", "TW")
+
+PREVIOUS_STATES = frozenset({"confirmed_absent", "legacy_v1", "present"})
+LEGACY_STATUS_REQUIRED_FIELDS = frozenset(
+    {
+        "run_at",
+        "mode",
+        "alive_check",
+        "proxy_count",
+        "profile_url",
+        "profile_sha256",
+        "main_sha",
+    }
+)
+LEGACY_STATUS_OPTIONAL_FIELDS = frozenset({"protected_asia_count"})
+LEGACY_BASELINE_FIELDS = frozenset(
+    {
+        "state",
+        "snapshot_id",
+        "candidate_count",
+        "protected_asia_count",
+        "region_hint_counts",
+        "profile_sha256",
+        "baseline_sha256",
+    }
+)
 
 SNAPSHOT_ID_RE = re.compile(r"^candidate_[0-9a-f]{24}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -98,6 +124,7 @@ IDENTITY_INPUT_FIELDS = {
     "sources",
     "records",
     "previous_state",
+    "previous_baseline",
     "previous_profile",
     "previous_status",
     "previous_metadata",
@@ -328,6 +355,195 @@ def _profile_proxies(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [_validated_proxy(proxy) for proxy in proxies if isinstance(proxy, Mapping)]
 
 
+def _validate_legacy_candidate_profile(
+    profile: Mapping[str, Any],
+    status: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(status, Mapping):
+        raise CandidateSnapshotError("legacy candidate status must be an object")
+    fields = frozenset(status)
+    if not (
+        fields == LEGACY_STATUS_REQUIRED_FIELDS
+        or fields == LEGACY_STATUS_REQUIRED_FIELDS | LEGACY_STATUS_OPTIONAL_FIELDS
+    ):
+        raise CandidateSnapshotError("legacy candidate status fields are unsupported")
+    run_at = status["run_at"]
+    if not isinstance(run_at, str) or utc_timestamp(run_at) != run_at:
+        raise CandidateSnapshotError("legacy candidate run_at is invalid")
+    if status["mode"] not in {"collect", "manual", "refresh"}:
+        raise CandidateSnapshotError("legacy candidate mode is invalid")
+    if status["alive_check"] not in {"true", "false"}:
+        raise CandidateSnapshotError("legacy candidate alive_check is invalid")
+    profile_url = status["profile_url"]
+    if not isinstance(profile_url, str) or not profile_url.startswith("https://"):
+        raise CandidateSnapshotError("legacy candidate profile URL is invalid")
+    profile_sha256 = status["profile_sha256"]
+    if not isinstance(profile_sha256, str) or not SHA256_RE.fullmatch(profile_sha256):
+        raise CandidateSnapshotError("legacy candidate profile SHA-256 is invalid")
+    main_sha = status["main_sha"]
+    if not isinstance(main_sha, str) or not MAIN_SHA_RE.fullmatch(main_sha):
+        raise CandidateSnapshotError("legacy candidate main SHA is invalid")
+
+    proxy_count = status["proxy_count"]
+    if isinstance(proxy_count, bool) or not isinstance(proxy_count, int) or proxy_count < 1:
+        raise CandidateSnapshotError("legacy candidate proxy count is invalid")
+    if not isinstance(profile, Mapping):
+        raise CandidateSnapshotError("legacy candidate profile must be a mapping")
+    raw_proxies = profile.get("proxies")
+    if (
+        not isinstance(raw_proxies, list)
+        or not raw_proxies
+        or not all(isinstance(proxy, Mapping) for proxy in raw_proxies)
+    ):
+        raise CandidateSnapshotError("legacy candidate profile contains invalid proxies")
+
+    proxies: list[dict[str, Any]] = []
+    proxy_names: set[str] = set()
+    for raw_proxy in raw_proxies:
+        proxy = _validated_proxy(raw_proxy)
+        name = proxy.get("name")
+        proxy_type = proxy.get("type")
+        server = proxy.get("server")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or name != name.strip()
+            or not isinstance(proxy_type, str)
+            or not proxy_type.strip()
+            or proxy_type != proxy_type.strip()
+            or not isinstance(server, str)
+            or not server.strip()
+            or server != server.strip()
+            or name in proxy_names
+        ):
+            raise CandidateSnapshotError("legacy candidate proxy fields are invalid or duplicate")
+        try:
+            canonical_port(proxy.get("port"))
+        except IdentityError as exc:
+            raise CandidateSnapshotError("legacy candidate proxy fields are invalid or duplicate") from exc
+        proxy_names.add(name)
+        proxies.append(proxy)
+    if len(proxies) != proxy_count:
+        raise CandidateSnapshotError("legacy candidate profile count mismatch")
+
+    raw_groups = profile.get("proxy-groups", [])
+    if not isinstance(raw_groups, list) or not all(isinstance(group, Mapping) for group in raw_groups):
+        raise CandidateSnapshotError("legacy candidate proxy groups are malformed")
+    group_names: set[str] = set()
+    for group in raw_groups:
+        name = group.get("name")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or name != name.strip()
+            or name in group_names
+            or name in proxy_names
+        ):
+            raise CandidateSnapshotError("legacy candidate proxy group names are invalid")
+        group_names.add(name)
+    allowed_references = proxy_names | group_names | BUILTIN_PROXY_NAMES
+    for group in raw_groups:
+        references = group.get("proxies")
+        if not isinstance(references, list) or any(
+            not isinstance(reference, str) or reference not in allowed_references
+            for reference in references
+        ):
+            raise CandidateSnapshotError("legacy candidate profile contains dangling group references")
+
+    region_counts = {**{region: 0 for region in REGION_ORDER}, "unknown": 0}
+    for proxy in proxies:
+        hints = preferred_asia_region_hints(proxy)
+        region_counts[hints[0] if hints else "unknown"] += 1
+    computed_asia_count = sum(is_preferred_asian_proxy(proxy) for proxy in proxies)
+    protected_asia_count = status.get("protected_asia_count", computed_asia_count)
+    if (
+        isinstance(protected_asia_count, bool)
+        or not isinstance(protected_asia_count, int)
+        or protected_asia_count < 0
+        or protected_asia_count > proxy_count
+        or (
+            "protected_asia_count" in status
+            and protected_asia_count != computed_asia_count
+        )
+    ):
+        raise CandidateSnapshotError("legacy candidate protected Asia count is invalid")
+    return {
+        "state": "legacy_v1",
+        "snapshot_id": "",
+        "candidate_count": proxy_count,
+        "protected_asia_count": protected_asia_count,
+        "region_hint_counts": region_counts,
+        "profile_sha256": profile_sha256,
+    }
+
+
+def validate_legacy_candidate_baseline(
+    profile_bytes: bytes,
+    status: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate a pre-V2 GitHub profile/status pair as a counts-only baseline."""
+
+    if not isinstance(status, Mapping):
+        raise CandidateSnapshotError("legacy candidate status must be an object")
+    expected_sha256 = status.get("profile_sha256")
+    if not isinstance(expected_sha256, str) or not SHA256_RE.fullmatch(expected_sha256):
+        raise CandidateSnapshotError("legacy candidate profile SHA-256 is invalid")
+    if hashlib.sha256(profile_bytes).hexdigest() != expected_sha256:
+        raise CandidateSnapshotError("legacy candidate profile hash mismatch")
+    try:
+        profile = yaml.safe_load(profile_bytes.decode("utf-8", errors="strict"))
+    except Exception as exc:
+        raise CandidateSnapshotError("legacy candidate profile is invalid YAML") from exc
+    baseline = _validate_legacy_candidate_profile(profile, status)
+    baseline["baseline_sha256"] = hashlib.sha256(_json_bytes(baseline)).hexdigest()
+    return baseline
+
+
+def _validate_legacy_candidate_baseline_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != LEGACY_BASELINE_FIELDS:
+        raise CandidateSnapshotError("legacy candidate baseline fields are invalid")
+    if value["state"] != "legacy_v1" or value["snapshot_id"] != "":
+        raise CandidateSnapshotError("legacy candidate baseline state is invalid")
+    profile_sha256 = value["profile_sha256"]
+    if not isinstance(profile_sha256, str) or not SHA256_RE.fullmatch(profile_sha256):
+        raise CandidateSnapshotError("legacy candidate baseline hash is invalid")
+    baseline_sha256 = value["baseline_sha256"]
+    if not isinstance(baseline_sha256, str) or not SHA256_RE.fullmatch(baseline_sha256):
+        raise CandidateSnapshotError("legacy candidate baseline binding is invalid")
+    candidate_count = value["candidate_count"]
+    protected_asia_count = value["protected_asia_count"]
+    if (
+        isinstance(candidate_count, bool)
+        or not isinstance(candidate_count, int)
+        or candidate_count < 1
+        or isinstance(protected_asia_count, bool)
+        or not isinstance(protected_asia_count, int)
+        or protected_asia_count < 0
+        or protected_asia_count > candidate_count
+    ):
+        raise CandidateSnapshotError("legacy candidate baseline counts are invalid")
+    region_counts = _strict_nonnegative_counts(
+        value["region_hint_counts"],
+        REGION_COUNT_FIELDS,
+        "legacy candidate baseline region counts",
+    )
+    if sum(region_counts.values()) != candidate_count:
+        raise CandidateSnapshotError("legacy candidate baseline region counts are inconsistent")
+    if sum(region_counts[region] for region in REGION_ORDER) != protected_asia_count:
+        raise CandidateSnapshotError("legacy candidate baseline Asia counts are inconsistent")
+    normalized = {
+        "state": "legacy_v1",
+        "snapshot_id": "",
+        "candidate_count": candidate_count,
+        "protected_asia_count": protected_asia_count,
+        "region_hint_counts": region_counts,
+        "profile_sha256": profile_sha256,
+    }
+    if hashlib.sha256(_json_bytes(normalized)).hexdigest() != baseline_sha256:
+        raise CandidateSnapshotError("legacy candidate baseline binding mismatch")
+    return {**normalized, "baseline_sha256": baseline_sha256}
+
+
 def _safe_alias(value: Any) -> str:
     alias = "".join(char for char in str(value or "") if ord(char) >= 32 and ord(char) != 127)
     alias = re.sub(r"\s+", " ", alias).strip()
@@ -401,6 +617,7 @@ def prepare_candidate_identity_input(
     previous_profile: Mapping[str, Any] | None = None,
     previous_status: Mapping[str, Any] | None = None,
     previous_metadata: Mapping[str, Any] | None = None,
+    previous_profile_bytes: bytes | None = None,
     github_failed_count: int = 0,
     resolver: Callable[[str, int], Iterable[str]] | None = None,
 ) -> dict[str, Any]:
@@ -414,11 +631,22 @@ def prepare_candidate_identity_input(
     if not isinstance(parsed_profile, dict):
         raise CandidateSnapshotError("candidate profile must be a mapping")
     current_proxies = _profile_proxies(parsed_profile)
-    if previous_state not in {"confirmed_absent", "present"}:
+    if previous_state not in PREVIOUS_STATES:
         raise CandidateSnapshotError("previous candidate state is unsupported")
     if previous_state == "confirmed_absent":
-        if any(value is not None for value in (previous_profile, previous_status, previous_metadata)):
+        if any(
+            value is not None
+            for value in (previous_profile, previous_status, previous_metadata)
+        ):
             raise CandidateSnapshotError("confirmed-absent previous state contains artifacts")
+    elif previous_state == "legacy_v1":
+        if (
+            previous_profile_bytes is None
+            or previous_status is None
+            or previous_profile is not None
+            or previous_metadata is not None
+        ):
+            raise CandidateSnapshotError("legacy previous snapshot artifacts are inconsistent")
     elif any(value is None for value in (previous_profile, previous_status, previous_metadata)):
         raise CandidateSnapshotError("present previous snapshot is incomplete")
 
@@ -474,11 +702,20 @@ def prepare_candidate_identity_input(
         raise CandidateSnapshotError("candidate profile is not fully covered by safe provenance")
 
     safe_previous_profile = copy.deepcopy(previous_profile) if previous_profile is not None else None
-    if safe_previous_profile is not None:
+    if previous_state == "present" and safe_previous_profile is not None:
         previous_proxies = _profile_proxies(safe_previous_profile)
         for proxy in previous_proxies:
             validate_with_endpoint(proxy)
         safe_previous_profile["proxies"] = previous_proxies
+
+    normalized_previous_status = copy.deepcopy(previous_status)
+    normalized_previous_baseline: dict[str, Any] | None = None
+    if previous_state == "legacy_v1":
+        normalized_previous_baseline = validate_legacy_candidate_baseline(
+            previous_profile_bytes,
+            previous_status,
+        )
+        normalized_previous_status = None
 
     normalized_sources = [dict(item) for item in sources if isinstance(item, Mapping)]
     if len(normalized_sources) != len(sources):
@@ -503,8 +740,9 @@ def prepare_candidate_identity_input(
         "sources": normalized_sources,
         "records": valid_records,
         "previous_state": previous_state,
+        "previous_baseline": normalized_previous_baseline,
         "previous_profile": safe_previous_profile,
-        "previous_status": copy.deepcopy(previous_status),
+        "previous_status": normalized_previous_status,
         "previous_metadata": copy.deepcopy(previous_metadata),
     }
     validate_candidate_identity_input(identity_input)
@@ -535,12 +773,38 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
             raise CandidateSnapshotError("candidate input count is invalid")
     if not isinstance(payload["profile"], Mapping) or not isinstance(payload["sources"], list) or not isinstance(payload["records"], list):
         raise CandidateSnapshotError("candidate input collections are malformed")
-    if payload["previous_state"] not in {"confirmed_absent", "present"}:
+    if payload["previous_state"] not in PREVIOUS_STATES:
         raise CandidateSnapshotError("candidate previous state is unsupported")
-    previous_values = (payload["previous_profile"], payload["previous_status"], payload["previous_metadata"])
-    if payload["previous_state"] == "confirmed_absent" and any(value is not None for value in previous_values):
+    previous_values = (
+        payload["previous_baseline"],
+        payload["previous_profile"],
+        payload["previous_status"],
+        payload["previous_metadata"],
+    )
+    if payload["previous_state"] == "confirmed_absent" and any(
+        value is not None for value in previous_values
+    ):
         raise CandidateSnapshotError("confirmed-absent candidate input contains previous artifacts")
-    if payload["previous_state"] == "present" and any(not isinstance(value, Mapping) for value in previous_values):
+    if payload["previous_state"] == "legacy_v1" and (
+        not isinstance(payload["previous_baseline"], Mapping)
+        or payload["previous_profile"] is not None
+        or payload["previous_status"] is not None
+        or payload["previous_metadata"] is not None
+    ):
+        raise CandidateSnapshotError("legacy candidate input has inconsistent previous artifacts")
+    if payload["previous_state"] == "legacy_v1":
+        _validate_legacy_candidate_baseline_summary(payload["previous_baseline"])
+    if payload["previous_state"] == "present" and (
+        payload["previous_baseline"] is not None
+        or any(
+            not isinstance(value, Mapping)
+            for value in (
+                payload["previous_profile"],
+                payload["previous_status"],
+                payload["previous_metadata"],
+            )
+        )
+    ):
         raise CandidateSnapshotError("present candidate input has incomplete previous artifacts")
     return dict(payload)
 
@@ -624,6 +888,17 @@ def _previous_counts(status: Mapping[str, Any] | None, previous_state: str) -> d
     }
     if status is None:
         return empty
+    if previous_state == "legacy_v1":
+        return {
+            "state": previous_state,
+            "snapshot_id": "",
+            "candidate_count": int(status["candidate_count"]),
+            "protected_asia_count": int(status["protected_asia_count"]),
+            "region_hint_counts": {
+                region: int(status["region_hint_counts"][region])
+                for region in (*REGION_ORDER, "unknown")
+            },
+        }
     return {
         "state": previous_state,
         "snapshot_id": str(status.get("snapshot_id", "")),
@@ -908,6 +1183,7 @@ def build_candidate_snapshot(
     payload = validate_candidate_identity_input(identity_input)
     identity = settings or IdentitySettings.from_environment()
     previous: CandidateSnapshot | None = None
+    previous_baseline: Mapping[str, Any] | None = None
     if payload["previous_state"] == "present":
         previous_profile_text, rejected = dump_clash_yaml(dict(payload["previous_profile"]))
         if rejected:
@@ -918,6 +1194,10 @@ def build_candidate_snapshot(
             dict(payload["previous_metadata"]),
             settings=identity,
             fixture_path=fixture_path,
+        )
+    elif payload["previous_state"] == "legacy_v1":
+        previous_baseline = _validate_legacy_candidate_baseline_summary(
+            payload["previous_baseline"]
         )
 
     records = _records_by_fingerprint(payload)
@@ -1098,7 +1378,10 @@ def build_candidate_snapshot(
         "confirmed_missing": sum(item["health_state"] == "confirmed_missing" for item in sources.values()),
         "failed": sum(item["last_event"] != "success" and item["health_state"] != "using_last_good" for item in sources.values()),
     }
-    previous_counts = _previous_counts(previous.status if previous is not None else None, str(payload["previous_state"]))
+    previous_counts = _previous_counts(
+        previous.status if previous is not None else previous_baseline,
+        str(payload["previous_state"]),
+    )
     retain_ratios, source_quorum, publish_gate = _evaluate_publish_gate(
         candidate_count=len(entries),
         protected_asia_count=protected_asia_count,
@@ -1329,7 +1612,7 @@ def validate_candidate_snapshot(
         status_value["github_check_counts"], GITHUB_COUNT_FIELDS, "candidate GitHub check counts"
     )
     previous_counts = _strict_mapping(status_value["previous"], PREVIOUS_FIELDS, "candidate previous counts")
-    if previous_counts["state"] not in {"confirmed_absent", "present"}:
+    if previous_counts["state"] not in PREVIOUS_STATES:
         raise CandidateSnapshotError("candidate previous state is unsupported")
     previous_region_counts = _strict_nonnegative_counts(
         previous_counts["region_hint_counts"], REGION_COUNT_FIELDS, "candidate previous region counts"
@@ -1346,6 +1629,9 @@ def validate_candidate_snapshot(
             or any(previous_region_counts.values())
         ):
             raise CandidateSnapshotError("confirmed-absent candidate previous counts are not empty")
+    elif previous_counts["state"] == "legacy_v1":
+        if previous_snapshot_id or previous_counts["candidate_count"] < 1:
+            raise CandidateSnapshotError("legacy candidate previous counts are invalid")
     elif not SNAPSHOT_ID_RE.fullmatch(previous_snapshot_id):
         raise CandidateSnapshotError("candidate previous snapshot ID is malformed")
     changes = _strict_mapping(status_value["changes"], CHANGES_FIELDS, "candidate changes")
@@ -1605,7 +1891,16 @@ def write_candidate_snapshot(output_dir: str | Path, snapshot: CandidateSnapshot
 
 def _prepare_command(args: argparse.Namespace) -> int:
     provenance = merge_provenance_staging(args.provenance)
-    previous_profile = _load_profile_file(args.previous_profile)
+    previous_profile_bytes = (
+        Path(args.previous_profile).read_bytes()
+        if args.previous_profile and Path(args.previous_profile).is_file()
+        else None
+    )
+    previous_profile = (
+        None
+        if args.previous_state == "legacy_v1"
+        else _load_profile_file(args.previous_profile)
+    )
     previous_status = _load_json_file(args.previous_status)
     previous_metadata = _load_json_file(args.previous_metadata)
     payload = prepare_candidate_identity_input(
@@ -1620,6 +1915,7 @@ def _prepare_command(args: argparse.Namespace) -> int:
         previous_profile=previous_profile,
         previous_status=previous_status,
         previous_metadata=previous_metadata,
+        previous_profile_bytes=previous_profile_bytes,
         github_failed_count=_read_github_failed_count(args.github_check_report),
     )
     write_candidate_identity_input(args.output, payload)
@@ -1653,7 +1949,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     prepare.add_argument("--main-sha", required=True)
     prepare.add_argument("--profile-url", required=True)
     prepare.add_argument("--candidate-metadata-url", required=True)
-    prepare.add_argument("--previous-state", choices=("confirmed_absent", "present"), required=True)
+    prepare.add_argument("--previous-state", choices=tuple(sorted(PREVIOUS_STATES)), required=True)
     prepare.add_argument("--previous-profile", default="")
     prepare.add_argument("--previous-status", default="")
     prepare.add_argument("--previous-metadata", default="")
@@ -1699,6 +1995,7 @@ __all__ = [
     "prepare_candidate_identity_input",
     "validate_candidate_identity_input",
     "validate_candidate_snapshot",
+    "validate_legacy_candidate_baseline",
     "write_candidate_identity_input",
     "write_candidate_snapshot",
 ]

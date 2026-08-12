@@ -607,9 +607,15 @@ class EvaluatorContractTests(unittest.TestCase):
         current_bytes = yaml.safe_dump(
             current_profile, allow_unicode=True, sort_keys=False
         ).encode()
-        status_bytes = json.dumps(
-            {"profile_sha256": hashlib.sha256(current_bytes).hexdigest()}
-        ).encode()
+        status_bytes = json.dumps({
+            "run_at": "2026-08-11T00:00:00Z",
+            "mode": "collect",
+            "alive_check": "true",
+            "proxy_count": 1,
+            "profile_url": "https://example.invalid/clash.yaml",
+            "profile_sha256": hashlib.sha256(current_bytes).hexdigest(),
+            "main_sha": "c" * 40,
+        }).encode()
         report = build_report(
             source_key="awesome-vpn",
             source_profile_bytes=source_bytes,
@@ -629,6 +635,53 @@ class EvaluatorContractTests(unittest.TestCase):
         self.assertNotIn("secret-JP", serialized)
         self.assertNotIn("8.8.8.8", serialized)
         self.assertEqual(report["current_snapshot"]["contract"], "legacy-profile-status")
+
+    def test_legacy_opt_in_rejects_hash_only_or_v2_looking_status(self) -> None:
+        source_profile = {
+            "proxies": [proxy("JP", index, port=29000 + index) for index in range(1, 4)]
+            + [proxy("KR", index, port=30000 + index) for index in range(4, 7)]
+        }
+        current_profile = {
+            "proxies": [{**proxy("HK", 91, port=31091), "name": "US existing"}]
+        }
+        source_bytes = yaml.safe_dump(
+            source_profile, allow_unicode=True, sort_keys=False
+        ).encode()
+        current_bytes = yaml.safe_dump(
+            current_profile, allow_unicode=True, sort_keys=False
+        ).encode()
+        profile_sha = hashlib.sha256(current_bytes).hexdigest()
+        common = {
+            "source_key": "awesome-vpn",
+            "source_profile_bytes": source_bytes,
+            "current_profile_bytes": current_bytes,
+            "current_metadata_bytes": None,
+            "source_revision": {
+                "commit_sha": "d" * 40,
+                "updated_at": "2026-08-11T01:00:00Z",
+            },
+            "evaluated_at": "2026-08-11T02:00:00Z",
+            "settings": IDENTITY,
+            "allow_legacy_current": True,
+        }
+
+        for status in (
+            {"profile_sha256": profile_sha},
+            {
+                "kind": "github-candidate-status",
+                "schema_version": 2,
+                "profile_sha256": profile_sha,
+                "candidate_metadata_sha256": "0" * 64,
+            },
+        ):
+            with self.subTest(status=status), self.assertRaisesRegex(
+                EvaluationError,
+                "neither complete candidate V2 nor valid legacy V1",
+            ):
+                build_report(
+                    **common,
+                    current_status_bytes=json.dumps(status).encode(),
+                )
 
     def test_audit_output_cannot_escape_dedicated_directory(self) -> None:
         with self.assertRaises(EvaluationError):

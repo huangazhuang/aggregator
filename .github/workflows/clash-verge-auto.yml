@@ -77,6 +77,8 @@ jobs:
   collect:
     permissions:
       contents: read
+    outputs:
+      observed_output_tip: ${{ steps.previous.outputs.observed_output_tip }}
     env:
       GH_TOKEN: ${{ github.token }}
       PROBE_URL: ${{ secrets.PROBE_URL }}
@@ -106,43 +108,90 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Restore previous data
+        id: previous
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p data
           set +e
           previous_ref="$(git ls-remote --heads origin "refs/heads/${OUTPUT_BRANCH}")"
-          status=$?
+          lookup_rc=$?
           set -e
-          if [ "${status}" -ne 0 ]; then
+          if [ "${lookup_rc}" -ne 0 ]; then
             echo "Unable to determine whether ${OUTPUT_BRANCH} exists."
             exit 1
           fi
-          if [ -z "${previous_ref}" ]; then
+
+          previous_ref_count="$(printf '%s\n' "${previous_ref}" | sed '/^$/d' | wc -l)"
+          if [ "${previous_ref_count}" -gt 1 ]; then
+            echo "Previous ${OUTPUT_BRANCH} lookup was ambiguous."
+            exit 1
+          fi
+
+          previous_tip="$(printf '%s\n' "${previous_ref}" | awk 'NF {print $1}')"
+          echo "observed_output_tip=${previous_tip}" >> "${GITHUB_OUTPUT}"
+          if [ -z "${previous_tip}" ]; then
             echo "confirmed_absent" > data/previous-ref-state.txt
           else
-            echo "present" > data/previous-ref-state.txt
             git fetch origin "${OUTPUT_BRANCH}:refs/remotes/origin/${OUTPUT_BRANCH}" --depth=1
+            fetched_tip="$(git rev-parse "refs/remotes/origin/${OUTPUT_BRANCH}")"
+            if [ "${fetched_tip}" != "${previous_tip}" ]; then
+              echo "Previous ${OUTPUT_BRANCH} changed while it was being restored."
+              exit 1
+            fi
+
+            restore_required_previous_blob() {
+              name="$1"
+              destination="$2"
+              entry="$(git ls-tree "${previous_tip}" -- "${name}")"
+              if [ -z "${entry}" ]; then
+                echo "Previous ${OUTPUT_BRANCH} is missing required ${name}."
+                exit 1
+              fi
+              if [ "$(printf '%s\n' "${entry}" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+                echo "Previous ${OUTPUT_BRANCH} has an ambiguous ${name} entry."
+                exit 1
+              fi
+              if [ "$(git cat-file -t "${previous_tip}:${name}")" != "blob" ]; then
+                echo "Previous ${OUTPUT_BRANCH} ${name} is not a file."
+                exit 1
+              fi
+              if ! git show "${previous_tip}:${name}" > "${destination}"; then
+                echo "Unable to restore ${name} from ${OUTPUT_BRANCH}."
+                exit 1
+              fi
+            }
+
+            restore_required_previous_blob "${PROFILE_FILE}" "data/previous-${PROFILE_FILE}"
+            restore_required_previous_blob "status.json" data/previous-status.json
+
+            metadata_entry="$(git ls-tree "${previous_tip}" -- candidate-metadata.json)"
+            if [ -z "${metadata_entry}" ]; then
+              # The Python candidate validator decides whether this is the one
+              # supported legacy V1 contract. A malformed or V2-looking status
+              # cannot be downgraded merely because its metadata is absent.
+              echo "legacy_v1" > data/previous-ref-state.txt
+            else
+              if [ "$(printf '%s\n' "${metadata_entry}" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+                echo "Previous ${OUTPUT_BRANCH} has an ambiguous candidate-metadata.json entry."
+                exit 1
+              fi
+              restore_required_previous_blob candidate-metadata.json data/previous-candidate-metadata.json
+              echo "present" > data/previous-ref-state.txt
+            fi
           fi
 
           # crawler-subs.json / crawler-proxies.txt carry the crawler's accumulated
           # subscription pool across runs; without them every run starts cold.
           for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json cn-fc-check.json; do
-            if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/${name}" 2>/dev/null; then
+            if [ -n "${previous_tip}" ] && git show "${previous_tip}:${name}" > "/tmp/${name}" 2>/dev/null; then
               cp "/tmp/${name}" "data/${name}"
               echo "Restored ${name} from ${OUTPUT_BRANCH}."
             fi
           done
 
-          if git show "origin/${OUTPUT_BRANCH}:status.json" > /tmp/previous-status.json 2>/dev/null; then
-            cp /tmp/previous-status.json data/previous-status.json
+          if [ -f data/previous-status.json ]; then
             echo "Restored the previous publish status for strict-filter safeguards."
-          fi
-
-          if [ "$(cat data/previous-ref-state.txt)" = "present" ]; then
-            for name in "${PROFILE_FILE}" candidate-metadata.json; do
-              if git show "origin/${OUTPUT_BRANCH}:${name}" > "/tmp/previous-${name}" 2>/dev/null; then
-                cp "/tmp/previous-${name}" "data/previous-${name}"
-              fi
-            done
           fi
 
       - name: Build manual subscription config
@@ -351,13 +400,28 @@ jobs:
             echo "No candidate provenance staging was produced."
             exit 1
           fi
-          if [ "$(cat data/previous-ref-state.txt)" = "present" ]; then
-            args+=(
-              --previous-profile "data/previous-${PROFILE_FILE}"
-              --previous-status data/previous-status.json
-              --previous-metadata data/previous-candidate-metadata.json
-            )
-          fi
+          previous_state="$(cat data/previous-ref-state.txt)"
+          case "${previous_state}" in
+            present)
+              args+=(
+                --previous-profile "data/previous-${PROFILE_FILE}"
+                --previous-status data/previous-status.json
+                --previous-metadata data/previous-candidate-metadata.json
+              )
+              ;;
+            legacy_v1)
+              args+=(
+                --previous-profile "data/previous-${PROFILE_FILE}"
+                --previous-status data/previous-status.json
+              )
+              ;;
+            confirmed_absent)
+              ;;
+            *)
+              echo "Unsupported previous candidate state: ${previous_state}"
+              exit 1
+              ;;
+          esac
           python -m scripts.candidate_snapshot prepare "${args[@]}"
 
       - name: Upload legacy public staging
@@ -488,18 +552,37 @@ jobs:
       - name: Build and stage profile commit
         id: publication
         shell: bash
+        env:
+          OBSERVED_OUTPUT_TIP: ${{ needs.collect.outputs.observed_output_tip }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           output_ref="refs/heads/${OUTPUT_BRANCH}"
-          previous_output="$(git ls-remote --heads origin "${output_ref}")"
-          if [ "$(printf '%s\n' "${previous_output}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+          previous_tip="${OBSERVED_OUTPUT_TIP}"
+          if [ -n "${previous_tip}" ] && ! printf '%s\n' "${previous_tip}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Observed output tip is malformed." >&2
+            exit 1
+          fi
+
+          set +e
+          current_output="$(git ls-remote --heads origin "${output_ref}")"
+          current_lookup_rc=$?
+          set -e
+          if [ "${current_lookup_rc}" -ne 0 ]; then
+            echo "Unable to verify the current output branch tip." >&2
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "${current_output}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
             echo "Output branch lookup was ambiguous." >&2
             exit 1
           fi
-          previous_tip="$(printf '%s\n' "${previous_output}" | awk 'NF {print $1}')"
+          current_tip="$(printf '%s\n' "${current_output}" | awk 'NF {print $1}')"
+          if [ "${current_tip}" != "${previous_tip}" ]; then
+            echo "Output branch changed after collection; refusing to publish stale data." >&2
+            exit 1
+          fi
 
           publish_dir="$(mktemp -d)"
           git worktree add --detach "${publish_dir}"
@@ -539,7 +622,9 @@ jobs:
               --force-with-lease="${staging_ref}:${staging_tip}" \
               origin "${candidate_commit}:${staging_ref}"
           else
-            git push --force origin "${candidate_commit}:${output_ref}"
+            git push \
+              --force-with-lease="${output_ref}:${previous_tip}" \
+              origin "${candidate_commit}:${output_ref}"
             staging_ref=""
           fi
 
