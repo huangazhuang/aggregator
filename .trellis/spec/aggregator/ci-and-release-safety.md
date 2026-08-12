@@ -31,6 +31,7 @@
 ## 发布前保护
 
 - 测试必须先于聚合/发布执行；`clash-verge-auto.yml` 在生成 profile 前运行完整 `unittest`。
+- 隔离的发布/远端 smoke job 若只安装最小 Python 依赖，必须覆盖其可信入口的完整传递顶层 import closure；主测试 job 安装完整 `requirements.lock` 并不能证明隔离 job 可运行。入口或其顶层导入变化时，同步更新该 job 的固定版本依赖和 workflow 契约测试；至少实际执行一次入口（如 `python -m scripts.validate_public_outputs ...`），不能把 `setup-python` 或单独安装 `PyYAML` 当成运行时验证。
 - 来源必须固定：状态时间在允许窗口内，`profile_sha256` 与实际 profile 完全一致。检查失败时等待新快照或终止，不能继续使用上一轮输入冒充新结果。
 - 发布必须失败关闭：节点数低于绝对/保留比例门槛、轮次不完整、Mihomo 退出、分片缺失、旧 profile/status 不一致或目标检查异常时，不覆盖最后一版可用订阅。
 - GitHub 严格筛选要求普通节点同时通过 GMGN、Google、YouTube；目标整体不可用时应失败，而不是把所有节点当失败后发布空/极小配置。
@@ -50,6 +51,7 @@
 - [ ] Secret 是否通过环境/askpass 注入且不会出现在日志和公开文件？
 - [ ] 并发组、CNB lock、timeout 与触发分支是否仍能阻止冲突发布？
 - [ ] 新状态字段是否与 profile SHA、source SHA、main SHA 和 schema 测试同步？
+- [ ] 每个隔离 Python job 是否安装了其实际入口的完整 import closure，并由 workflow/入口 smoke 测试锁定？
 - [ ] 所有失败路径是否保留旧订阅，并且诊断仍完全脱敏？
 
 ## 反模式

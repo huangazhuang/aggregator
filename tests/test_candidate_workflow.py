@@ -496,6 +496,11 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         )
         self.assertGreaterEqual(self.jobs["publish"]["timeout-minutes"], 35)
         steps = {step.get("name"): step for step in self.jobs["publish"]["steps"]}
+        smoke_dependencies = steps[
+            "Install candidate remote smoke dependencies"
+        ]["run"]
+        self.assertIn("PyYAML==6.0.3", smoke_dependencies)
+        self.assertIn("pycryptodomex==3.23.0", smoke_dependencies)
         build = steps["Build and stage profile commit"]["run"]
         self.assertIn('staging_ref="refs/heads/${CANDIDATE_STAGING_BRANCH}"', build)
         self.assertIn('--force-with-lease="${staging_ref}:${staging_tip}"', build)

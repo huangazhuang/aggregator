@@ -719,9 +719,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install candidate remote smoke dependency
+      - name: Install candidate remote smoke dependencies
         if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
-        run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
+        run: >-
+          python -m pip install --disable-pip-version-check
+          PyYAML==6.0.3
+          pycryptodomex==3.23.0
 
       - name: Build and stage profile commit
         id: publication
