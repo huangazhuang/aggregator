@@ -243,6 +243,8 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("CNB_TOKEN", serialized)
 
     def test_v2_child_image_includes_only_the_required_subscribe_runtime(self) -> None:
+        self.assertIn("PyYAML==6.0.3", self.dockerfile_text)
+        self.assertIn("pycryptodomex==3.23.0", self.dockerfile_text)
         self.assertEqual(
             [
                 line
