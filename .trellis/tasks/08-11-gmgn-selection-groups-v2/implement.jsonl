@@ -1,0 +1,6 @@
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"V2 权威跨层契约：候选三件套、C3 identity owner、900 秒、公开 history 和 bundle/发布边界。"}
+{"file":".trellis/spec/aggregator/architecture-and-navigation.md","reason":"明确 GMGN 选择逻辑应位于 scripts 层，并保持 CNB 测量、选择与发布的责任边界。"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"约束 Clash YAML、GMGN schema、公开/私密字段和失败关闭的数据契约。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/gmgn-pipeline-audit.md","reason":"提供当前选择器、旧五组、真实地区、多样性和自动组泄漏的代码证据。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/design-proposal.md","reason":"给出真实地区 cache、14/10/16/18 分层、150 容量和多样性初始策略。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/planning-resolution.md","reason":"冻结候选三件套、C3 identity owner、亚洲候补边界和 V2 shadow/bundle 约束。"}

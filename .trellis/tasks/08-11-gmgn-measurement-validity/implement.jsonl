@@ -1,0 +1,12 @@
+{"file":".trellis/spec/aggregator/pipeline/index.md","reason":"GMGN 测量链路的开发前检查和质量门禁"}
+{"file":".trellis/spec/aggregator/architecture-and-navigation.md","reason":"CNB prepare/probe/merge/publish 责任与 .cnb.yml 所有权边界"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"GMGN 严格 schema、20轮/四片守恒、私密/公开 fragment 契约"}
+{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"fake clock、精确边界、组件测试和 Windows 临时目录规则"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"无效运行失败关闭、私密目录、运行时版本和发布前保护"}
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"GMGN v3 的4片20轮、900秒、identity epoch、valid_run 和 V2 隔离契约"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"snapshot→manifest→fragment→valid measurement 的字段流检查"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"统计、错误分类、fingerprint 和 runtime helper 保持单一 owner"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/gmgn-pipeline-audit.md","reason":"现有20轮/四片基线、系统事故盲区、出口和错误分类缺口"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"fake-clock、四进程组件、source pinning 和真实工作流测试缺口"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/design-proposal.md","reason":"900秒观察窗、control/canary/egress 与 valid-run 初始量化设计"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"C2 文件范围、并发标定、依赖和 rollout 边界"}

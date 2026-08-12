@@ -1,0 +1,5 @@
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"复核 bundle 同提交/同 run/hash、公开 HMAC identity、staging/current 回读和 last-good。"}
+{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"检查事务失败路径、远端缓存、Mihomo、workflow contract 和敏感字段测试。"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"复核最小权限、lease、分支 allowlist、last-good 和诊断失败语义。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/gmgn-pipeline-audit.md","reason":"核对当前 shadow/profile 失联、无 CAS、publisher 盲区和发布顺序缺陷是否消除。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/design-proposal.md","reason":"对照原子 bundle、staging remote smoke、processed SHA 与 rollback 的目标设计。"}

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"V2 权威跨层契约：候选三件套、metadata 一一覆盖、C3 identity owner 和公开 HMAC ID。"}
+{"file":".trellis/spec/aggregator/architecture-and-navigation.md","reason":"明确外部来源应接入 subscribe/scripts 的候选链路，而不是绕过 GitHub snapshot 直达 CNB。"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"约束候选 YAML/metadata、稳定身份、公开私密字段和不可信输入处理。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/collection-audit.md","reason":"提供现有来源、重复、机场饥饿、容量预算与外部项目实时审计证据。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/planning-resolution.md","reason":"冻结三件套 candidate snapshot、C3 identity owner、900 秒窗口和容量边界，避免研究提案漂移。"}

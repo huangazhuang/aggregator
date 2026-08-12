@@ -1,0 +1,9 @@
+{"file":".trellis/spec/aggregator/pipeline/index.md","reason":"复核根包流水线质量门禁"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"检查 status/metadata/YAML schema、hash、映射和脱敏"}
+{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"检查精确边界、失败关闭、组件与完整 unittest 证据"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"检查权限、Secret、previous 读取、默认关闭与分支安全"}
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"检查 profile/status/metadata 绑定、一对一 HMAC ID 和 V2 失败关闭"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"验证 provenance/identity 字段没有在 producer-consumer 边界丢失"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/collection-audit.md","reason":"按审计缺口复核来源 last-good、地区掉量、配额和去重行为"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"复核候选组件、workflow、远端快照和回滚测试缺口"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"复核 C1 独立完成门禁与后续 C4/C5/C6 接口"}

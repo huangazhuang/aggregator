@@ -1,0 +1,9 @@
+{"file":".trellis/spec/aggregator/pipeline/index.md","reason":"复核根包流水线的通用质量门禁与层级边界。"}
+{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"复核离线、组件、工作流、真实 Mihomo 与临时目录测试要求。"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"复核公开字段、凭据、分支权限、失败关闭、锁与回滚安全。"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"复核 producer/consumer/validator schema 一致性和脱敏契约。"}
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"复核 V2 身份、快照、有效运行、history、事务发布和 rollout 的可执行边界。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/audit-summary.md","reason":"以现有实现和线上基线检查是否真正补齐已识别缺口。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/planning-resolution.md","reason":"复核最终实现没有重新引入已收敛的候选、观察窗、identity 和发布语义冲突。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"复核现有测试、CI/CNB 运维边界及需要新增的事故场景。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"复核各阶段门禁、依赖、验证命令和回滚证据是否完整。"}

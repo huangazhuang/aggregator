@@ -1,0 +1,9 @@
+{"file":".trellis/spec/aggregator/pipeline/index.md","reason":"复核 identity/history 的根包质量门禁"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"检查 canonical identity、history schema、公开字段与原子写入"}
+{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"检查五运行、精确时间/SHA边界、失败关闭和完整 unittest"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"检查 HMAC key 不泄露、previous 失败关闭和 rejected run 不提交"}
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"检查公开 history 无裸 fingerprint/出口IP、exit_id 单一 owner且 key/epoch 迁移失败关闭"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"搜索并拒绝第二套 fingerprint/HMAC/name allocation 实现"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/gmgn-pipeline-audit.md","reason":"按审计缺口复核 durable history、stable ID 和真实保留语义"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"复核多运行状态机、稳定名称、诊断关联和回滚测试"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"复核 C3 完成门禁以及 C1/C2/C4/C5 接口"}

@@ -1,0 +1,6 @@
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"V2 权威跨层契约：公开 history、完整 bundle、staging smoke、CAS/lease 与拒绝运行语义。"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"约束分支权限、锁、密钥、失败关闭、诊断和生成分支发布安全。"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"约束 bundle/status/history/GMGN schema、原子写入和公开私密字段边界。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"提供 V2 shadow、单 bundle、lease/CAS、exactly-once trigger 和远端 validator 的实施顺序。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"提供 previous fail-open、force push、缺少 remote smoke 和工作流测试的现状证据。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/planning-resolution.md","reason":"冻结候选三件套、900 秒观察窗、独立 V2 shadow、bundle/CAS 和正式迁移边界。"}

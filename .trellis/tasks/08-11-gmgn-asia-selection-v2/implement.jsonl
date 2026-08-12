@@ -1,0 +1,10 @@
+{"file":".trellis/spec/aggregator/pipeline/index.md","reason":"根包聚合与 GitHub/CNB 流水线的开发前检查及质量门禁入口。"}
+{"file":".trellis/spec/aggregator/architecture-and-navigation.md","reason":"确认候选收集、GMGN 测量、选择、发布和工作流各层责任边界。"}
+{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"约束 Python 实现、YAML/JSON schema、稳定身份和跨阶段数据契约。"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"约束分支写入、凭据隔离、失败关闭、CAS 与远端发布安全。"}
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"冻结 candidate snapshot v2、HMAC identity、900 秒有效性、history 与 V2 原子 bundle 的跨层契约。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/audit-summary.md","reason":"现有 GitHub/CNB 实现、线上基线和缺口的汇总证据。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/history-decisions.md","reason":"用户已确认的亚洲宽松、20 轮、历史保护、容量与 gstatic 生命周期决策。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/planning-resolution.md","reason":"消解研究提案中的观察窗、候选 sidecar、identity owner 和 shadow 发布差异；实施以此与正式父文档为准。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/design-proposal.md","reason":"V2 候选身份、分片有效性、HMAC、事务 bundle 与 rollout 的设计审阅。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"父子任务依赖、文件所有权、验证矩阵和回滚门禁的实施审阅。"}

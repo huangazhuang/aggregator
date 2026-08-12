@@ -1,0 +1,5 @@
+{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"复核公开身份/history、20轮输入、亚洲候补、分组和 V2 publication consumer 契约。"}
+{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"检查阈值边界、地区/多样性、分组引用、脱敏和失败关闭测试是否完整。"}
+{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"确认选择产物在 Mihomo 校验和正式发布前保持私密/公开边界与 last-good 保护。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"核对当前缺失的地区组、稳定名称、跨运行诊断和真实输出验证。"}
+{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/audit-summary.md","reason":"对照父任务审计结论验证亚洲候补、非亚洲上限和目标分组没有回归。"}
