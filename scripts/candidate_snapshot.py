@@ -560,7 +560,12 @@ def _validate_legacy_candidate_baseline_summary(value: Any) -> dict[str, Any]:
     )
     if sum(region_counts.values()) != candidate_count:
         raise CandidateSnapshotError("legacy candidate baseline region counts are inconsistent")
-    if sum(region_counts[region] for region in REGION_ORDER) != protected_asia_count:
+    hinted_asia_count = sum(region_counts[region] for region in REGION_ORDER)
+    unassigned_protected_asia = protected_asia_count - hinted_asia_count
+    if (
+        hinted_asia_count > protected_asia_count
+        or unassigned_protected_asia > region_counts["unknown"]
+    ):
         raise CandidateSnapshotError("legacy candidate baseline Asia counts are inconsistent")
     normalized = {
         "state": "legacy_v1",

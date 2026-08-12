@@ -1224,6 +1224,83 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
 
 
 class CandidateLegacyBootstrapTests(unittest.TestCase):
+    def test_legacy_baseline_accepts_protected_asia_without_specific_region_hint(self) -> None:
+        for name in ("ASIA-KEEP generic legacy", "🇰🇷 剩余流量 10 GB"):
+            with self.subTest(name=name):
+                old = proxy(name, "old.example", "old-secret")
+                old_bytes = legacy_profile_bytes([old])
+                current = proxy(name, "current.example", "current-secret")
+                source = task("current", "https://raw.githubusercontent.com/acme/current/main/sub.yaml")
+                sources, records = provenance_for_task(source, [current], observed_at=RUN0)
+
+                identity_input = prepare_candidate_identity_input(
+                    legacy_profile_bytes([current]),
+                    {"sources": sources, "records": records},
+                    run_at=RUN0,
+                    mode="collect",
+                    main_sha=MAIN_SHA,
+                    profile_url="https://example.invalid/clash.yaml",
+                    candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                    previous_state="legacy_v1",
+                    previous_status=legacy_status(old_bytes, protected_asia_count=1),
+                    previous_profile_bytes=old_bytes,
+                    resolver=public_resolver,
+                )
+                baseline = identity_input["previous_baseline"]
+                self.assertEqual(baseline["protected_asia_count"], 1)
+                self.assertEqual(
+                    sum(baseline["region_hint_counts"][region] for region in ("HK", "JP", "KR", "SG", "TW")),
+                    0,
+                )
+                self.assertEqual(baseline["region_hint_counts"]["unknown"], 1)
+
+                snapshot = build_candidate_snapshot(identity_input, settings=IDENTITY)
+                self.assertTrue(snapshot.status["publish_gate"]["passed"])
+                self.assertEqual(snapshot.status["previous"]["protected_asia_count"], 1)
+
+    def test_legacy_unassigned_asia_still_enforces_total_and_specific_region_floors(self) -> None:
+        old_jp = proxy("JP legacy", "old-jp.example", "old-jp-secret")
+        old_unassigned = proxy("ASIA-KEEP generic legacy", "old-asia.example", "old-asia-secret")
+        old_global = proxy("global legacy", "old-global.example", "old-global-secret")
+        old_bytes = legacy_profile_bytes([old_jp, old_unassigned, old_global])
+
+        current_unassigned = proxy("ASIA-KEEP generic current", "current-asia.example", "current-asia-secret")
+        current_global = proxy("global current", "current-global.example", "current-global-secret")
+        source = task("current", "https://raw.githubusercontent.com/acme/current/main/sub.yaml")
+        sources, records = provenance_for_task(
+            source,
+            [current_unassigned, current_global],
+            observed_at=RUN0,
+        )
+        identity_input = prepare_candidate_identity_input(
+            legacy_profile_bytes([current_unassigned, current_global]),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="legacy_v1",
+            previous_status=legacy_status(old_bytes, protected_asia_count=2),
+            previous_profile_bytes=old_bytes,
+            resolver=public_resolver,
+        )
+
+        with self.assertRaisesRegex(CandidateSnapshotError, "publish gate rejected"):
+            build_candidate_snapshot(identity_input, settings=IDENTITY)
+
+        baseline = identity_input["previous_baseline"]
+        _, _, gate = evaluate_candidate_publish_gate(
+            candidate_count=2,
+            protected_asia_count=1,
+            region_counts={"HK": 0, "JP": 0, "KR": 0, "SG": 0, "TW": 0, "unknown": 2},
+            sources={"source": {"visibility": "public", "health_state": "healthy"}},
+            previous=baseline,
+        )
+        self.assertFalse(gate["passed"])
+        self.assertIn("asia_retention_below_70", gate["reasons"])
+        self.assertIn("region_JP_dropped_to_zero", gate["reasons"])
+
     def test_legacy_baseline_accepts_v1_fields_that_candidate_v2_rejects(self) -> None:
         legacy_nodes = [
             {
@@ -1407,6 +1484,11 @@ class CandidateLegacyBootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(CandidateSnapshotError, "binding mismatch"):
             build_candidate_snapshot(tampered_hash, settings=IDENTITY)
 
+        tampered_asia = copy.deepcopy(identity_input)
+        tampered_asia["previous_baseline"]["protected_asia_count"] = 0
+        with self.assertRaisesRegex(CandidateSnapshotError, "Asia counts are inconsistent"):
+            build_candidate_snapshot(tampered_asia, settings=IDENTITY)
+
     def test_legacy_baseline_rejects_hash_count_proxy_and_group_corruption(self) -> None:
         node = proxy("JP legacy", "jp.example", "secret-jp")
         good_bytes = legacy_profile_bytes([node])
@@ -1419,6 +1501,9 @@ class CandidateLegacyBootstrapTests(unittest.TestCase):
         bad_count = legacy_status(good_bytes, protected_asia_count=1)
         bad_count["proxy_count"] = 2
         cases.append((good_bytes, bad_count, "count mismatch"))
+
+        bad_asia_count = legacy_status(good_bytes, protected_asia_count=0)
+        cases.append((good_bytes, bad_asia_count, "protected Asia count is invalid"))
 
         unknown_status = dict(
             legacy_status(good_bytes, protected_asia_count=1),
