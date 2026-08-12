@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import yaml
 
 from scripts.candidate_snapshot import (
+    CandidateSnapshot,
     CandidateSnapshotError,
     build_candidate_snapshot,
     evaluate_candidate_publish_gate,
@@ -666,6 +667,178 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
         metadata = snapshot.ordered_candidates[0].metadata
         self.assertEqual(metadata["aliases"], [])
         self.assertNotIn("nested-secret-987654", json.dumps(snapshot.metadata))
+
+    def test_case_varied_xhttp_and_vless_encryption_secrets_use_structured_names(self) -> None:
+        encryption_key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        node = {
+            "name": f"JP {encryption_key.lower()}",
+            "type": "vless",
+            "server": "node.example",
+            "port": 443,
+            "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "encryption": f"mlkem768x25519plus.native.1rtt.{encryption_key}",
+            "network": "xhttp",
+            "xhttp-opts": {
+                "path": "/",
+                "x-padding-key": "padding-secret-123456",
+                "session-key": "session-secret-123456",
+                "seq-key": "sequence-secret-123456",
+                "uplink-data-key": "uplink-secret-123456",
+            },
+        }
+        source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+
+        snapshot = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        parsed = yaml.safe_load(snapshot.profile_bytes)
+
+        self.assertEqual(snapshot.ordered_candidates[0].metadata["aliases"], [])
+        self.assertEqual(parsed["proxies"][0]["name"], "ASIA-KEEP JP VLESS")
+        public_metadata = json.dumps(snapshot.metadata)
+        for secret in (
+            encryption_key.lower(),
+            "padding-secret-123456",
+            "session-secret-123456",
+            "sequence-secret-123456",
+            "uplink-secret-123456",
+        ):
+            self.assertNotIn(secret, public_metadata)
+
+    def test_private_subscription_token_alias_is_absent_from_public_snapshot(self) -> None:
+        token = "SUBSCRIPTIONTOKENABC123"
+        node = proxy(f"JP {token}", "node.example", "proxy-secret")
+        source = task(
+            "opaque-source",
+            f"https://private.example/sub?token={token}",
+        )
+
+        snapshot = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        parsed = yaml.safe_load(snapshot.profile_bytes)
+
+        self.assertEqual(snapshot.ordered_candidates[0].metadata["aliases"], [])
+        self.assertEqual(parsed["proxies"][0]["name"], "CANDIDATE SS")
+        self.assertNotIn(
+            token,
+            json.dumps(snapshot.metadata) + snapshot.profile_bytes.decode("utf-8"),
+        )
+
+    def test_fresh_private_source_evidence_drops_historical_token_alias(self) -> None:
+        token = "SUBSCRIPTIONTOKENABC123"
+        node = proxy("JP safe", "node.example", "proxy-secret")
+        source = task(
+            "opaque-source",
+            f"https://private.example/sub?token={token}",
+        )
+        initial = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        candidate_id_value = next(iter(initial.metadata["candidates"]))
+        previous_metadata = copy.deepcopy(initial.metadata)
+        previous_metadata["candidates"][candidate_id_value]["aliases"] = [
+            f"JP {token}"
+        ]
+        previous_status = copy.deepcopy(initial.status)
+        previous_status["candidate_metadata_sha256"] = hashlib.sha256(
+            (
+                json.dumps(
+                    previous_metadata,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+        ).hexdigest()
+        safe_previous = CandidateSnapshot(
+            profile_bytes=initial.profile_bytes,
+            status=previous_status,
+            metadata=previous_metadata,
+            ordered_candidates=initial.ordered_candidates,
+            snapshot_id=initial.snapshot_id,
+            main_sha=initial.main_sha,
+            profile_sha256=initial.profile_sha256,
+            metadata_sha256=previous_status["candidate_metadata_sha256"],
+            identity_key_version=initial.identity_key_version,
+            identity_epoch=initial.identity_epoch,
+        )
+
+        current = build_candidate_snapshot(
+            staging(
+                [node],
+                [(source, [node], None)],
+                run_at="2026-08-02T00:00:00Z",
+                previous=safe_previous,
+            ),
+            settings=IDENTITY,
+        )
+
+        public = json.dumps(current.metadata) + current.profile_bytes.decode("utf-8")
+        self.assertNotIn(token, public)
+        self.assertEqual(current.ordered_candidates[0].metadata["aliases"], ["JP safe"])
+
+    def test_last_good_keeps_policy_validated_alias_and_clash_name_stable(self) -> None:
+        node = proxy("KR Seoul Stable", "node.example", "proxy-secret")
+        source = task(
+            "opaque-source",
+            "https://private.example/sub?token=UNRELATEDTOKENABC123",
+        )
+        companion = proxy("global companion", "companion.example", "companion-secret")
+        companion_source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+        initial = build_candidate_snapshot(
+            staging(
+                [node, companion],
+                [
+                    (source, [node], None),
+                    (companion_source, [companion], None),
+                ],
+                run_at=RUN0,
+            ),
+            settings=IDENTITY,
+        )
+
+        carried = build_candidate_snapshot(
+            staging(
+                [companion],
+                [
+                    (source, [], "timeout"),
+                    (companion_source, [companion], None),
+                ],
+                run_at="2026-08-02T00:00:00Z",
+                previous=initial,
+            ),
+            settings=IDENTITY,
+        )
+
+        initial_names = {
+            item["server"]: item["name"]
+            for item in yaml.safe_load(initial.profile_bytes)["proxies"]
+        }
+        carried_names = {
+            item["server"]: item["name"]
+            for item in yaml.safe_load(carried.profile_bytes)["proxies"]
+        }
+        initial_name = initial_names["node.example"]
+        carried_name = carried_names["node.example"]
+        self.assertEqual(initial_name, "KR Seoul Stable")
+        self.assertEqual(carried_name, initial_name)
+        carried_entry = next(
+            entry
+            for entry in carried.ordered_candidates
+            if entry.proxy["server"] == "node.example"
+        )
+        self.assertEqual(carried_entry.metadata["aliases"], ["KR Seoul Stable"])
 
     def test_endpoint_material_cannot_be_repeated_as_public_aliases(self) -> None:
         aliases = (

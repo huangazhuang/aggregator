@@ -13,10 +13,11 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from scripts.candidate_handoff import CandidateHandoffError, write_private_bytes_atomic
 from scripts.proxy_identity import IdentityError, canonical_port, canonical_server
+from scripts.proxy_privacy import contains_sensitive_scalar_material
 from scripts.proxy_schema import ProxySchemaError, validate_proxy_schema
 from subscribe.asia import (
     PREFERRED_ASIA_MARKER_PATTERN,
@@ -26,7 +27,7 @@ from subscribe.asia import (
 
 PROVENANCE_STAGING_KIND = "github-candidate-provenance-staging"
 PROVENANCE_STAGING_SCHEMA_VERSION = 1
-SOURCE_POLICY_VERSION = "candidate-source-v1"
+SOURCE_POLICY_VERSION = "candidate-source-v2"
 ENDPOINT_SAFETY_POLICY_VERSION = "endpoint-safety-v1"
 
 SOURCE_OUTCOMES = frozenset(
@@ -132,6 +133,60 @@ def _github_public_alias(raw_source: str) -> str:
     return alias if SAFE_PUBLIC_ALIAS_RE.fullmatch(alias) else ""
 
 
+def _source_credential_values(
+    raw_source: str,
+    *,
+    include_opaque_components: bool,
+) -> tuple[str, ...]:
+    """Return URL credential values while the private source URL is in scope."""
+
+    try:
+        parsed = urlsplit(raw_source)
+    except ValueError:
+        return ()
+    if not parsed.scheme or not parsed.netloc:
+        return ()
+
+    values: set[str] = set()
+
+    def add(value: Any) -> None:
+        current = str(value or "").strip()
+        # Compare the exact URL spelling as well as a bounded decode chain.
+        # This catches aliases echoing ``ABC%2FDEF`` or a double-encoded token
+        # without letting adversarial percent input consume unbounded work.
+        for _ in range(4):
+            if not current or current in values:
+                break
+            values.add(current)
+            decoded = unquote(current).strip()
+            if decoded == current:
+                break
+            current = decoded
+
+    for value in (parsed.username, parsed.password):
+        add(value)
+
+    # Every subscription URL can carry credentials in userinfo or query
+    # fields, including an otherwise public GitHub-hosted URL.  Opaque sources
+    # additionally use path segments and fragments as bearer material.  Parse
+    # without ``unquote_plus`` semantics: ``+`` is valid token material and
+    # must not silently turn into a space before comparison.
+    for component in re.split(r"[&;]", parsed.query):
+        if not component:
+            continue
+        key, separator, value = component.partition("=")
+        add(key)
+        if separator:
+            add(value)
+    if include_opaque_components:
+        for segment in parsed.path.split("/"):
+            add(segment)
+        add(parsed.fragment)
+        for component in re.split(r"[/?:#&;=]", parsed.fragment):
+            add(component)
+    return tuple(sorted(values, key=lambda item: (item.casefold(), item)))
+
+
 def safe_source_descriptor(
     raw_source: Any,
     *,
@@ -215,6 +270,10 @@ def provenance_for_task(
         task_name=task_name,
         publish_derivatives=publish_derivatives,
     )
+    source_credentials = _source_credential_values(
+        task_source,
+        include_opaque_components=descriptor["visibility"] == "opaque",
+    )
     sources: dict[str, dict[str, Any]] = {
         descriptor["source_id"]: {
             **descriptor,
@@ -228,6 +287,8 @@ def provenance_for_task(
         if not descriptor["publish_derivatives"]:
             continue
         alias = str(proxy.get("name", "") or "").strip()
+        if contains_sensitive_scalar_material(alias, source_credentials):
+            alias = ""
         hints, evidence = _region_evidence(proxy, task_name)
         try:
             safe_proxy = _safe_proxy_copy(proxy)

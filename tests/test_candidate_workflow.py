@@ -118,10 +118,22 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("clash-cn-gmgn-v2-shadow", lowered)
         self.assertIn("OUTPUT_BRANCH: clash-verge-output", self.text)
 
-    def test_existing_concurrency_and_candidate_artifacts_are_preserved(self) -> None:
+    def test_publication_runs_queue_without_weakening_cas(self) -> None:
         self.assertEqual(
             self.document["concurrency"],
-            {"group": "clash-verge-auto", "cancel-in-progress": True},
+            {"group": "clash-verge-auto", "cancel-in-progress": False},
+        )
+        publish_steps = {
+            step.get("name"): step for step in self.jobs["publish"]["steps"]
+        }
+        build = publish_steps["Build and stage profile commit"]["run"]
+        promote = publish_steps[
+            "Lease-promote and smoke candidate output branch"
+        ]["run"]
+        self.assertIn('--force-with-lease="${output_ref}:${previous_tip}"', build)
+        self.assertIn('--force-with-lease="${output_ref}:${previous_tip}"', promote)
+        self.assertIn(
+            '--force-with-lease="${output_ref}:${candidate_commit}"', promote
         )
         self.assertIn("candidate-metadata.json", self.text)
         self.assertIn("candidate-identity-input", self.text)

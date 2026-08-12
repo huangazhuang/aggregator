@@ -1441,13 +1441,12 @@ def build_candidate_snapshot(
         entries[candidate_id_value] = {
             "proxy": proxy,
             "metadata": {
-                "aliases": sorted(
-                    {
-                        safe_alias
-                        for alias in set(aliases) | set((old_metadata or {}).get("aliases", []))
-                        if (safe_alias := _safe_proxy_alias(alias, proxy))
-                    }
-                ),
+                # Raw source credentials no longer exist beyond collection,
+                # so an older public alias cannot be proven safe against the
+                # current source URL.  Rebuild aliases only from this run's
+                # private provenance instead of allowing a historical leak to
+                # flow back into metadata or the Clash display name.
+                "aliases": aliases,
                 "source_ids": sorted(set(source_ids) | set((old_metadata or {}).get("source_ids", []))),
                 "first_seen_at": first_seen_at,
                 "last_seen_at": run_at,
@@ -1513,6 +1512,11 @@ def build_candidate_snapshot(
             if public_ids["candidate_id"] != candidate_id_value:
                 raise CandidateSnapshotError("previous candidate identity changed")
             metadata = copy.deepcopy(old_metadata)
+            # The previous snapshot was validated under the same versioned
+            # source/privacy policy, so its aliases are safe to retain during
+            # a temporary last-good carry-forward.  A source-policy upgrade
+            # fails closed during previous snapshot validation instead of
+            # silently reusing aliases produced by older rules.
             metadata["aliases"] = sorted(
                 {
                     safe_alias

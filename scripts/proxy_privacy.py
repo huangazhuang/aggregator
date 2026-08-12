@@ -9,6 +9,8 @@ available.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import ipaddress
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -73,6 +75,10 @@ SENSITIVE_KEY_EXACT = frozenset(
         "private-key",
         "primary-key",
         "client-key",
+        "seq-key",
+        "session-key",
+        "uplink-data-key",
+        "x-padding-key",
         "cookie",
         "set-cookie",
         "secret",
@@ -102,8 +108,20 @@ NON_SECRET_KEY_EXACT = frozenset(
         "fingerprint",
     }
 )
-AUTH_SCHEME_RE = re.compile(r"(?i)^(?:bearer|basic|token|digest)\s+(.+)$")
+AUTH_SCHEME_RE = re.compile(r"(?i)^(bearer|basic|token|digest)\s+(.+)$")
+PEM_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN\s+(?P<label>[A-Z0-9 ]*PRIVATE KEY)-----"
+    r"(?P<body>.*?)"
+    r"-----END\s+(?P=label)-----",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+PEM_BODY_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{6,}(?![A-Za-z0-9+/=])")
 SAFE_PROTOCOL_RE = re.compile(r"^[a-z0-9][a-z0-9+._-]{0,31}$", flags=re.IGNORECASE)
+VLESS_KEY_ENCRYPTION_PREFIX = "mlkem768x25519plus"
+VLESS_KEY_ENCRYPTION_PADDING_LIMIT = 20
+VLESS_KEY_ENCRYPTION_KEY_SIZES = frozenset({32, 1184})
+HEADER_CONTAINER_KEYS = frozenset({"header", "headers", "ws-headers"})
+PEM_FRAGMENT_LENGTH = 12
 
 
 def _normalize_alias_unbounded(value: Any, *, strip_dynamic: bool) -> str:
@@ -293,6 +311,16 @@ def _is_sensitive_key(value: Any) -> bool:
     )
 
 
+def _strip_wrapping_quotes(value: str) -> str:
+    result = value.strip()
+    while len(result) >= 2 and (result[0], result[-1]) in {
+        ('"', '"'),
+        ("'", "'"),
+    }:
+        result = result[1:-1].strip()
+    return result
+
+
 def _scalar_secret_variants(value: Any) -> set[str]:
     if value is None or isinstance(value, bool):
         return set()
@@ -304,23 +332,175 @@ def _scalar_secret_variants(value: Any) -> set[str]:
         return set()
 
     variants = {scalar}
-    auth_match = AUTH_SCHEME_RE.fullmatch(scalar)
+    unquoted_scalar = _strip_wrapping_quotes(scalar)
+    if unquoted_scalar and unquoted_scalar != scalar:
+        variants.add(unquoted_scalar)
+    auth_match = AUTH_SCHEME_RE.fullmatch(unquoted_scalar)
     if auth_match:
-        credential = auth_match.group(1).strip()
+        scheme = auth_match.group(1).casefold()
+        credential = auth_match.group(2).strip()
         if credential:
             variants.add(credential)
-    for component in re.split(r"[;,&]", scalar):
-        component = component.strip()
+            if scheme == "basic":
+                try:
+                    decoded_bytes = base64.b64decode(
+                        credential + "=" * (-len(credential) % 4),
+                        validate=True,
+                    )
+                    try:
+                        decoded = decoded_bytes.decode("utf-8")
+                    except UnicodeDecodeError:
+                        decoded = decoded_bytes.decode("latin-1")
+                except (binascii.Error, ValueError):
+                    decoded = ""
+                if ":" in decoded and not CONTROL_RE.search(decoded):
+                    username, password = decoded.split(":", 1)
+                    variants.add(decoded)
+                    if username:
+                        variants.add(username)
+                    if password:
+                        variants.add(password)
+    for component in re.split(r"[;,&]", unquoted_scalar):
+        component = _strip_wrapping_quotes(component)
         if not component:
             continue
-        if component != scalar:
+        if component != unquoted_scalar:
             variants.add(component)
         if "=" in component:
             _, secret = component.split("=", 1)
-            secret = secret.strip()
+            secret = _strip_wrapping_quotes(secret)
             if secret:
                 variants.add(secret)
+    for pem_match in PEM_PRIVATE_KEY_BLOCK_RE.finditer(scalar):
+        body = pem_match.group("body")
+        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
+        variants.update(line for line in body_lines if len(line) >= 6)
+        body_tokens = PEM_BODY_TOKEN_RE.findall(body)
+        variants.update(body_tokens)
+        for token in body_tokens:
+            if len(token) < PEM_FRAGMENT_LENGTH:
+                continue
+            variants.update(
+                token[index : index + PEM_FRAGMENT_LENGTH]
+                for index in range(len(token) - PEM_FRAGMENT_LENGTH + 1)
+            )
+        encoded_body = "".join(
+            line for line in body_lines if re.fullmatch(r"[A-Za-z0-9+/=]+", line)
+        )
+        if len(encoded_body) >= 6:
+            variants.add(encoded_body)
     return variants
+
+
+def _nested_scalar_secret_variants(value: Any) -> set[str]:
+    if isinstance(value, Mapping):
+        return {
+            secret
+            for nested in value.values()
+            for secret in _nested_scalar_secret_variants(nested)
+        }
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return {
+            secret
+            for nested in value
+            for secret in _nested_scalar_secret_variants(nested)
+        }
+    return _scalar_secret_variants(value)
+
+
+def _authorization_secret_variants(value: Any) -> set[str]:
+    variants: set[str] = set()
+    if isinstance(value, Mapping):
+        for nested in value.values():
+            variants.update(_authorization_secret_variants(nested))
+        return variants
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        for nested in value:
+            variants.update(_authorization_secret_variants(nested))
+        return variants
+    if value is None or isinstance(value, bool):
+        return variants
+    scalar = _strip_wrapping_quotes(str(value))
+    if AUTH_SCHEME_RE.fullmatch(scalar):
+        variants.update(_scalar_secret_variants(scalar))
+    return variants
+
+
+def _header_value_secret_variants(name: Any, value: Any) -> set[str]:
+    if _is_sensitive_key(name):
+        return _nested_scalar_secret_variants(value)
+    return _authorization_secret_variants(value)
+
+
+def _header_block_secret_variants(value: Any) -> set[str]:
+    if not isinstance(value, str):
+        return set()
+    variants: set[str] = set()
+    for line in re.split(r"(?:\r?\n|\\r?\\n)", value):
+        if ":" not in line:
+            continue
+        name, header_value = line.split(":", 1)
+        variants.update(_header_value_secret_variants(name, header_value))
+    return variants
+
+
+def _protocol_specific_secret_variants(proxy: Mapping[Any, Any]) -> set[str]:
+    proxy_type = str(proxy.get("type") or "").strip().casefold()
+    if proxy_type == "hysteria":
+        return _scalar_secret_variants(proxy.get("obfs"))
+    if proxy_type != "ssr":
+        return set()
+
+    variants: set[str] = set()
+    protocol = str(proxy.get("protocol") or "").strip().casefold()
+    if protocol.startswith(("auth_aes128_", "auth_chain_")):
+        protocol_param = proxy.get("protocol-param")
+        variants.update(_scalar_secret_variants(protocol_param))
+        if isinstance(protocol_param, (str, int, float)) and not isinstance(
+            protocol_param, bool
+        ):
+            scalar = str(protocol_param).strip()
+            if ":" in scalar:
+                user_id, user_key = scalar.split(":", 1)
+                if user_id.strip():
+                    variants.add(user_id.strip())
+                if user_key.strip():
+                    variants.add(user_key.strip())
+
+    obfs = str(proxy.get("obfs") or "").strip().casefold()
+    obfs_param = proxy.get("obfs-param")
+    if obfs in {"http_simple", "http_post"} and isinstance(obfs_param, str):
+        _, separator, header_block = obfs_param.partition("#")
+        if separator:
+            variants.update(_header_block_secret_variants(header_block))
+    return variants
+
+
+def _vless_encryption_secret_variants(value: Any) -> set[str]:
+    if not isinstance(value, str) or not value.startswith(
+        VLESS_KEY_ENCRYPTION_PREFIX + "."
+    ):
+        return set()
+    parts = value.split(".")
+    if len(parts) < 4:
+        return set()
+    secrets = {value}
+    for key in parts[3:]:
+        if len(key) < VLESS_KEY_ENCRYPTION_PADDING_LIMIT or not re.fullmatch(
+            r"[A-Za-z0-9_-]+", key
+        ):
+            continue
+        try:
+            decoded = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
+        except (binascii.Error, ValueError):
+            continue
+        if len(decoded) in VLESS_KEY_ENCRYPTION_KEY_SIZES:
+            secrets.add(key)
+    return secrets
 
 
 def iter_sensitive_proxy_scalars(proxy: Any) -> Iterator[str]:
@@ -334,31 +514,57 @@ def iter_sensitive_proxy_scalars(proxy: Any) -> Iterator[str]:
 
     values: set[str] = set()
     active_containers: set[int] = set()
+    if isinstance(proxy, Mapping):
+        values.update(_protocol_specific_secret_variants(proxy))
 
-    def visit(value: Any, *, inherited_sensitive: bool = False) -> None:
+    def visit(
+        value: Any,
+        *,
+        inherited_sensitive: bool = False,
+        in_headers: bool = False,
+    ) -> None:
         if isinstance(value, Mapping):
             identity = id(value)
             if identity in active_containers:
                 return
             active_containers.add(identity)
             try:
-                sensitive_header = any(
-                    _normalize_sensitive_key(key) == "name"
-                    and _is_sensitive_key(item)
-                    for key, item in value.items()
+                header_name = next(
+                    (
+                        item
+                        for key, item in value.items()
+                        if _normalize_sensitive_key(key) == "name"
+                    ),
+                    "",
                 )
                 for key in sorted(value, key=lambda item: str(item)):
                     normalized_key = _normalize_sensitive_key(key)
+                    if normalized_key == "encryption":
+                        values.update(_vless_encryption_secret_variants(value[key]))
+                    header_variants: set[str] = set()
+                    if in_headers:
+                        if header_name and normalized_key in {"value", "values"}:
+                            header_variants = _header_value_secret_variants(
+                                header_name, value[key]
+                            )
+                        elif not header_name:
+                            header_variants = _header_value_secret_variants(
+                                key, value[key]
+                            )
+                        values.update(header_variants)
+                    child_in_headers = (
+                        in_headers
+                        or normalized_key in HEADER_CONTAINER_KEYS
+                        or normalized_key.endswith("-headers")
+                    )
                     visit(
                         value[key],
                         inherited_sensitive=(
                             inherited_sensitive
                             or _is_sensitive_key(key)
-                            or (
-                                sensitive_header
-                                and normalized_key in {"value", "values"}
-                            )
+                            or bool(header_variants)
                         ),
+                        in_headers=child_in_headers,
                     )
             finally:
                 active_containers.remove(identity)
@@ -370,7 +576,11 @@ def iter_sensitive_proxy_scalars(proxy: Any) -> Iterator[str]:
             active_containers.add(identity)
             try:
                 for item in value:
-                    visit(item, inherited_sensitive=inherited_sensitive)
+                    visit(
+                        item,
+                        inherited_sensitive=inherited_sensitive,
+                        in_headers=in_headers,
+                    )
             finally:
                 active_containers.remove(identity)
             return
@@ -385,11 +595,29 @@ def _alias_repeats_secret(alias: str, secret: str) -> bool:
     normalized_secret = WHITESPACE_RE.sub(" ", secret).strip()
     if not normalized_secret:
         return False
-    if alias == normalized_secret:
+    folded_alias = alias.casefold()
+    folded_secret = normalized_secret.casefold()
+    if folded_alias == folded_secret:
         return True
     # Short credentials are only rejected on exact equality.  This avoids a
     # password such as "KR" suppressing every legitimate Korean label.
-    return len(normalized_secret) >= 6 and normalized_secret in alias
+    return len(normalized_secret) >= 6 and folded_secret in folded_alias
+
+
+def contains_sensitive_scalar_material(
+    value: Any,
+    sensitive_scalars: Iterable[Any],
+) -> bool:
+    """Return whether an alias repeats any supplied private scalar value."""
+
+    alias = _normalize_alias_unbounded(value, strip_dynamic=True)
+    if not alias:
+        return False
+    return any(
+        _alias_repeats_secret(alias, str(secret))
+        for secret in sensitive_scalars
+        if secret is not None
+    )
 
 
 def sanitize_public_proxy_alias(
@@ -414,9 +642,8 @@ def sanitize_public_proxy_alias(
         return ""
     if EXPLICIT_SECRET_RE.search(alias):
         return ""
-    if any(
-        _alias_repeats_secret(alias, secret)
-        for secret in iter_sensitive_proxy_scalars(proxy_value)
+    if contains_sensitive_scalar_material(
+        alias, iter_sensitive_proxy_scalars(proxy_value)
     ):
         return ""
     return alias[:max_length].rstrip()
@@ -462,6 +689,7 @@ __all__ = [
     "PUBLIC_ALIAS_MAX_LENGTH",
     "REGION_ORDER",
     "contains_endpoint_material",
+    "contains_sensitive_scalar_material",
     "is_public_proxy_alias",
     "iter_sensitive_proxy_scalars",
     "normalize_public_alias",

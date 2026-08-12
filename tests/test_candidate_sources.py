@@ -147,6 +147,198 @@ class ProvenanceSourceTests(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertTrue(tasks[0].publish_derivatives)
 
+    def test_private_source_url_credentials_cannot_survive_as_proxy_aliases(self) -> None:
+        source_task = SimpleNamespace(
+            name="opaque-source",
+            sub=(
+                "https://source-user:SOURCEPASSWORDABC123@private.example/sub"
+                "?token=SUBSCRIPTIONTOKENABC123&client=CLIENTSECRETABC123"
+            ),
+            domain="",
+            publish_derivatives=True,
+        )
+
+        sources, records = provenance_for_task(
+            source_task,
+            [
+                {
+                    "name": "JP SUBSCRIPTIONTOKENABC123",
+                    "type": "ss",
+                    "server": "node.example",
+                    "port": 443,
+                    "cipher": "aes-128-gcm",
+                    "password": "proxy-secret",
+                },
+                {
+                    "name": "JP sourcepasswordabc123",
+                    "type": "ss",
+                    "server": "node-2.example",
+                    "port": 443,
+                    "cipher": "aes-128-gcm",
+                    "password": "proxy-secret-2",
+                },
+                {
+                    "name": "JP safe label",
+                    "type": "ss",
+                    "server": "node-3.example",
+                    "port": 443,
+                    "cipher": "aes-128-gcm",
+                    "password": "proxy-secret-3",
+                },
+            ],
+            observed_at="2026-08-12T00:00:00Z",
+        )
+
+        self.assertEqual([record["alias"] for record in records], ["", "", "JP safe label"])
+        public_projection = repr(
+            (
+                sources,
+                [
+                    {
+                        key: value
+                        for key, value in record.items()
+                        if key != "proxy"
+                    }
+                    for record in records
+                ],
+            )
+        )
+        for secret in (
+            "SOURCEPASSWORDABC123",
+            "SUBSCRIPTIONTOKENABC123",
+            "CLIENTSECRETABC123",
+        ):
+            self.assertNotIn(secret, public_projection)
+
+    def test_private_source_path_fragment_bare_query_and_plus_tokens_are_private(self) -> None:
+        source_task = SimpleNamespace(
+            name="opaque-source",
+            sub=(
+                "https://private.example/sub/PATHTOKENABC123"
+                "?BARETOKENABC123&encoded=BASE64+TOKENABC123"
+                "#FRAGMENTTOKENABC123"
+            ),
+            domain="",
+            publish_derivatives=True,
+        )
+        tokens = (
+            "PATHTOKENABC123",
+            "BARETOKENABC123",
+            "BASE64+TOKENABC123",
+            "FRAGMENTTOKENABC123",
+        )
+        proxies = [
+            {
+                "name": f"JP {token}",
+                "type": "ss",
+                "server": f"node-{index}.example",
+                "port": 443,
+                "cipher": "aes-128-gcm",
+                "password": f"proxy-secret-{index}",
+            }
+            for index, token in enumerate(tokens)
+        ]
+
+        _, records = provenance_for_task(
+            source_task,
+            proxies,
+            observed_at="2026-08-12T00:00:00Z",
+        )
+
+        self.assertEqual([record["alias"] for record in records], ["", "", "", ""])
+
+    def test_public_github_path_segments_do_not_suppress_normal_aliases(self) -> None:
+        source_task = SimpleNamespace(
+            name="community",
+            sub="https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+            domain="",
+            publish_derivatives=True,
+        )
+        node = {
+            "name": "JP community main",
+            "type": "ss",
+            "server": "node.example",
+            "port": 443,
+            "cipher": "aes-128-gcm",
+            "password": "proxy-secret",
+        }
+
+        _, records = provenance_for_task(
+            source_task,
+            [node],
+            observed_at="2026-08-12T00:00:00Z",
+        )
+
+        self.assertEqual(records[0]["alias"], "JP community main")
+
+    def test_public_github_url_userinfo_and_query_tokens_are_still_private(self) -> None:
+        source_task = SimpleNamespace(
+            name="community",
+            sub=(
+                "https://source-user:GITHUBPASSWORDABC123@raw.githubusercontent.com/"
+                "acme/community/main/sub.yaml?token=GITHUBQUERYTOKENABC123"
+            ),
+            domain="",
+            publish_derivatives=True,
+        )
+        tokens = ("GITHUBPASSWORDABC123", "GITHUBQUERYTOKENABC123")
+        proxies = [
+            {
+                "name": f"JP {token}",
+                "type": "ss",
+                "server": f"node-{index}.example",
+                "port": 443,
+                "cipher": "aes-128-gcm",
+                "password": f"proxy-secret-{index}",
+            }
+            for index, token in enumerate(tokens)
+        ]
+
+        _, records = provenance_for_task(
+            source_task,
+            proxies,
+            observed_at="2026-08-12T00:00:00Z",
+        )
+
+        self.assertEqual([record["alias"] for record in records], ["", ""])
+
+    def test_percent_encoded_and_double_encoded_url_tokens_are_private(self) -> None:
+        source_task = SimpleNamespace(
+            name="opaque-source",
+            sub=(
+                "https://ENCODEDUSERABC123:ENCODED%252FPASSWORDABC123@private.example/"
+                "sub?token=ABC%252FDEF123456"
+            ),
+            domain="",
+            publish_derivatives=True,
+        )
+        aliases = (
+            "JP ENCODED%252FPASSWORDABC123",
+            "JP ENCODED%2FPASSWORDABC123",
+            "JP ABC%252FDEF123456",
+            "JP ABC%2FDEF123456",
+            "JP ABC/DEF123456",
+        )
+        proxies = [
+            {
+                "name": alias,
+                "type": "ss",
+                "server": f"node-{index}.example",
+                "port": 443,
+                "cipher": "aes-128-gcm",
+                "password": f"proxy-secret-{index}",
+            }
+            for index, alias in enumerate(aliases)
+        ]
+
+        _, records = provenance_for_task(
+            source_task,
+            proxies,
+            observed_at="2026-08-12T00:00:00Z",
+        )
+
+        self.assertEqual([record["alias"] for record in records], ["", "", "", "", ""])
+
     def test_anytls_tls_fingerprint_survives_private_staging_round_trip(self) -> None:
         source_task = SimpleNamespace(
             name="JP AnyTLS",

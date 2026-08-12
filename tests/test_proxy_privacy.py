@@ -4,6 +4,7 @@ import unittest
 
 from scripts.proxy_privacy import (
     contains_endpoint_material,
+    contains_sensitive_scalar_material,
     is_public_proxy_alias,
     iter_sensitive_proxy_scalars,
     normalize_public_alias,
@@ -165,6 +166,271 @@ class SensitiveScalarTests(unittest.TestCase):
         self.assertNotIn("ordinary-browser-label", values)
         self.assertNotIn("ordinary-region-label", values)
 
+    def test_decodes_basic_authorization_from_mapping_and_list_headers(self) -> None:
+        candidate = proxy(
+            uuid=None,
+            **{
+                "xhttp-opts": {
+                    "headers": {
+                        "Authorization": "Basic dXNlcjpwYXNzMTIz",
+                    }
+                },
+                "ws-opts": {
+                    "headers": [
+                        {
+                            "name": "Proxy-Authorization",
+                            "values": ["Basic bGlzdHVzZXI6bGlzdHBhc3M0NTY="],
+                        }
+                    ]
+                },
+            },
+        )
+
+        values = set(iter_sensitive_proxy_scalars(candidate))
+
+        self.assertTrue(
+            {
+                "dXNlcjpwYXNzMTIz",
+                "user:pass123",
+                "user",
+                "pass123",
+                "bGlzdHVzZXI6bGlzdHBhc3M0NTY=",
+                "listuser:listpass456",
+                "listuser",
+                "listpass456",
+            }.issubset(values)
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP USER:PASS123", candidate), ""
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP LISTPASS456", candidate), ""
+        )
+        self.assertEqual(sanitize_public_proxy_alias("JP USER", candidate), "JP USER")
+        self.assertEqual(sanitize_public_proxy_alias("USER", candidate), "")
+
+    def test_arbitrary_header_names_still_hide_authorization_schemes(self) -> None:
+        candidate = proxy(
+            uuid=None,
+            **{
+                "xhttp-opts": {
+                    "headers": {
+                        "X-Foo": "Bearer ARBITRARYBEARERABC123",
+                        "X-MBX-APIKEY": "Bearer EXCHANGESECRETABC123",
+                    }
+                }
+            },
+        )
+
+        values = set(iter_sensitive_proxy_scalars(candidate))
+
+        self.assertTrue(
+            {
+                "ARBITRARYBEARERABC123",
+                "EXCHANGESECRETABC123",
+            }.issubset(values)
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP ARBITRARYBEARERABC123", candidate), ""
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP EXCHANGESECRETABC123", candidate), ""
+        )
+
+    def test_digest_and_cookie_values_strip_wrapping_quotes(self) -> None:
+        candidate = proxy(
+            uuid=None,
+            **{
+                "ws-opts": {
+                    "headers": {
+                        "Authorization": (
+                            'Digest username="user", nonce="DIGESTNONCEABC123"'
+                        ),
+                        "Cookie": 'sid="COOKIESECRETABC123"',
+                    }
+                }
+            },
+        )
+
+        values = set(iter_sensitive_proxy_scalars(candidate))
+
+        self.assertTrue(
+            {"DIGESTNONCEABC123", "COOKIESECRETABC123"}.issubset(values)
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP DIGESTNONCEABC123", candidate), ""
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP COOKIESECRETABC123", candidate), ""
+        )
+
+    def test_finds_hysteria_v1_obfs_and_authenticated_ssr_protocol_param(self) -> None:
+        hysteria = proxy(
+            type="hysteria",
+            uuid=None,
+            auth="hysteria-auth-secret",
+            obfs="hysteria-obfs-secret-123456",
+        )
+        authenticated_ssr = proxy(
+            type="ssr",
+            uuid=None,
+            password="ssr-password-secret",
+            protocol="auth_chain_a",
+            **{"protocol-param": "12345:ssr-user-key-secret"},
+        )
+
+        self.assertIn(
+            "hysteria-obfs-secret-123456",
+            set(iter_sensitive_proxy_scalars(hysteria)),
+        )
+        self.assertTrue(
+            {
+                "12345:ssr-user-key-secret",
+                "12345",
+                "ssr-user-key-secret",
+            }.issubset(set(iter_sensitive_proxy_scalars(authenticated_ssr)))
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias(
+                "JP HYSTERIA-OBFS-SECRET-123456", hysteria
+            ),
+            "",
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP SSR-USER-KEY-SECRET", authenticated_ssr),
+            "",
+        )
+
+    def test_ssr_http_obfs_header_credentials_are_private(self) -> None:
+        candidate = proxy(
+            type="ssr",
+            uuid=None,
+            password="ssr-password-secret",
+            protocol="origin",
+            obfs="http_simple",
+            **{
+                "protocol-param": "ordinary-public-param",
+                "obfs-param": (
+                    "front.example#Authorization: Bearer SSRHEADERSECRETABC123\\r\\n"
+                    'Cookie: sid="SSRCOOKIESECRETABC123"\\r\\n'
+                ),
+            },
+        )
+
+        values = set(iter_sensitive_proxy_scalars(candidate))
+
+        self.assertTrue(
+            {"SSRHEADERSECRETABC123", "SSRCOOKIESECRETABC123"}.issubset(values)
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP SSRHEADERSECRETABC123", candidate), ""
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP SSRCOOKIESECRETABC123", candidate), ""
+        )
+
+    def test_does_not_treat_other_obfs_modes_or_plain_ssr_params_as_secrets(self) -> None:
+        hysteria2 = proxy(
+            type="hysteria2",
+            uuid=None,
+            password="hy2-password-secret",
+            obfs="salamander",
+            **{"obfs-password": "hy2-obfs-password-secret"},
+        )
+        plain_ssr = proxy(
+            type="ssr",
+            uuid=None,
+            password="ssr-password-secret",
+            obfs="tls1.2_ticket_auth",
+            protocol="origin",
+            **{"protocol-param": "ordinary-public-param"},
+        )
+
+        self.assertNotIn("salamander", set(iter_sensitive_proxy_scalars(hysteria2)))
+        self.assertNotIn(
+            "tls1.2_ticket_auth", set(iter_sensitive_proxy_scalars(plain_ssr))
+        )
+        self.assertNotIn(
+            "ordinary-public-param", set(iter_sensitive_proxy_scalars(plain_ssr))
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP salamander", hysteria2), "JP salamander"
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP ordinary-public-param", plain_ssr),
+            "JP ordinary-public-param",
+        )
+
+    def test_private_key_pem_body_lines_and_tokens_are_secret(self) -> None:
+        private_key = """-----BEGIN PRIVATE KEY-----
+PRIVATEKEYABC123
+MIIEFAKEBASE64PAYLOAD987654321
+-----END PRIVATE KEY-----"""
+        candidate = proxy(uuid=None, **{"private-key": private_key})
+
+        values = set(iter_sensitive_proxy_scalars(candidate))
+
+        self.assertIn("PRIVATEKEYABC123", values)
+        self.assertIn("MIIEFAKEBASE64PAYLOAD987654321", values)
+        self.assertIn("PRIVATEKEYABC123MIIEFAKEBASE64PAYLOAD987654321", values)
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP privatekeyabc123", candidate), ""
+        )
+
+    def test_private_key_pem_body_fragments_are_secret(self) -> None:
+        body_line = "MIIEFAKEBASE64PAYLOAD987654321ABCDEFGHIJKLMNOPQRSTUV"
+        candidate = proxy(
+            uuid=None,
+            **{
+                "private-key": (
+                    "-----BEGIN PRIVATE KEY-----\n"
+                    f"{body_line}\n"
+                    "-----END PRIVATE KEY-----"
+                )
+            },
+        )
+
+        self.assertEqual(
+            sanitize_public_proxy_alias(f"JP {body_line[:16]}", candidate), ""
+        )
+
+    def test_reverse_fragment_matching_does_not_drop_ordinary_word_labels(self) -> None:
+        candidate = proxy(uuid=None, password="XPREMIUMNODE1Y")
+
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP PREMIUMNODE1", candidate),
+            "JP PREMIUMNODE1",
+        )
+
+    def test_finds_all_strict_xhttp_secret_keys_and_vless_encryption_material(self) -> None:
+        encryption_key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        encryption = f"mlkem768x25519plus.native.1rtt.{encryption_key}"
+        candidate = proxy(
+            **{
+                "encryption": encryption,
+                "xhttp-opts": {
+                    "x-padding-key": "padding-secret-123456",
+                    "session-key": "session-secret-123456",
+                    "seq-key": "sequence-secret-123456",
+                    "uplink-data-key": "uplink-secret-123456",
+                },
+            }
+        )
+
+        values = set(iter_sensitive_proxy_scalars(candidate))
+
+        self.assertTrue(
+            {
+                "padding-secret-123456",
+                "session-secret-123456",
+                "sequence-secret-123456",
+                "uplink-secret-123456",
+                encryption,
+                encryption_key,
+            }.issubset(values)
+        )
+        self.assertNotIn("none", set(iter_sensitive_proxy_scalars(proxy(encryption="none"))))
+
     def test_cycles_do_not_recurse_forever(self) -> None:
         auth: dict[str, object] = {"password": "cycle-secret"}
         auth["child"] = auth
@@ -258,6 +524,56 @@ class PublicAliasTests(unittest.TestCase):
         self.assertEqual(
             sanitize_public_proxy_alias("JP ordinary-browser-label", candidate),
             "JP ordinary-browser-label",
+        )
+
+    def test_secret_matching_is_case_insensitive_but_short_values_stay_exact(self) -> None:
+        candidate = proxy(
+            uuid="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            password="secretabc123",
+        )
+
+        self.assertEqual(
+            sanitize_public_proxy_alias(
+                "JP AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", candidate
+            ),
+            "",
+        )
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP SECRETABC123", candidate), ""
+        )
+        self.assertEqual(sanitize_public_proxy_alias("KR Premium", proxy(password="kr")), "KR Premium")
+        self.assertEqual(sanitize_public_proxy_alias("KR", proxy(password="kr")), "")
+        self.assertTrue(
+            contains_sensitive_scalar_material("JP SECRETABC123", ["secretabc123"])
+        )
+        self.assertFalse(contains_sensitive_scalar_material("KR Premium", ["kr"]))
+
+    def test_rejects_xhttp_and_vless_encryption_key_aliases(self) -> None:
+        encryption_key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        candidate = proxy(
+            **{
+                "encryption": f"mlkem768x25519plus.native.1rtt.{encryption_key}",
+                "xhttp-opts": {
+                    "x-padding-key": "padding-secret-123456",
+                    "session-key": "session-secret-123456",
+                    "seq-key": "sequence-secret-123456",
+                    "uplink-data-key": "uplink-secret-123456",
+                },
+            }
+        )
+
+        for alias in (
+            "JP PADDING-SECRET-123456",
+            "JP session-secret-123456",
+            "JP sequence-secret-123456",
+            "JP uplink-secret-123456",
+            f"JP {encryption_key}",
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(sanitize_public_proxy_alias(alias, candidate), "")
+        self.assertEqual(
+            sanitize_public_proxy_alias("JP encryption none", proxy(encryption="none")),
+            "JP encryption none",
         )
 
     def test_validator_requires_canonical_safe_form(self) -> None:

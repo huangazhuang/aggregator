@@ -49,7 +49,7 @@ permissions:
 
 concurrency:
   group: clash-verge-auto
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   TZ: Asia/Shanghai
