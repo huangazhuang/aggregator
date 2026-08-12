@@ -10,6 +10,10 @@ import urllib.request
 from pathlib import Path
 
 
+class ManualCandidateV2Error(ValueError):
+    """Raised when private manual subscriptions cannot satisfy V2 provenance."""
+
+
 def extract_urls(raw: str) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
@@ -26,6 +30,12 @@ def extract_urls(raw: str) -> list[str]:
 def main() -> int:
     raw = os.environ.get("CLASH_SUBSCRIPTIONS_SECRET", "")
     remote = os.environ.get("CLASH_SUBSCRIPTION_URL_SECRET", "")
+    candidate_v2 = os.environ.get("ENABLE_CANDIDATE_V2", "").strip().lower() == "true"
+    if candidate_v2 and (extract_urls(raw) or remote.strip()):
+        raise ManualCandidateV2Error(
+            "Candidate V2 does not support manual subscription mode; "
+            "disable Candidate V2 or remove the manual subscription secrets"
+        )
     if remote:
         request = urllib.request.Request(remote, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(request, timeout=60) as response:

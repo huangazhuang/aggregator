@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import socket
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,7 +37,11 @@ from scripts.candidate_snapshot import (
     evaluate_candidate_publish_gate,
     prepare_candidate_identity_input,
 )
-from scripts.candidate_sources import provenance_for_task, safe_source_descriptor
+from scripts.candidate_sources import (
+    EndpointResolutionInfrastructureError,
+    provenance_for_task,
+    safe_source_descriptor,
+)
 from scripts.proxy_identity import IdentitySettings, compute_public_ids
 from subscribe.workflow import TaskConfig, dedup_task
 from subscribe import workflow as workflow_module
@@ -337,6 +342,19 @@ class SourceLimitTests(unittest.TestCase):
         self.assertEqual(result.selected, ())
         self.assertEqual(result.report["drop_reasons"]["unsafe_endpoint"], 1)
         self.assertEqual(result.report["drop_reasons"]["non_target_region"], 1)
+
+    def test_transient_dns_infrastructure_failure_fails_the_source_evaluation(self) -> None:
+        def resolver(_host: str, _port: int) -> list[str]:
+            raise socket.gaierror(socket.EAI_AGAIN, "try again")
+
+        with self.assertRaisesRegex(EndpointResolutionInfrastructureError, "DNS infrastructure"):
+            select_registered_source_candidates(
+                "awesome-vpn",
+                [proxy("JP", 1, server="transient.example")],
+                settings=IDENTITY,
+                resolver=resolver,
+                checked_at="2026-08-11T00:00:00Z",
+            )
 
 
 class SourceGateTests(unittest.TestCase):

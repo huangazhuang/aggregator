@@ -47,6 +47,21 @@ GMGN 任务使用 4 个独立 Mihomo 分片、每片 16 个并发线程，总并
 - `CLASH_SUBSCRIPTION_URL`：一个远程文本文件 URL，文件中一行一个订阅 URL。
 - `CHECKIN_CONFIG_JSON`：可选，用于机场每日签到保流量。
 
+如果准备开启实验性的 GitHub Candidate V2，还必须新增 Repository secret
+`CANDIDATE_HANDOFF_AES_KEY`。它必须是**随机 32 字节密钥的标准 Base64 编码**；
+例如可在可信本机生成后直接粘贴输出（不要把输出提交到仓库）：
+
+```bash
+python -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+```
+
+该密钥只用于把收集 job 产生的完整候选身份输入加密后交给独立 identity
+job。Actions artifact 只保存 AES-256-GCM 认证密文，不保存完整 proxy、hostname、
+port、凭据、裸 fingerprint 或 previous profile。密钥缺失、Base64 无效、长度不是
+32 字节，或密文/运行上下文认证失败时，Candidate V2 会失败关闭并保留上一版输出。
+Candidate V2 关闭时不需要配置此密钥。它与 `GMGN_IDENTITY_HMAC_KEY` 用途不同，
+不得复用；后者仍只负责生成稳定的公开身份 ID。
+
 订阅 URL 只能保存在 `Secrets` 中，不要使用 `Variables`。GitHub 会自动遮盖 Secret，普通变量则可能在 Actions 日志中显示明文。
 
 `CHECKIN_CONFIG_JSON` 示例：

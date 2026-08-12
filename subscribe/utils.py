@@ -580,6 +580,19 @@ def multi_process_run(func: typing.Callable, tasks: list) -> list:
     return results
 
 
+def _is_endpoint_resolution_infrastructure_error(error: BaseException) -> bool:
+    """Identify the candidate DNS fail-closed signal without a top-level dependency."""
+
+    try:
+        from scripts.candidate_sources import EndpointResolutionInfrastructureError
+    except ImportError:
+        # Keep the legacy standalone subscribe runtime usable when the
+        # repository-level candidate pipeline is not installed.
+        return False
+
+    return isinstance(error, EndpointResolutionInfrastructureError)
+
+
 def multi_thread_run(
     func: typing.Callable,
     tasks: list,
@@ -615,6 +628,14 @@ def multi_thread_run(
                 index = collections[future]
                 results[index] = result
             except Exception as e:
+                if _is_endpoint_resolution_infrastructure_error(e):
+                    # A transient resolver/infrastructure failure makes the
+                    # candidate observation untrustworthy. Do not downgrade it
+                    # to an ordinary per-source miss or expose its cause here.
+                    for pending in collections:
+                        if pending is not future:
+                            pending.cancel()
+                    raise e from None
                 logger.error(f"function {funcname} execution generated an exception: {e}")
 
     logger.info(

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,7 @@ from scripts.candidate_snapshot import (
     write_candidate_snapshot,
 )
 from scripts.candidate_sources import (
+    EndpointResolutionInfrastructureError,
     EndpointSafetyError,
     provenance_for_task,
     safe_source_descriptor,
@@ -147,6 +149,239 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
         self.assertEqual(result["policy_version"], "endpoint-safety-v1")
         self.assertEqual(result["resolved_address_count"], 2)
 
+    def test_distinguishes_definitive_candidate_dns_failure_from_infrastructure(self) -> None:
+        def missing(_host: str, _port: int) -> list[str]:
+            raise socket.gaierror(socket.EAI_NONAME, "not found")
+
+        with self.assertRaises(EndpointSafetyError):
+            validate_proxy_endpoint(proxy("missing", "missing.example", "fake"), resolver=missing)
+
+        def transient(_host: str, _port: int) -> list[str]:
+            raise socket.gaierror(socket.EAI_AGAIN, "try again")
+
+        with self.assertRaises(EndpointResolutionInfrastructureError):
+            validate_proxy_endpoint(proxy("transient", "transient.example", "fake"), resolver=transient)
+
+    def test_prepare_quarantines_invalid_endpoints_without_losing_source_observation(self) -> None:
+        good = proxy("JP good", "good.example", "good-secret")
+        missing = proxy("KR missing", "missing.example", "missing-secret")
+        rebound = proxy("SG rebound", "rebound.example", "rebound-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, records = provenance_for_task(source, [good, missing, rebound], observed_at=RUN0)
+        calls: dict[str, int] = {}
+
+        def resolver(host: str, _port: int) -> list[str]:
+            calls[host] = calls.get(host, 0) + 1
+            if host == "missing.example":
+                raise socket.gaierror(socket.EAI_NONAME, "not found")
+            if host == "rebound.example":
+                return ["8.8.8.8", "169.254.169.254"]
+            return ["8.8.8.8"]
+
+        identity_input = prepare_candidate_identity_input(
+            yaml.safe_dump({"proxies": [good, missing, rebound]}, allow_unicode=True).encode(),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="confirmed_absent",
+            resolver=resolver,
+        )
+
+        self.assertEqual(identity_input["schema_version"], 3)
+        self.assertEqual(len(identity_input["profile"]["proxies"]), 1)
+        self.assertEqual(len(identity_input["records"]), 1)
+        self.assertEqual(len(identity_input["quarantined_records"]), 2)
+        self.assertTrue(
+            all(set(item) == {"fingerprint", "source_id", "region_hints"} for item in identity_input["quarantined_records"])
+        )
+        private_handoff = json.dumps(identity_input["quarantined_records"])
+        self.assertNotIn("missing.example", private_handoff)
+        self.assertNotIn("missing-secret", private_handoff)
+        self.assertEqual(calls, {"good.example": 1, "missing.example": 1, "rebound.example": 1})
+        snapshot = build_candidate_snapshot(identity_input, settings=IDENTITY)
+        self.assertEqual(snapshot.status["candidate_count"], 1)
+        source_metadata = next(iter(snapshot.metadata["sources"].values()))
+        self.assertEqual(source_metadata["candidate_count"], 3)
+        self.assertEqual(source_metadata["last_success_candidate_count"], 3)
+        self.assertEqual(source_metadata["missing_candidates"], {})
+        public_text = snapshot.profile_bytes.decode("utf-8") + json.dumps(snapshot.metadata)
+        self.assertNotIn("missing-secret", public_text)
+        self.assertNotIn("rebound-secret", public_text)
+
+        tampered = copy.deepcopy(identity_input)
+        source_metadata_key = next(iter(item["source_id"] for item in sources))
+        tampered["quarantined_records"].append(
+            {
+                "fingerprint": "0" * 64,
+                "source_id": source_metadata_key,
+                "region_hints": ["KR"],
+            }
+        )
+        tampered["raw_count"] += 1
+        with self.assertRaisesRegex(
+            CandidateSnapshotError,
+            "count is inconsistent|not bound to provenance|overlap",
+        ):
+            build_candidate_snapshot(tampered, settings=IDENTITY)
+
+    def test_identity_input_preserves_duplicate_observations_and_counts_invalid_records(self) -> None:
+        node = proxy("JP duplicate", "duplicate.example", "duplicate-secret")
+        invalid = dict(node, name="invalid", port=0)
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, duplicate_records = provenance_for_task(
+            source,
+            [node, dict(node), invalid],
+            observed_at=RUN0,
+        )
+        identity_input = prepare_candidate_identity_input(
+            yaml.safe_dump({"proxies": [node]}, allow_unicode=True).encode(),
+            {"sources": sources, "records": duplicate_records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="confirmed_absent",
+            resolver=public_resolver,
+        )
+
+        self.assertEqual(identity_input["raw_count"], 3)
+        self.assertEqual(identity_input["valid_config_count"], 2)
+        self.assertEqual(identity_input["invalid_record_count"], 1)
+        self.assertEqual(len(identity_input["observed_records"]), 2)
+        snapshot = build_candidate_snapshot(identity_input, settings=IDENTITY)
+        self.assertEqual(snapshot.status["candidate_count"], 1)
+        source_metadata = next(iter(snapshot.metadata["sources"].values()))
+        self.assertEqual(source_metadata["candidate_count"], 1)
+
+    def test_identity_input_rejects_forged_or_cross_class_observation_bindings(self) -> None:
+        node = proxy("JP safe", "safe.example", "safe-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        identity_input = staging([node], [(source, [node], None)], run_at=RUN0)
+
+        forged = copy.deepcopy(identity_input)
+        forged["observed_records"][0]["fingerprint"] = "0" * 64
+        with self.assertRaisesRegex(CandidateSnapshotError, "not bound to provenance"):
+            build_candidate_snapshot(forged, settings=IDENTITY)
+
+        overlapping = copy.deepcopy(identity_input)
+        overlapping["quarantined_records"].append(
+            copy.deepcopy(overlapping["observed_records"][0])
+        )
+        with self.assertRaisesRegex(CandidateSnapshotError, "overlap"):
+            build_candidate_snapshot(overlapping, settings=IDENTITY)
+
+    def test_previous_quarantine_must_belong_to_the_previous_profile(self) -> None:
+        node = proxy("JP current", "current.example", "current-secret")
+        source = task("source", "https://raw.githubusercontent.com/acme/source/main/sub.yaml")
+        initial = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        current = staging(
+            [node],
+            [(source, [node], None)],
+            run_at="2026-08-02T00:00:00Z",
+            previous=initial,
+        )
+        current["previous_quarantined_fingerprints"] = ["0" * 64]
+        with self.assertRaisesRegex(CandidateSnapshotError, "not bound to the previous profile"):
+            build_candidate_snapshot(current, settings=IDENTITY)
+
+    def test_prepare_fails_closed_on_transient_dns_infrastructure_error(self) -> None:
+        node = proxy("JP transient", "transient.example", "transient-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, records = provenance_for_task(source, [node], observed_at=RUN0)
+
+        def resolver(_host: str, _port: int) -> list[str]:
+            raise socket.gaierror(socket.EAI_AGAIN, "try again")
+
+        with self.assertRaises(EndpointResolutionInfrastructureError):
+            prepare_candidate_identity_input(
+                yaml.safe_dump({"proxies": [node]}, allow_unicode=True).encode(),
+                {"sources": sources, "records": records},
+                run_at=RUN0,
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="confirmed_absent",
+                resolver=resolver,
+            )
+
+    def test_prepare_rejects_a_profile_when_every_endpoint_is_quarantined(self) -> None:
+        node = proxy("JP missing", "missing.example", "missing-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, records = provenance_for_task(source, [node], observed_at=RUN0)
+
+        def resolver(_host: str, _port: int) -> list[str]:
+            raise socket.gaierror(socket.EAI_NONAME, "not found")
+
+        with self.assertRaisesRegex(CandidateSnapshotError, "no safe proxies"):
+            prepare_candidate_identity_input(
+                yaml.safe_dump({"proxies": [node]}, allow_unicode=True).encode(),
+                {"sources": sources, "records": records},
+                run_at=RUN0,
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="confirmed_absent",
+                resolver=resolver,
+            )
+
+    def test_previous_endpoint_drift_is_quarantined_without_invalidating_previous_snapshot(self) -> None:
+        nodes = [
+            proxy(f"global-{index}", f"node-{index}.example", f"secret-{index}")
+            for index in range(5)
+        ]
+        source = task("source", "https://raw.githubusercontent.com/acme/source/main/sub.yaml")
+        initial = build_candidate_snapshot(
+            staging(nodes, [(source, nodes, None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        current_nodes = nodes[1:]
+        sources, records = provenance_for_task(
+            source,
+            current_nodes,
+            observed_at="2026-08-02T00:00:00Z",
+        )
+
+        def resolver(host: str, _port: int) -> list[str]:
+            if host == "node-0.example":
+                raise socket.gaierror(socket.EAI_NONAME, "not found")
+            return ["8.8.8.8"]
+
+        identity_input = prepare_candidate_identity_input(
+            yaml.safe_dump(
+                {"proxies": current_nodes}, allow_unicode=True, sort_keys=False
+            ).encode(),
+            {"sources": sources, "records": records},
+            run_at="2026-08-02T00:00:00Z",
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="present",
+            previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_status=initial.status,
+            previous_metadata=initial.metadata,
+            resolver=resolver,
+        )
+
+        self.assertEqual(len(identity_input["previous_quarantined_fingerprints"]), 1)
+        private_quarantine = json.dumps(
+            identity_input["previous_quarantined_fingerprints"]
+        )
+        self.assertNotIn("node-0.example", private_quarantine)
+        self.assertNotIn("secret-0", private_quarantine)
+        current = build_candidate_snapshot(identity_input, settings=IDENTITY)
+        self.assertEqual(current.status["candidate_count"], 4)
+        self.assertNotIn("node-0.example", current.profile_bytes.decode("utf-8"))
+
 
 class CandidateProvenanceSnapshotTests(unittest.TestCase):
     def test_exact_duplicate_merges_all_sources_and_asia_evidence(self) -> None:
@@ -251,6 +486,31 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
         metadata = snapshot.ordered_candidates[0].metadata
         self.assertEqual(metadata["aliases"], [])
         self.assertNotIn("fake-secret", json.dumps(snapshot.metadata))
+
+    def test_endpoint_material_cannot_be_repeated_as_public_aliases(self) -> None:
+        aliases = (
+            "node.example:443",
+            "backup 203.0.113.10",
+            "[2001:4860:4860::8888]:443",
+        )
+        for index, alias in enumerate(aliases):
+            with self.subTest(alias=alias):
+                node = proxy(alias, "node.example", f"secret-{index}")
+                source = task(
+                    "community",
+                    "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+                )
+                snapshot = build_candidate_snapshot(
+                    staging([node], [(source, [node], None)], run_at=RUN0),
+                    settings=IDENTITY,
+                )
+
+                metadata = snapshot.ordered_candidates[0].metadata
+                self.assertEqual(metadata["aliases"], [])
+                public_metadata = json.dumps(snapshot.metadata)
+                self.assertNotIn("node.example", public_metadata)
+                self.assertNotIn("203.0.113.10", public_metadata)
+                self.assertNotIn("2001:4860:4860::8888", public_metadata)
 
 
 class CandidateLegacyBootstrapTests(unittest.TestCase):

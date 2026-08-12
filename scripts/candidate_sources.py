@@ -86,6 +86,10 @@ class EndpointSafetyError(CandidateSourceError):
     """Raised when a proxy endpoint is not safe to hand to the identity stage."""
 
 
+class EndpointResolutionInfrastructureError(CandidateSourceError):
+    """Raised when DNS infrastructure is too uncertain to classify a candidate."""
+
+
 def utc_timestamp(value: datetime | str | None = None) -> str:
     """Return a strict second-resolution UTC timestamp."""
 
@@ -428,8 +432,25 @@ def validate_proxy_endpoint(
             raise EndpointSafetyError("proxy endpoint hostname is malformed")
         try:
             addresses = list((resolver or _default_resolver)(server, port))
+        except socket.gaierror as exc:
+            definitive_codes = {
+                value
+                for value in (
+                    getattr(socket, "EAI_NONAME", None),
+                    getattr(socket, "EAI_NODATA", None),
+                    getattr(socket, "EAI_ADDRFAMILY", None),
+                )
+                if value is not None
+            }
+            if exc.errno in definitive_codes:
+                raise EndpointSafetyError("proxy endpoint DNS resolution failed") from exc
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            ) from exc
         except Exception as exc:
-            raise EndpointSafetyError("proxy endpoint DNS resolution failed") from exc
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            ) from exc
     if not addresses or any(not is_acceptable_public_ip(value) for value in addresses):
         raise EndpointSafetyError("proxy endpoint resolved outside the public Internet")
     return {
@@ -442,6 +463,7 @@ def validate_proxy_endpoint(
 __all__ = [
     "CandidateSourceError",
     "ENDPOINT_SAFETY_POLICY_VERSION",
+    "EndpointResolutionInfrastructureError",
     "EndpointSafetyError",
     "PROVENANCE_STAGING_KIND",
     "PROVENANCE_STAGING_SCHEMA_VERSION",

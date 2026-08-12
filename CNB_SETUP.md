@@ -61,6 +61,15 @@ imports:
 
 GitHub 和 CNB 必须使用**同一组身份配置**：GitHub Actions Secret `GMGN_IDENTITY_HMAC_KEY` 与 CNB 密钥仓库中的同名值必须是完全相同的 key 字节；GitHub Variables 与 CNB secret 中的 `GMGN_IDENTITY_KEY_VERSION`、`GMGN_IDENTITY_EPOCH` 也必须逐字一致。不要在两端分别随机生成 key，也不要只配置 version/epoch 而遗漏 GitHub Secret。当前代码没有公开 fallback key；在 GitHub Secret 尚未配置时必须保持 Candidate V2 总开关关闭。两端会在处理真实节点前用固定测试向量校验四类 public ID，不一致即失败关闭。
 
+GitHub Candidate V2 还需要一个只存在于 GitHub Actions 的独立 Repository secret：
+`CANDIDATE_HANDOFF_AES_KEY`。它是随机 32 字节 AES-256 key 的严格 Base64 编码，
+仅供 collect job 加密、candidate identity job 解密私密身份输入；不能复用
+`GMGN_IDENTITY_HMAC_KEY`，也不需要复制到 CNB。上传的 artifact 只包含
+AES-256-GCM 认证密文，并绑定 GitHub repository、稳定的 run ID 和触发 SHA；同一
+workflow run 的失败 job 重跑仍可验证原 artifact，而跨 run 或跨提交替换会失败。
+缺失/无效密钥、密文篡改或跨运行替换都会在 identity build 前失败关闭。Candidate
+V2 开关关闭时，该密钥不参与现有 V1 流程。
+
 每个 source SHA 还会使用非订阅、非用户入口的 `clash-cn-gmgn-v2-processed/<source_sha>` 受控 ref 保存脱敏的 `queued/running/failed_infrastructure/rejected` 状态和 `retry_of`。该 ref 只允许一个 `state.json`，通过 CAS/force-with-lease 更新；accepted 的唯一权威仍是 V2 shadow bundle/history，避免双写。它不包含代理、出口 IP、原始错误、token 或 HMAC key，也不能作为 Clash 订阅链接。
 
 V2 Pipeline 还会在无密钥子容器中真实执行一次临时 network namespace 的 add/delete capability smoke，然后四个分片各自在独立 namespace 内运行。Runner 不支持 `NET_ADMIN`/`SYS_ADMIN`、Docker service、iptables 或 namespace 创建/清理时，任务必须直接失败；不得改用 `--privileged` 或 `seccomp=unconfined` 降级绕过。完成密钥引用和 capability smoke 后，才从 GitHub 手动同步页传入完整 64 位 candidate profile SHA 触发第一轮真实 shadow。

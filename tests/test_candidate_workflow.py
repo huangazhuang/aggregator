@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
+from scripts import build_manual_config
+
 
 WORKFLOW = Path(".github/workflows/clash-verge-auto.yml")
+HANDOFF_SECRET = "CANDIDATE_HANDOFF_AES_KEY"
 
 
 class CandidateWorkflowContractTests(unittest.TestCase):
@@ -25,6 +31,59 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("ENABLE_GITHUB_CANDIDATE_V2 || 'false'", self.text)
 
+    def test_manual_subscription_mode_is_rejected_before_private_remote_fetch_in_v2(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "ENABLE_CANDIDATE_V2": "true",
+                    "CLASH_SUBSCRIPTIONS_SECRET": "",
+                    "CLASH_SUBSCRIPTION_URL_SECRET": "https://private.invalid/list?token=secret",
+                },
+                clear=False,
+            ),
+            patch.object(build_manual_config.urllib.request, "urlopen") as urlopen,
+            self.assertRaisesRegex(
+                build_manual_config.ManualCandidateV2Error,
+                "does not support manual subscription mode",
+            ),
+        ):
+            build_manual_config.main()
+
+        urlopen.assert_not_called()
+
+    def test_manual_subscription_mode_remains_available_when_v2_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            root = Path(directory)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "ENABLE_CANDIDATE_V2": "false",
+                        "CLASH_SUBSCRIPTIONS_SECRET": "https://manual.invalid/sub?token=secret",
+                        "CLASH_SUBSCRIPTION_URL_SECRET": "",
+                    },
+                    clear=False,
+                ),
+                patch(
+                    "scripts.build_manual_config.Path",
+                    side_effect=lambda value: root / value,
+                ),
+            ):
+                self.assertEqual(build_manual_config.main(), 0)
+
+            config = json.loads(
+                (root / "subscribe/config/clash-verge.generated.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                config["domains"][0]["sub"],
+                ["https://manual.invalid/sub?token=secret"],
+            )
+
     def test_collection_identity_and_publish_permissions_are_isolated(self) -> None:
         self.assertEqual(set(self.jobs), {"collect", "candidate_identity", "publish"})
         self.assertEqual(self.document["permissions"], {"contents": "read"})
@@ -38,6 +97,13 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("GMGN_IDENTITY_HMAC_KEY", collect)
         self.assertIn("GMGN_IDENTITY_HMAC_KEY", identity)
         self.assertNotIn("GMGN_IDENTITY_HMAC_KEY", publish)
+        self.assertIn(HANDOFF_SECRET, collect)
+        self.assertIn(HANDOFF_SECRET, identity)
+        self.assertNotIn(HANDOFF_SECRET, publish)
+        self.assertEqual(
+            self.text.count("secrets.CANDIDATE_HANDOFF_AES_KEY"),
+            2,
+        )
         self.assertNotIn("subscribe/process.py", identity)
         self.assertNotIn("mihomo", identity.lower())
         self.assertNotIn("GH_TOKEN", identity)
@@ -60,6 +126,108 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("candidate-metadata.json", self.text)
         self.assertIn("candidate-identity-input", self.text)
         self.assertIn("candidate-public-staging", self.text)
+
+    def test_private_identity_handoff_artifact_contains_only_authenticated_ciphertext(self) -> None:
+        collect_steps = self.jobs["collect"]["steps"]
+        identity_steps = self.jobs["candidate_identity"]["steps"]
+        upload = next(
+            step
+            for step in collect_steps
+            if step.get("name") == "Upload candidate identity handoff"
+        )
+        encrypt = next(
+            step
+            for step in collect_steps
+            if step.get("name") == "Encrypt candidate V2 identity handoff"
+        )
+        download = next(
+            step
+            for step in identity_steps
+            if step.get("name") == "Download encrypted identity handoff"
+        )
+        decrypt = next(
+            step
+            for step in identity_steps
+            if step.get("name")
+            == "Decrypt and authenticate candidate V2 identity handoff"
+        )
+
+        self.assertEqual(upload["if"], "env.ENABLE_CANDIDATE_V2 == 'true'")
+        self.assertEqual(upload["with"]["path"], "candidate-handoff/identity-input.enc")
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertIs(upload["with"]["overwrite"], True)
+        self.assertEqual(download["with"]["path"], "candidate-handoff")
+        self.assertIn(
+            "python -m scripts.candidate_handoff encrypt",
+            encrypt["run"],
+        )
+        self.assertIn(
+            "--input candidate-private/identity-input.json",
+            encrypt["run"],
+        )
+        self.assertIn(
+            "--output candidate-handoff/identity-input.enc",
+            encrypt["run"],
+        )
+        self.assertIn(
+            "python -m scripts.candidate_handoff decrypt",
+            decrypt["run"],
+        )
+        self.assertIn(
+            "--input candidate-handoff/identity-input.enc",
+            decrypt["run"],
+        )
+        self.assertIn(
+            "--output candidate-private/identity-input.json",
+            decrypt["run"],
+        )
+        for step in (encrypt, decrypt):
+            self.assertEqual(
+                step["env"][HANDOFF_SECRET],
+                "${{ secrets.CANDIDATE_HANDOFF_AES_KEY }}",
+            )
+            self.assertIn('--repository "${GITHUB_REPOSITORY}"', step["run"])
+            self.assertIn('--run-id "${GITHUB_RUN_ID}"', step["run"])
+            self.assertIn('--trigger-sha "${GITHUB_SHA}"', step["run"])
+            self.assertNotIn("GITHUB_RUN_ATTEMPT", step["run"])
+
+        upload_paths = [
+            str(step.get("with", {}).get("path", ""))
+            for job in self.jobs.values()
+            for step in job.get("steps", [])
+            if step.get("uses") == "actions/upload-artifact@v4"
+        ]
+        self.assertNotIn("candidate-private/identity-input.json", upload_paths)
+        self.assertFalse(
+            any("candidate-private" in path for path in upload_paths),
+            upload_paths,
+        )
+
+    def test_handoff_secret_is_not_required_when_candidate_v2_is_disabled(self) -> None:
+        collect_steps = {
+            step.get("name"): step for step in self.jobs["collect"]["steps"]
+        }
+        encrypt = collect_steps["Encrypt candidate V2 identity handoff"]
+        self.assertEqual(encrypt["if"], "env.ENABLE_CANDIDATE_V2 == 'true'")
+        self.assertIn(
+            "candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false'",
+            self.jobs["candidate_identity"]["if"],
+        )
+
+        publish = json.dumps(self.jobs["publish"], ensure_ascii=False)
+        self.assertNotIn(HANDOFF_SECRET, publish)
+
+    def test_setup_documents_the_dedicated_non_hmac_handoff_key(self) -> None:
+        documentation = (
+            Path("CLASH_VERGE_AUTO.md").read_text(encoding="utf-8")
+            + Path("CNB_SETUP.md").read_text(encoding="utf-8")
+        )
+        self.assertIn(HANDOFF_SECRET, documentation)
+        self.assertIn("32 字节", documentation)
+        self.assertIn("Base64", documentation)
+        self.assertIn("AES-256-GCM", documentation)
+        self.assertIn("不得复用", documentation)
+        self.assertIn("Candidate V2 关闭时", documentation)
 
     def test_previous_output_is_classified_as_absent_v2_or_explicit_legacy(self) -> None:
         collect_steps = {
@@ -309,6 +477,94 @@ class CandidateWorkflowContractTests(unittest.TestCase):
             build,
         )
         self.assertNotIn('git push --force origin "${candidate_commit}:${output_ref}"', build)
+
+    def test_candidate_v2_collection_and_crawler_fail_closed_while_v1_keeps_fallbacks(self) -> None:
+        steps = {
+            step.get("name"): step for step in self.jobs["collect"]["steps"]
+        }
+        collected = steps["Generate Clash profile from collected sources"]["run"]
+        crawler = steps["Generate Clash profile from crawlers"]["run"]
+
+        self.assertRegex(
+            collected,
+            re.compile(
+                r'if \[ "\$\{ENABLE_CANDIDATE_V2\}" = "true" \] && '
+                r'\[ "\$\{status\}" -ne 0 \]; then[\s\S]*?exit "\$\{status\}"'
+            ),
+        )
+        self.assertRegex(
+            collected,
+            re.compile(
+                r'if \[ "\$\{ENABLE_CANDIDATE_V2\}" = "true" \] && '
+                r'\{ \[ "\$\{status\}" -ne 0 \] \|\| '
+                r'\[ ! -s "data/\$\{PROFILE_FILE\}" \]; \}; then[\s\S]*?exit 1'
+            ),
+        )
+        self.assertIn(
+            "Airport collection did not produce live nodes; continuing with crawler mode.",
+            collected,
+        )
+        self.assertIn("trying a no-alive-check rebuild", collected)
+
+        self.assertRegex(
+            crawler,
+            re.compile(
+                r'if \[ "\$\{ENABLE_CANDIDATE_V2\}" = "true" \] && '
+                r'\[ "\$\{status\}" -ne 0 \]; then[\s\S]*?exit "\$\{status\}"'
+            ),
+        )
+        self.assertRegex(
+            crawler,
+            re.compile(
+                r'if \[ "\$\{ENABLE_CANDIDATE_V2\}" = "true" \] && '
+                r'\[ ! -s "data/crawler-clash\.yaml" \]; then[\s\S]*?exit 1'
+            ),
+        )
+        self.assertIn(
+            "Crawler generation failed; keeping airport collection output.", crawler
+        )
+        self.assertIn(
+            "Crawler generation produced no Clash profile; keeping airport collection output.",
+            crawler,
+        )
+
+    def test_candidate_v2_sanitizes_endpoints_before_fc_and_mihomo(self) -> None:
+        steps = self.jobs["collect"]["steps"]
+        names = [step.get("name") for step in steps]
+        collected = next(
+            step for step in steps if step.get("name") == "Generate Clash profile from collected sources"
+        )["run"]
+        crawler = next(
+            step for step in steps if step.get("name") == "Generate Clash profile from crawlers"
+        )["run"]
+        sanitizer = next(
+            step
+            for step in steps
+            if step.get("name")
+            == "Sanitize Candidate V2 endpoints before any proxy network access"
+        )
+
+        self.assertIn(
+            'if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then\n  base_args+=(--skip)',
+            collected,
+        )
+        self.assertIn(
+            'if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then\n  export SKIP_ALIVE_CHECK="true"',
+            crawler,
+        )
+        self.assertEqual(sanitizer["if"], "env.ENABLE_CANDIDATE_V2 == 'true'")
+        self.assertIn(
+            "python -m scripts.sanitize_candidate_endpoints",
+            sanitizer["run"],
+        )
+        self.assertLess(
+            names.index("Sanitize Candidate V2 endpoints before any proxy network access"),
+            names.index("Drop GFW-blocked entries via configured China-side probe"),
+        )
+        self.assertLess(
+            names.index("Sanitize Candidate V2 endpoints before any proxy network access"),
+            names.index("Filter proxies by required site reachability"),
+        )
 
 
 if __name__ == "__main__":

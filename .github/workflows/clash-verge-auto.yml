@@ -264,7 +264,14 @@ jobs:
           base_args=(--all --targets clash --num 64 --delay 10000 --easygoing --pages 3)
           fallback_args=(--all --targets clash --num 64 --delay 10000 --easygoing --skip --overwrite)
 
-          if [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
+          # Candidate V2 collects a broad pool first. No proxy endpoint may be
+          # contacted until the dedicated endpoint sanitizer has run after the
+          # collected/crawler profiles are merged.
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then
+            base_args+=(--skip)
+          fi
+
+          if [ "${ENABLE_CANDIDATE_V2}" != "true" ] && [ "${REQUESTED_ALIVE_CHECK}" != "true" ]; then
             base_args+=(--skip)
           fi
 
@@ -280,6 +287,11 @@ jobs:
           status=$?
           set -e
 
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ] && [ "${status}" -ne 0 ]; then
+            echo "Candidate V2 airport collection failed; refusing a partial candidate snapshot." >&2
+            exit "${status}"
+          fi
+
           if [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; then
             if [ "${REQUESTED_ALIVE_CHECK}" = "true" ]; then
               echo "Airport collection did not produce live nodes; continuing with crawler mode."
@@ -290,6 +302,11 @@ jobs:
               status=$?
               set -e
             fi
+          fi
+
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ] && { [ "${status}" -ne 0 ] || [ ! -s "data/${PROFILE_FILE}" ]; }; then
+            echo "Candidate V2 airport collection produced no complete profile." >&2
+            exit 1
           fi
 
           if [ -s "data/${PROFILE_FILE}" ]; then
@@ -312,7 +329,9 @@ jobs:
         run: |
           export LOCAL_BASEDIR="${GITHUB_WORKSPACE}/data"
 
-          if [ "${REQUESTED_ALIVE_CHECK}" = "true" ]; then
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then
+            export SKIP_ALIVE_CHECK="true"
+          elif [ "${REQUESTED_ALIVE_CHECK}" = "true" ]; then
             export SKIP_ALIVE_CHECK="false"
           else
             export SKIP_ALIVE_CHECK="true"
@@ -322,6 +341,16 @@ jobs:
           python -u subscribe/process.py -s subscribe/config/clash-verge-crawler.generated.json --overwrite --flexible --invisible --timeout 10000 --num 128
           status=$?
           set -e
+
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ] && [ "${status}" -ne 0 ]; then
+            echo "Candidate V2 crawler generation failed; refusing a partial candidate snapshot." >&2
+            exit "${status}"
+          fi
+
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ] && [ ! -s "data/crawler-clash.yaml" ]; then
+            echo "Candidate V2 crawler generation produced no Clash profile." >&2
+            exit 1
+          fi
 
           if [ "${status}" -ne 0 ]; then
             echo "Crawler generation failed; keeping airport collection output."
@@ -334,6 +363,24 @@ jobs:
         shell: bash
         run: |
           python -m scripts.merge_clash_profiles
+
+      - name: Sanitize Candidate V2 endpoints before any proxy network access
+        if: env.ENABLE_CANDIDATE_V2 == 'true'
+        shell: bash
+        run: |
+          args=(--profile "data/${PROFILE_FILE}")
+          found=false
+          for name in collect-candidate-provenance.json crawler-candidate-provenance.json; do
+            if [ -s "data/${name}" ]; then
+              args+=(--provenance "data/${name}")
+              found=true
+            fi
+          done
+          if [ "${found}" != "true" ]; then
+            echo "Candidate V2 endpoint sanitization has no provenance input." >&2
+            exit 1
+          fi
+          python -m scripts.sanitize_candidate_endpoints "${args[@]}"
 
       - name: Drop GFW-blocked entries via configured China-side probe
         if: env.PROBE_URL != ''
@@ -424,6 +471,19 @@ jobs:
           esac
           python -m scripts.candidate_snapshot prepare "${args[@]}"
 
+      - name: Encrypt candidate V2 identity handoff
+        if: env.ENABLE_CANDIDATE_V2 == 'true'
+        env:
+          CANDIDATE_HANDOFF_AES_KEY: ${{ secrets.CANDIDATE_HANDOFF_AES_KEY }}
+        shell: bash
+        run: |
+          python -m scripts.candidate_handoff encrypt \
+            --input candidate-private/identity-input.json \
+            --output candidate-handoff/identity-input.enc \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --trigger-sha "${GITHUB_SHA}"
+
       - name: Upload legacy public staging
         uses: actions/upload-artifact@v4
         with:
@@ -437,8 +497,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: candidate-identity-input
-          path: candidate-private/identity-input.json
+          path: candidate-handoff/identity-input.enc
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   candidate_identity:
@@ -466,11 +527,22 @@ jobs:
       - name: Install dependencies
         run: pip3 install -r requirements.lock
 
-      - name: Download fixed safe identity input
+      - name: Download encrypted identity handoff
         uses: actions/download-artifact@v4
         with:
           name: candidate-identity-input
-          path: candidate-private
+          path: candidate-handoff
+
+      - name: Decrypt and authenticate candidate V2 identity handoff
+        env:
+          CANDIDATE_HANDOFF_AES_KEY: ${{ secrets.CANDIDATE_HANDOFF_AES_KEY }}
+        run: |
+          python -m scripts.candidate_handoff decrypt \
+            --input candidate-handoff/identity-input.enc \
+            --output candidate-private/identity-input.json \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --trigger-sha "${GITHUB_SHA}"
 
       - name: Build and validate candidate snapshot V2
         env:

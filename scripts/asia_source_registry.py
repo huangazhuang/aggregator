@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.candidate_sources import (
-    CandidateSourceError,
+    EndpointSafetyError,
     safe_source_descriptor,
     utc_timestamp,
     validate_proxy_endpoint,
@@ -304,7 +304,7 @@ def _validate_endpoints(
         try:
             validate_proxy_endpoint(proxy, resolver=resolver, checked_at=checked_at)
             return endpoint, True
-        except CandidateSourceError:
+        except EndpointSafetyError:
             return endpoint, False
 
     if resolver is not None or len(by_endpoint) <= 1:

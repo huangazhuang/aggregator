@@ -59,6 +59,27 @@ class ProcessConfig(object):
     delay: int = 5000
 
 
+def enforce_candidate_v2_pre_network_config(groups: dict) -> None:
+    """Reject optional network work that would run before endpoint sanitization."""
+
+    candidate_v2 = utils.trim(
+        os.environ.get("ENABLE_CANDIDATE_V2", "false")
+    ).lower() in ["true", "1"]
+    if not candidate_v2:
+        return
+    if not isinstance(groups, dict):
+        raise ValueError("Candidate V2 group configuration is invalid")
+
+    for group in groups.values():
+        if not isinstance(group, dict):
+            continue
+        regularize = group.get("regularize", {})
+        if isinstance(regularize, dict) and regularize.get("enable", False):
+            raise ValueError(
+                "Candidate V2 forbids group regularize before endpoint sanitization"
+            )
+
+
 def load_configs(
     url: str,
     only_check: bool = False,
@@ -539,6 +560,7 @@ def aggregate(args: argparse.Namespace) -> None:
         display=display,
         retry=retry,
     )
+    enforce_candidate_v2_pre_network_config(process_config.groups)
 
     storages = process_config.storage or {}
     pushtool = push.get_instance(config=push.PushConfig.from_dict(storages))

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -26,6 +27,7 @@ from scripts.candidate_sources import (
     SOURCE_OUTCOMES,
     SOURCE_POLICY_VERSION,
     CandidateSourceError,
+    EndpointSafetyError,
     merge_provenance_staging,
     utc_timestamp,
     validate_proxy_endpoint,
@@ -36,6 +38,7 @@ from scripts.proxy_identity import (
     IdentityError,
     IdentitySettings,
     assert_unique_public_id_bindings,
+    candidate_id,
     canonical_endpoint,
     canonical_port,
     canonical_proxy_fingerprint,
@@ -43,13 +46,14 @@ from scripts.proxy_identity import (
     compute_public_ids,
     load_identity_test_vector,
     validate_public_id,
+    validate_proxy_fingerprint,
     verify_identity_test_vector,
 )
 from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
 IDENTITY_INPUT_KIND = "github-candidate-identity-input"
-IDENTITY_INPUT_SCHEMA_VERSION = 2
+IDENTITY_INPUT_SCHEMA_VERSION = 3
 CANDIDATE_STATUS_KIND = "github-candidate-status"
 CANDIDATE_STATUS_SCHEMA_VERSION = 2
 CANDIDATE_METADATA_KIND = "github-candidate-metadata"
@@ -103,6 +107,11 @@ DYNAMIC_ALIAS_SUFFIX_RE = re.compile(
     r"(?:\s*[-|/]\s*)?(?:\d+(?:\.\d+)?\s*ms|\d+(?:\.\d+)?\s*%|delay\s*[:=].*)$",
     flags=re.I,
 )
+HOSTNAME_TEXT_RE = re.compile(
+    r"(?<![A-Za-z0-9-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?![A-Za-z0-9-])"
+)
+PORT_TEXT_RE = re.compile(r"(?:^|[\s\[\]():|/,-])(?:port\s*)?:?\d{1,5}(?:$|[\s\[\]():|/,-])", re.I)
 
 IDENTITY_INPUT_FIELDS = {
     "kind",
@@ -123,6 +132,10 @@ IDENTITY_INPUT_FIELDS = {
     "profile",
     "sources",
     "records",
+    "observed_records",
+    "quarantined_records",
+    "invalid_record_count",
+    "previous_quarantined_fingerprints",
     "previous_state",
     "previous_baseline",
     "previous_profile",
@@ -140,6 +153,8 @@ INPUT_RECORD_FIELDS = {
     "region_hints",
     "region_evidence",
 }
+QUARANTINED_RECORD_FIELDS = {"fingerprint", "source_id", "region_hints"}
+OBSERVED_RECORD_FIELDS = QUARANTINED_RECORD_FIELDS
 METADATA_FIELDS = {
     "kind",
     "schema_version",
@@ -582,7 +597,39 @@ def _proxy_secret_values(proxy: Mapping[str, Any]) -> tuple[str, ...]:
 
 def _safe_proxy_alias(value: Any, proxy: Mapping[str, Any]) -> str:
     alias = _safe_alias(value)
+    if not alias:
+        return ""
     if any(secret in alias for secret in _proxy_secret_values(proxy)):
+        return ""
+    server = canonical_server(proxy.get("server"))
+    port = canonical_port(proxy.get("port"))
+    lowered = alias.casefold()
+    endpoint_tokens = {
+        server.casefold(),
+        f"{server}:{port}".casefold(),
+        f"[{server}]:{port}".casefold(),
+    }
+    raw_server = str(proxy.get("server", "") or "").strip().rstrip(".")
+    if raw_server:
+        endpoint_tokens.update(
+            {
+                raw_server.casefold(),
+                f"{raw_server}:{port}".casefold(),
+                f"[{raw_server}]:{port}".casefold(),
+            }
+        )
+    if any(token and token in lowered for token in endpoint_tokens):
+        return ""
+    if HOSTNAME_TEXT_RE.search(alias) or PORT_TEXT_RE.search(alias):
+        return ""
+    for token in re.findall(r"(?:[0-9A-Fa-f:.]+)", alias):
+        candidate = token.strip("[](){}<>,;|")
+        if not candidate or not any(char in candidate for char in ".:"):
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
         return ""
     return alias
 
@@ -655,25 +702,36 @@ def prepare_candidate_identity_input(
     if not isinstance(records, list) or not isinstance(sources, list):
         raise CandidateSnapshotError("candidate provenance staging is malformed")
 
-    endpoint_cache: dict[str, dict[str, Any]] = {}
+    endpoint_cache: dict[str, dict[str, Any] | EndpointSafetyError] = {}
 
     def validate_with_endpoint(proxy: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
         validated = _validated_proxy(proxy)
         endpoint = canonical_endpoint(validated.get("server"), validated.get("port"))
         if endpoint not in endpoint_cache:
-            endpoint_cache[endpoint] = validate_proxy_endpoint(
-                validated,
-                resolver=resolver,
-                checked_at=timestamp,
-            )
+            try:
+                endpoint_cache[endpoint] = validate_proxy_endpoint(
+                    validated,
+                    resolver=resolver,
+                    checked_at=timestamp,
+                )
+            except EndpointSafetyError as exc:
+                endpoint_cache[endpoint] = exc
+        endpoint_result = endpoint_cache[endpoint]
+        if isinstance(endpoint_result, EndpointSafetyError):
+            raise endpoint_result
         return validated, canonical_proxy_fingerprint(validated)
 
     current_by_fingerprint: dict[str, dict[str, Any]] = {}
     for proxy in current_proxies:
-        validated, fingerprint = validate_with_endpoint(proxy)
+        try:
+            validated, fingerprint = validate_with_endpoint(proxy)
+        except EndpointSafetyError:
+            continue
         previous_proxy = current_by_fingerprint.get(fingerprint)
         if previous_proxy is None or _proxy_representative_key(validated) < _proxy_representative_key(previous_proxy):
             current_by_fingerprint[fingerprint] = validated
+    if not current_by_fingerprint:
+        raise CandidateSnapshotError("candidate profile contains no safe proxies")
 
     capacity = estimate_gmgn_capacity(len(current_by_fingerprint))
     if not capacity["below_candidate_hard_limit"] or not capacity["within_runtime_budget"]:
@@ -681,14 +739,30 @@ def prepare_candidate_identity_input(
 
     raw_count = len(records)
     valid_records: list[dict[str, Any]] = []
+    observed_records: list[dict[str, Any]] = []
+    quarantined_records: list[dict[str, Any]] = []
+    invalid_record_count = 0
     valid_fingerprints: set[str] = set()
     unique_endpoints: set[str] = set()
     for item in records:
         if not isinstance(item, Mapping) or set(item) != INPUT_RECORD_FIELDS:
             raise CandidateSnapshotError("candidate provenance record fields are invalid")
         try:
-            validated, fingerprint = validate_with_endpoint(item["proxy"])
-        except (CandidateSnapshotError, CandidateSourceError, IdentityError):
+            observed_proxy = _validated_proxy(item["proxy"])
+            observed_fingerprint = canonical_proxy_fingerprint(observed_proxy)
+        except (CandidateSnapshotError, IdentityError):
+            invalid_record_count += 1
+            continue
+        observed_record = {
+            "fingerprint": observed_fingerprint,
+            "source_id": str(item["source_id"]),
+            "region_hints": list(item.get("region_hints", [])),
+        }
+        observed_records.append(observed_record)
+        try:
+            validated, fingerprint = validate_with_endpoint(observed_proxy)
+        except EndpointSafetyError:
+            quarantined_records.append(dict(observed_record))
             continue
         valid_fingerprints.add(fingerprint)
         unique_endpoints.add(canonical_endpoint(validated["server"], validated["port"]))
@@ -702,10 +776,16 @@ def prepare_candidate_identity_input(
         raise CandidateSnapshotError("candidate profile is not fully covered by safe provenance")
 
     safe_previous_profile = copy.deepcopy(previous_profile) if previous_profile is not None else None
+    previous_quarantined_fingerprints: list[str] = []
     if previous_state == "present" and safe_previous_profile is not None:
         previous_proxies = _profile_proxies(safe_previous_profile)
         for proxy in previous_proxies:
-            validate_with_endpoint(proxy)
+            try:
+                validate_with_endpoint(proxy)
+            except EndpointSafetyError:
+                previous_quarantined_fingerprints.append(
+                    canonical_proxy_fingerprint(proxy)
+                )
         safe_previous_profile["proxies"] = previous_proxies
 
     normalized_previous_status = copy.deepcopy(previous_status)
@@ -739,6 +819,12 @@ def prepare_candidate_identity_input(
         "profile": {**parsed_profile, "proxies": list(current_by_fingerprint.values())},
         "sources": normalized_sources,
         "records": valid_records,
+        "observed_records": observed_records,
+        "quarantined_records": quarantined_records,
+        "invalid_record_count": invalid_record_count,
+        "previous_quarantined_fingerprints": sorted(
+            set(previous_quarantined_fingerprints)
+        ),
         "previous_state": previous_state,
         "previous_baseline": normalized_previous_baseline,
         "previous_profile": safe_previous_profile,
@@ -768,11 +854,106 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
     for name in ("profile_url", "candidate_metadata_url"):
         if not str(payload[name] or "").startswith("https://"):
             raise CandidateSnapshotError("candidate artifact URL must use HTTPS")
-    for name in ("raw_count", "valid_config_count", "exact_unique_count", "unique_endpoint_count", "github_failed_count"):
+    for name in (
+        "raw_count",
+        "valid_config_count",
+        "exact_unique_count",
+        "unique_endpoint_count",
+        "github_failed_count",
+        "invalid_record_count",
+    ):
         if not isinstance(payload[name], int) or payload[name] < 0:
             raise CandidateSnapshotError("candidate input count is invalid")
-    if not isinstance(payload["profile"], Mapping) or not isinstance(payload["sources"], list) or not isinstance(payload["records"], list):
+    if (
+        not isinstance(payload["profile"], Mapping)
+        or not isinstance(payload["sources"], list)
+        or not isinstance(payload["records"], list)
+        or not isinstance(payload["observed_records"], list)
+        or not isinstance(payload["quarantined_records"], list)
+        or not isinstance(payload["previous_quarantined_fingerprints"], list)
+    ):
         raise CandidateSnapshotError("candidate input collections are malformed")
+    source_ids: set[str] = set()
+    for raw_source in payload["sources"]:
+        if not isinstance(raw_source, Mapping):
+            raise CandidateSnapshotError("candidate source event is malformed")
+        source_id = str(raw_source.get("source_id", ""))
+        if not source_id:
+            raise CandidateSnapshotError("candidate source event has no source ID")
+        source_ids.add(source_id)
+
+    def observed_binding(raw: Any, *, label: str) -> tuple[str, str, tuple[str, ...]]:
+        if not isinstance(raw, Mapping) or set(raw) != OBSERVED_RECORD_FIELDS:
+            raise CandidateSnapshotError(f"candidate {label} record fields are invalid")
+        try:
+            fingerprint = validate_proxy_fingerprint(raw["fingerprint"])
+        except IdentityError as exc:
+            raise CandidateSnapshotError(f"candidate {label} fingerprint is invalid") from exc
+        source_id = str(raw["source_id"])
+        if source_id not in source_ids:
+            raise CandidateSnapshotError("candidate observed record source is invalid")
+        region_hints = raw["region_hints"]
+        if (
+            not isinstance(region_hints, list)
+            or any(region not in REGION_ORDER for region in region_hints)
+            or region_hints != sorted(set(region_hints), key=REGION_ORDER.index)
+        ):
+            raise CandidateSnapshotError("candidate observed record regions are invalid")
+        return fingerprint, source_id, tuple(region_hints)
+
+    safe_bindings: Counter[tuple[str, str, tuple[str, ...]]] = Counter()
+    for raw in payload["records"]:
+        if not isinstance(raw, Mapping) or set(raw) != INPUT_RECORD_FIELDS:
+            raise CandidateSnapshotError("candidate provenance record fields are invalid")
+        if not isinstance(raw.get("proxy"), Mapping):
+            raise CandidateSnapshotError("candidate provenance record proxy is invalid")
+        try:
+            fingerprint = canonical_proxy_fingerprint(raw["proxy"])
+        except IdentityError as exc:
+            raise CandidateSnapshotError("candidate provenance fingerprint is invalid") from exc
+        binding = observed_binding(
+            {
+                "fingerprint": fingerprint,
+                "source_id": raw["source_id"],
+                "region_hints": raw["region_hints"],
+            },
+            label="safe",
+        )
+        safe_bindings[binding] += 1
+
+    observed_bindings = Counter(
+        observed_binding(raw, label="observed")
+        for raw in payload["observed_records"]
+    )
+    quarantined_bindings = Counter(
+        observed_binding(raw, label="quarantined")
+        for raw in payload["quarantined_records"]
+    )
+    if any(binding in quarantined_bindings for binding in safe_bindings):
+        raise CandidateSnapshotError("candidate safe and quarantined records overlap")
+    if observed_bindings != safe_bindings + quarantined_bindings:
+        raise CandidateSnapshotError("candidate observed records are not bound to provenance")
+    if (
+        len(payload["observed_records"]) + payload["invalid_record_count"]
+        != payload["raw_count"]
+    ):
+        raise CandidateSnapshotError("candidate observed record count is inconsistent")
+    if payload["valid_config_count"] != len(payload["records"]):
+        raise CandidateSnapshotError("candidate valid record count is inconsistent")
+    previous_quarantined_fingerprints = payload[
+        "previous_quarantined_fingerprints"
+    ]
+    if (
+        previous_quarantined_fingerprints
+        != sorted(set(previous_quarantined_fingerprints))
+        or any(
+            validate_proxy_fingerprint(fingerprint) != fingerprint
+            for fingerprint in previous_quarantined_fingerprints
+        )
+    ):
+        raise CandidateSnapshotError(
+            "candidate previous endpoint quarantine is malformed"
+        )
     if payload["previous_state"] not in PREVIOUS_STATES:
         raise CandidateSnapshotError("candidate previous state is unsupported")
     previous_values = (
@@ -806,6 +987,19 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
         )
     ):
         raise CandidateSnapshotError("present candidate input has incomplete previous artifacts")
+    if previous_quarantined_fingerprints:
+        if payload["previous_state"] != "present":
+            raise CandidateSnapshotError(
+                "candidate previous endpoint quarantine has no previous profile"
+            )
+        previous_fingerprints = {
+            canonical_proxy_fingerprint(proxy)
+            for proxy in _profile_proxies(payload["previous_profile"])
+        }
+        if not set(previous_quarantined_fingerprints).issubset(previous_fingerprints):
+            raise CandidateSnapshotError(
+                "candidate previous endpoint quarantine is not bound to the previous profile"
+            )
     return dict(payload)
 
 
@@ -865,6 +1059,17 @@ def _records_by_fingerprint(payload: Mapping[str, Any]) -> dict[str, list[dict[s
             raise CandidateSnapshotError("candidate provenance record is malformed")
         item = dict(raw)
         fingerprint = canonical_proxy_fingerprint(item["proxy"])
+        records[fingerprint].append(item)
+    return records
+
+
+def _observed_records(payload: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for raw in payload["observed_records"]:
+        if not isinstance(raw, Mapping):
+            raise CandidateSnapshotError("candidate observed record is malformed")
+        item = dict(raw)
+        fingerprint = validate_proxy_fingerprint(item["fingerprint"])
         records[fingerprint].append(item)
     return records
 
@@ -1201,6 +1406,10 @@ def build_candidate_snapshot(
         )
 
     records = _records_by_fingerprint(payload)
+    observed_records = _observed_records(payload)
+    previous_quarantined_fingerprints = set(
+        payload["previous_quarantined_fingerprints"]
+    )
     current_profile = dict(payload["profile"])
     current_proxies = _profile_proxies(current_profile)
     entries: dict[str, dict[str, Any]] = {}
@@ -1213,15 +1422,14 @@ def build_candidate_snapshot(
     # downstream GitHub reachability filter chose to publish. Otherwise a
     # currently supplied non-Asia node that failed a strict check would look
     # source-missing and could be incorrectly restored from last-good.
-    for related in records.values():
-        proxy = related[0]["proxy"]
-        public_ids = compute_public_ids(
-            proxy,
+    for related in observed_records.values():
+        fingerprint = validate_proxy_fingerprint(related[0]["fingerprint"])
+        candidate_id_value = candidate_id(
+            fingerprint,
             key=identity.key,
             identity_key_version=identity.identity_key_version,
             identity_epoch=identity.identity_epoch,
         )
-        candidate_id_value = public_ids["candidate_id"]
         related_regions = sorted(
             {region for item in related for region in item.get("region_hints", [])},
             key=lambda region: REGION_ORDER.index(region),
@@ -1230,13 +1438,7 @@ def build_candidate_snapshot(
         for source_id in {str(item["source_id"]) for item in related}:
             current_candidate_sources[source_id].add(candidate_id_value)
             current_candidate_regions[source_id][candidate_id_value] = primary_region
-        collision_bindings.extend(
-            (
-                (candidate_id_value, canonical_proxy_fingerprint(proxy)),
-                (public_ids["server_id"], canonical_server(proxy["server"])),
-                (public_ids["endpoint_id"], canonical_endpoint(proxy["server"], proxy["port"])),
-            )
-        )
+        collision_bindings.append((candidate_id_value, fingerprint))
 
     for proxy in current_proxies:
         fingerprint = canonical_proxy_fingerprint(proxy)
@@ -1250,6 +1452,15 @@ def build_candidate_snapshot(
             identity_epoch=identity.identity_epoch,
         )
         candidate_id_value = public_ids["candidate_id"]
+        explicit_check_states = {
+            str(item.get("github_check_state", ""))
+            for item in related
+            if str(item.get("github_check_state", ""))
+        }
+        if explicit_check_states - {"passed", "failed", "bypassed_asia"}:
+            raise CandidateSnapshotError("candidate GitHub check state is unsupported")
+        if len(explicit_check_states) > 1:
+            raise CandidateSnapshotError("candidate GitHub check states are inconsistent")
         aliases = sorted({_safe_proxy_alias(item.get("alias"), proxy) for item in related} - {""})
         source_ids = sorted({str(item["source_id"]) for item in related})
         region_hints = sorted(
@@ -1258,6 +1469,17 @@ def build_candidate_snapshot(
         )
         region_evidence = sorted({value for item in related for value in item.get("region_evidence", [])})
         protected_asia = bool(region_hints or "explicit:asia_keep" in region_evidence or is_preferred_asian_proxy(proxy))
+        github_check_state = (
+            next(iter(explicit_check_states))
+            if explicit_check_states
+            else ("bypassed_asia" if protected_asia else "passed")
+        )
+        if github_check_state == "failed":
+            raise CandidateSnapshotError("failed candidate cannot appear in the profile")
+        if (github_check_state == "bypassed_asia") != protected_asia:
+            raise CandidateSnapshotError(
+                "candidate GitHub check state contradicts Asia protection"
+            )
         source_success = max(str(item["source_last_success_at"]) for item in related)
         old_metadata = previous.metadata["candidates"].get(candidate_id_value) if previous is not None else None
         first_seen_at = str(old_metadata["first_seen_at"]) if old_metadata else run_at
@@ -1275,7 +1497,7 @@ def build_candidate_snapshot(
                 ),
                 "region_evidence": sorted(set(region_evidence) | set((old_metadata or {}).get("region_evidence", []))),
                 "protected_asia": protected_asia or bool((old_metadata or {}).get("protected_asia", False)),
-                "github_check_state": "bypassed_asia" if protected_asia else "passed",
+                "github_check_state": github_check_state,
                 "protocol": str(proxy.get("type", "")).lower(),
                 "server_id": public_ids["server_id"],
                 "endpoint_id": public_ids["endpoint_id"],
@@ -1302,6 +1524,12 @@ def build_candidate_snapshot(
         for candidate_id_value, old_metadata in previous.metadata["candidates"].items():
             if candidate_id_value in entries:
                 continue
+            previous_proxy = previous_proxy_by_id[candidate_id_value]
+            if (
+                canonical_proxy_fingerprint(previous_proxy)
+                in previous_quarantined_fingerprints
+            ):
+                continue
             retain_sources: list[str] = []
             for source_id in old_metadata["source_ids"]:
                 source = sources.get(source_id)
@@ -1314,7 +1542,7 @@ def build_candidate_snapshot(
                     retain_sources.append(source_id)
             if not retain_sources:
                 continue
-            proxy = copy.deepcopy(previous_proxy_by_id[candidate_id_value])
+            proxy = copy.deepcopy(previous_proxy)
             public_ids = compute_public_ids(
                 proxy,
                 key=identity.key,
