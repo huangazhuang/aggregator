@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import os
 import json
+import io
 import socket
 import tempfile
+import traceback
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import yaml
+
+from scripts import sanitize_candidate_endpoints
 
 from scripts.candidate_sources import (
     EndpointResolutionInfrastructureError,
@@ -64,6 +69,89 @@ def provenance(nodes: list[dict]) -> dict:
 
 
 class CandidateEndpointSanitizerTests(unittest.TestCase):
+    def test_rebuild_round_trips_numeric_http_authentication_as_text(self) -> None:
+        candidate = {
+            "name": "JP numeric auth",
+            "type": "http",
+            "server": "8.8.8.8",
+            "port": 443,
+            "username": "08",
+            "password": "521314",
+            "tls": True,
+        }
+
+        result = rebuild_candidate_profile(provenance([candidate]))
+
+        rebuilt = result.profile["proxies"][0]
+        self.assertEqual(rebuilt["username"], "08")
+        self.assertIs(type(rebuilt["username"]), str)
+        self.assertEqual(rebuilt["password"], "521314")
+        self.assertIs(type(rebuilt["password"]), str)
+
+    def test_rebuild_serialization_error_is_fixed_and_suppresses_secret_context(self) -> None:
+        secret = "sanitizer-build-fake-secret-521314"
+        candidate = node("JP safe", "8.8.8.8", "normal-password")
+
+        with patch(
+            "scripts.sanitize_candidate_endpoints.dump_clash_yaml",
+            side_effect=yaml.representer.RepresenterError(secret),
+        ):
+            with self.assertRaises(CandidateEndpointSanitizationError) as raised:
+                rebuild_candidate_profile(provenance([candidate]))
+
+        self.assertEqual(str(raised.exception), "candidate profile serialization failed")
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(secret, "".join(traceback.format_exception(raised.exception)))
+
+    def test_sanitizer_cli_redacts_file_serialization_error(self) -> None:
+        secret = "sanitizer-cli-fake-secret-08"
+        candidate = node("JP safe", "8.8.8.8", "normal-password")
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            root = Path(directory)
+            profile = root / "clash.yaml"
+            provenance_file = root / "provenance.json"
+            output = root / "sanitized.yaml"
+            profile.write_text(
+                yaml.safe_dump({"proxies": [candidate]}, sort_keys=False),
+                encoding="utf-8",
+            )
+            value = provenance([candidate])
+            write_provenance_staging(
+                provenance_file,
+                sources=value["sources"],
+                records=value["records"],
+                generated_at="2026-08-12T00:00:00Z",
+            )
+            stderr = io.StringIO()
+            with (
+                patch(
+                    "scripts.sanitize_candidate_endpoints.dump_clash_yaml",
+                    side_effect=yaml.representer.RepresenterError(secret),
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                result = sanitize_candidate_endpoints._run_cli(
+                    [
+                        "--profile",
+                        str(profile),
+                        "--provenance",
+                        str(provenance_file),
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(result, 1)
+            self.assertEqual(
+                stderr.getvalue().strip(),
+                "ERROR: candidate profile serialization failed",
+            )
+            self.assertNotIn(secret, stderr.getvalue())
+            self.assertFalse(output.exists())
+
     def test_rebuild_uses_provenance_when_subconverter_changed_connection_fields(self) -> None:
         observed = node("JP original", "8.8.8.8", "original-secret")
         observed["udp"] = True

@@ -63,6 +63,21 @@ class CandidateEndpointSanitizationError(ValueError):
     """Raised when the pre-network Candidate V2 staging cannot be trusted."""
 
 
+def _dump_candidate_profile(profile: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """Serialize a private Candidate profile with a fixed redacted failure."""
+
+    serialization_failed = False
+    try:
+        return dump_clash_yaml(dict(profile))
+    except Exception:
+        serialization_failed = True
+    if serialization_failed:
+        raise CandidateEndpointSanitizationError(
+            "candidate profile serialization failed"
+        )
+    raise AssertionError("unreachable candidate serialization state")
+
+
 @dataclass(frozen=True)
 class SanitizedCandidateProfile:
     profile: dict[str, Any]
@@ -363,7 +378,7 @@ def rebuild_candidate_profile(
         "rules": ["MATCH,🌐 Proxy"],
     }
 
-    text, rejected = dump_clash_yaml(profile)
+    text, rejected = _dump_candidate_profile(profile)
     if rejected:
         raise CandidateEndpointSanitizationError(
             "candidate provenance rebuild contains invalid REALITY short IDs"
@@ -376,10 +391,10 @@ def rebuild_candidate_profile(
             for proxy in round_trip_proxies
         }
         round_trip_names = [str(proxy["name"]) for proxy in round_trip_proxies]
-    except Exception as exc:
+    except Exception:
         raise CandidateEndpointSanitizationError(
             "candidate provenance rebuild cannot be parsed"
-        ) from exc
+        ) from None
     if (
         len(round_trip_proxies) != len(safe)
         or round_trip_fingerprints != set(safe)
@@ -706,7 +721,7 @@ def sanitize_candidate_profile_files(
             resolver=resolver,
             sleeper=sleeper,
         )
-    text, rejected = dump_clash_yaml(result.profile)
+    text, rejected = _dump_candidate_profile(result.profile)
     if rejected:
         raise CandidateEndpointSanitizationError(
             "candidate profile contains invalid REALITY short IDs"
@@ -758,15 +773,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def _run_cli(argv: list[str] | None = None) -> int:
     try:
-        raise SystemExit(main())
+        return main(argv)
     except (
         CandidateEndpointSanitizationError,
         EndpointResolutionInfrastructureError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_cli())
 
 
 __all__ = [

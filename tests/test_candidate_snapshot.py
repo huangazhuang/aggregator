@@ -7,9 +7,11 @@ import os
 import socket
 import stat
 import tempfile
+import traceback
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import yaml
 
@@ -24,6 +26,7 @@ from scripts.candidate_snapshot import (
     write_candidate_snapshot,
     write_candidate_identity_input,
 )
+from scripts import candidate_snapshot
 from scripts.candidate_sources import (
     EndpointResolutionInfrastructureError,
     EndpointSafetyError,
@@ -690,6 +693,114 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
 
 
 class CandidateProvenanceSnapshotTests(unittest.TestCase):
+    def test_numeric_authentication_and_reality_survive_snapshot_serialization(self) -> None:
+        numeric_auth = {
+            "name": "JP numeric auth",
+            "type": "http",
+            "server": "numeric.example",
+            "port": 443,
+            "username": "08",
+            "password": "521314",
+            "tls": True,
+        }
+        reality = {
+            "name": "KR numeric reality",
+            "type": "vless",
+            "server": "reality.example",
+            "port": 443,
+            "uuid": "12345678-1234-1234-1234-123456789abc",
+            "network": "tcp",
+            "tls": True,
+            "reality-opts": {
+                "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "short-id": "08",
+            },
+        }
+        source = task(
+            "asia-numeric",
+            "https://raw.githubusercontent.com/acme/asia/main/numeric.yaml",
+        )
+
+        snapshot = build_candidate_snapshot(
+            staging(
+                [numeric_auth, reality],
+                [(source, [numeric_auth, reality], None)],
+                run_at=RUN0,
+            ),
+            settings=IDENTITY,
+        )
+
+        rendered = snapshot.profile_bytes.decode("utf-8")
+        self.assertIn('username: "08"', rendered)
+        self.assertIn('password: "521314"', rendered)
+        self.assertIn('short-id: "08"', rendered)
+        parsed = yaml.safe_load(snapshot.profile_bytes)["proxies"]
+        by_type = {item["type"]: item for item in parsed}
+        self.assertEqual(by_type["http"]["username"], "08")
+        self.assertEqual(by_type["http"]["password"], "521314")
+        self.assertEqual(by_type["vless"]["reality-opts"]["short-id"], "08")
+
+    def test_snapshot_serialization_error_is_fixed_and_suppresses_secret_context(self) -> None:
+        secret = "serialization-fake-secret-521314"
+        node = proxy("JP node", "node.example", "normal-password")
+        source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+        identity_input = staging([node], [(source, [node], None)], run_at=RUN0)
+
+        with patch(
+            "scripts.candidate_snapshot.dump_clash_yaml",
+            side_effect=yaml.representer.RepresenterError(secret),
+        ):
+            with self.assertRaises(CandidateSnapshotError) as raised:
+                build_candidate_snapshot(identity_input, settings=IDENTITY)
+
+        self.assertEqual(str(raised.exception), "candidate profile serialization failed")
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(secret, "".join(traceback.format_exception(raised.exception)))
+
+    def test_candidate_cli_redacts_snapshot_serialization_error(self) -> None:
+        secret = "cli-serialization-fake-secret-08"
+        node = proxy("JP node", "node.example", "normal-password")
+        source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+        identity_input = staging([node], [(source, [node], None)], run_at=RUN0)
+
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            root = Path(directory)
+            input_path = root / "identity-input.json"
+            output_dir = root / "public"
+            write_candidate_identity_input(input_path, identity_input)
+            environment = {
+                "GMGN_IDENTITY_HMAC_KEY": IDENTITY.key.decode("utf-8"),
+                "GMGN_IDENTITY_KEY_VERSION": IDENTITY.identity_key_version,
+                "GMGN_IDENTITY_EPOCH": IDENTITY.identity_epoch,
+            }
+            stderr = __import__("io").StringIO()
+            with (
+                patch.dict(os.environ, environment),
+                patch(
+                    "scripts.candidate_snapshot.dump_clash_yaml",
+                    side_effect=yaml.representer.RepresenterError(secret),
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                result = candidate_snapshot._run_cli(
+                    ["build", "--input", str(input_path), "--output-dir", str(output_dir)]
+                )
+
+            self.assertFalse(output_dir.exists())
+
+        self.assertEqual(result, 1)
+        self.assertEqual(stderr.getvalue().strip(), "ERROR: candidate profile serialization failed")
+        self.assertNotIn(secret, stderr.getvalue())
+
     def test_private_identity_input_is_created_with_restrictive_mode(self) -> None:
         node = proxy("JP private", "node.example", "private-secret")
         source = task(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +8,8 @@ import yaml
 
 from scripts.cnb_mihomo_filter import calculate_cnb_publish_floor, load_optional_json
 from scripts.pipeline_utils import (
+    ClashYamlSerializationError,
+    QuotedString,
     build_candidate_v2_clash_profile,
     calculate_publish_floor,
     dump_clash_yaml,
@@ -46,6 +49,74 @@ class PublishFloorTests(unittest.TestCase):
 
 
 class RealitySerializationTests(unittest.TestCase):
+    def test_shared_serializer_failure_has_fixed_message_and_no_secret_context(self) -> None:
+        secret = "shared-yaml-fake-secret-521314"
+        with patch(
+            "scripts.pipeline_utils.yaml.dump",
+            side_effect=yaml.representer.RepresenterError(secret),
+        ):
+            with self.assertRaises(ClashYamlSerializationError) as raised:
+                dump_clash_yaml({"proxies": []})
+
+        self.assertEqual(str(raised.exception), "Clash YAML serialization failed")
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(secret, "".join(traceback.format_exception(raised.exception)))
+
+    def test_string_subclasses_are_double_quoted_without_changing_plain_strings(self) -> None:
+        class ForeignQuotedString(str):
+            pass
+
+        profile = {
+            "plain": "ordinary-text",
+            "pipeline-quoted": QuotedString("08"),
+            "collector-quoted": clash.QuotedStr("521314"),
+            "foreign-quoted": ForeignQuotedString("foreign-value"),
+            "proxies": [],
+        }
+
+        content, rejected = dump_clash_yaml(profile)
+
+        self.assertEqual(rejected, [])
+        self.assertIn("plain: ordinary-text", content)
+        self.assertIn('pipeline-quoted: "08"', content)
+        self.assertIn('collector-quoted: "521314"', content)
+        self.assertIn('foreign-quoted: "foreign-value"', content)
+        loaded = yaml.safe_load(content)
+        self.assertEqual(loaded["pipeline-quoted"], "08")
+        self.assertEqual(loaded["collector-quoted"], "521314")
+        self.assertEqual(loaded["foreign-quoted"], "foreign-value")
+
+    def test_numeric_authentication_and_reality_values_remain_strings(self) -> None:
+        profile = {
+            "proxies": [
+                {
+                    "name": "numeric-auth",
+                    "type": "http",
+                    "server": "public.example",
+                    "port": 443,
+                    "username": clash.QuotedStr("08"),
+                    "password": clash.QuotedStr("521314"),
+                },
+                {
+                    "name": "numeric-reality",
+                    "type": "vless",
+                    "reality-opts": {"short-id": clash.QuotedStr("08")},
+                },
+            ]
+        }
+
+        content, rejected = dump_clash_yaml(profile)
+
+        self.assertEqual(rejected, [])
+        self.assertIn('username: "08"', content)
+        self.assertIn('password: "521314"', content)
+        self.assertIn('short-id: "08"', content)
+        loaded = yaml.safe_load(content)["proxies"]
+        self.assertEqual(loaded[0]["username"], "08")
+        self.assertEqual(loaded[0]["password"], "521314")
+        self.assertEqual(loaded[1]["reality-opts"]["short-id"], "08")
+
     def test_reality_proxy_validation_is_idempotent_after_short_id_quoting(self) -> None:
         proxy = {
             "name": "reality",

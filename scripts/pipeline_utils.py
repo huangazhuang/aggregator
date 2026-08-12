@@ -24,15 +24,26 @@ class QuotedString(str):
     """String scalar that must retain explicit quotes in generated YAML."""
 
 
+class ClashYamlSerializationError(ValueError):
+    """Raised without private scalar details when Clash YAML cannot be emitted."""
+
+
 class ClashSafeDumper(yaml.SafeDumper):
     """Safe YAML dumper with Clash-specific scalar handling."""
 
 
-def _quoted_string(dumper: yaml.Dumper, value: QuotedString) -> yaml.ScalarNode:
-    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style='"')
+def _quoted_string(dumper: yaml.Dumper, value: str) -> yaml.ScalarNode:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(value), style='"')
 
 
 ClashSafeDumper.add_representer(QuotedString, _quoted_string)
+# ``subscribe.clash.verify`` preserves numeric-looking credentials with its
+# own ``QuotedStr`` subclass.  Candidate V2 must also tolerate equivalent
+# subclasses from other collectors without registering every concrete type.
+# PyYAML checks exact representers before multi-representers, so built-in
+# ``str`` values keep SafeDumper's normal scalar style while every subclass is
+# emitted as an explicitly quoted string.
+ClashSafeDumper.add_multi_representer(str, _quoted_string)
 
 
 def valid_reality_short_id(value: Any) -> bool:
@@ -83,15 +94,24 @@ def dump_clash_yaml(profile: dict[str, Any]) -> tuple[str, list[str]]:
     """Serialize a profile while preserving REALITY short IDs as strings."""
 
     prepared, rejected = prepare_clash_profile(profile)
-    return (
-        yaml.dump(
+    serialization_failed = False
+    try:
+        rendered = yaml.dump(
             prepared,
             Dumper=ClashSafeDumper,
             allow_unicode=True,
             sort_keys=False,
-        ),
-        rejected,
-    )
+        )
+    except Exception:
+        # PyYAML's RepresenterError embeds repr(data), which can be a proxy
+        # credential.  This shared boundary is used by both GitHub and CNB, so
+        # no caller should receive the unsafe exception or its context.
+        serialization_failed = True
+    if serialization_failed:
+        # Raise after leaving the exception handler so ``__context__`` and
+        # ``__cause__`` are both empty, not merely hidden by traceback output.
+        raise ClashYamlSerializationError("Clash YAML serialization failed")
+    return rendered, rejected
 
 
 def calculate_publish_floor(minimum: int, previous_count: int, retain_ratio: float) -> int:

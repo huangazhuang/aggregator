@@ -1460,16 +1460,39 @@ def _build_profile(entries: Mapping[str, dict[str, Any]]) -> tuple[bytes, dict[s
         ],
         "rules": ["MATCH,🌐 Proxy"],
     }
-    text, rejected = dump_clash_yaml(profile)
+    text, rejected = _dump_candidate_profile(
+        profile,
+        error_message="candidate profile serialization failed",
+    )
     if rejected:
         raise CandidateSnapshotError("candidate profile contains invalid REALITY short IDs")
     try:
         parsed = yaml.safe_load(text)
-    except Exception as exc:
-        raise CandidateSnapshotError("candidate output profile cannot be parsed") from exc
+    except Exception:
+        raise CandidateSnapshotError("candidate output profile cannot be parsed") from None
     if not isinstance(parsed, dict) or len(parsed.get("proxies", [])) != len(proxies):
         raise CandidateSnapshotError("candidate output profile round-trip failed")
     return text.encode("utf-8"), output_entries
+
+
+def _dump_candidate_profile(
+    profile: Mapping[str, Any],
+    *,
+    error_message: str,
+) -> tuple[str, list[str]]:
+    """Serialize a private profile without exposing rejected scalar values."""
+
+    serialization_failed = False
+    try:
+        return dump_clash_yaml(dict(profile))
+    except Exception:
+        # PyYAML's RepresenterError includes repr(data), which may be a proxy
+        # credential.  Suppress the exception context as well as replacing the
+        # message so CLI tracebacks and CI logs cannot reproduce that value.
+        serialization_failed = True
+    if serialization_failed:
+        raise CandidateSnapshotError(error_message)
+    raise AssertionError("unreachable candidate serialization state")
 
 
 def build_candidate_snapshot(
@@ -1483,7 +1506,10 @@ def build_candidate_snapshot(
     previous: CandidateSnapshot | None = None
     previous_baseline: Mapping[str, Any] | None = None
     if payload["previous_state"] == "present":
-        previous_profile_text, rejected = dump_clash_yaml(dict(payload["previous_profile"]))
+        previous_profile_text, rejected = _dump_candidate_profile(
+            payload["previous_profile"],
+            error_message="previous candidate profile serialization failed",
+        )
         if rejected:
             raise CandidateSnapshotError("previous candidate profile contains invalid REALITY fields")
         previous = validate_candidate_snapshot(
@@ -2336,12 +2362,16 @@ def main(argv: list[str] | None = None) -> int:
     return _validate_command(args)
 
 
-if __name__ == "__main__":
+def _run_cli(argv: list[str] | None = None) -> int:
     try:
-        raise SystemExit(main())
+        return main(argv)
     except (CandidateSnapshotError, CandidateSourceError, IdentityError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_cli())
 
 
 __all__ = [
