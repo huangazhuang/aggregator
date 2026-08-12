@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
-import ipaddress
 import json
 import math
 import os
@@ -21,6 +20,7 @@ from typing import Any
 
 import yaml
 
+from scripts.candidate_handoff import CandidateHandoffError, write_private_bytes_atomic
 from scripts.candidate_sources import (
     ENDPOINT_SAFETY_POLICY_VERSION,
     SAFE_PUBLIC_ALIAS_RE,
@@ -29,6 +29,7 @@ from scripts.candidate_sources import (
     CandidateSourceError,
     EndpointSafetyError,
     merge_provenance_staging,
+    proxy_endpoint_safety_cache_key,
     utc_timestamp,
     validate_proxy_endpoint,
 )
@@ -49,6 +50,8 @@ from scripts.proxy_identity import (
     validate_proxy_fingerprint,
     verify_identity_test_vector,
 )
+from scripts.proxy_privacy import sanitize_public_proxy_alias, structured_proxy_name
+from scripts.proxy_schema import ProxySchemaError, validate_proxy_schema
 from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
@@ -99,20 +102,6 @@ LEGACY_BASELINE_FIELDS = frozenset(
 SNAPSHOT_ID_RE = re.compile(r"^candidate_[0-9a-f]{24}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAIN_SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
-SAFE_ALIAS_SECRET_RE = re.compile(
-    r"://|\b(?:token|password|passwd|secret|authorization|subscription)\s*[=:]",
-    flags=re.I,
-)
-DYNAMIC_ALIAS_SUFFIX_RE = re.compile(
-    r"(?:\s*[-|/]\s*)?(?:\d+(?:\.\d+)?\s*ms|\d+(?:\.\d+)?\s*%|delay\s*[:=].*)$",
-    flags=re.I,
-)
-HOSTNAME_TEXT_RE = re.compile(
-    r"(?<![A-Za-z0-9-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-    r"[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?![A-Za-z0-9-])"
-)
-PORT_TEXT_RE = re.compile(r"(?:^|[\s\[\]():|/,-])(?:port\s*)?:?\d{1,5}(?:$|[\s\[\]():|/,-])", re.I)
-
 IDENTITY_INPUT_FIELDS = {
     "kind",
     "schema_version",
@@ -353,6 +342,27 @@ def _clash_module() -> Any:
 def _validated_proxy(proxy: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(proxy, Mapping):
         raise CandidateSnapshotError("candidate proxy must be a mapping")
+    try:
+        candidate = validate_proxy_schema(proxy)
+    except ProxySchemaError as exc:
+        raise CandidateSnapshotError("candidate proxy schema is unsupported") from exc
+    try:
+        valid = _clash_module().verify(candidate, mihomo=True)
+    except Exception as exc:
+        raise CandidateSnapshotError("candidate proxy validation failed") from exc
+    if not valid:
+        raise CandidateSnapshotError("candidate proxy validation failed")
+    try:
+        return validate_proxy_schema(candidate)
+    except ProxySchemaError as exc:
+        raise CandidateSnapshotError("candidate proxy schema is unsupported") from exc
+
+
+def _validated_legacy_proxy(proxy: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply the pre-V2 Mihomo validation without the Candidate V2 schema."""
+
+    if not isinstance(proxy, Mapping):
+        raise CandidateSnapshotError("candidate proxy must be a mapping")
     candidate = copy.deepcopy(dict(proxy))
     try:
         valid = _clash_module().verify(candidate, mihomo=True)
@@ -415,7 +425,7 @@ def _validate_legacy_candidate_profile(
     proxies: list[dict[str, Any]] = []
     proxy_names: set[str] = set()
     for raw_proxy in raw_proxies:
-        proxy = _validated_proxy(raw_proxy)
+        proxy = _validated_legacy_proxy(raw_proxy)
         name = proxy.get("name")
         proxy_type = proxy.get("type")
         server = proxy.get("server")
@@ -559,15 +569,6 @@ def _validate_legacy_candidate_baseline_summary(value: Any) -> dict[str, Any]:
     return {**normalized, "baseline_sha256": baseline_sha256}
 
 
-def _safe_alias(value: Any) -> str:
-    alias = "".join(char for char in str(value or "") if ord(char) >= 32 and ord(char) != 127)
-    alias = re.sub(r"\s+", " ", alias).strip()
-    alias = DYNAMIC_ALIAS_SUFFIX_RE.sub("", alias).strip(" -|/")
-    if not alias or SAFE_ALIAS_SECRET_RE.search(alias):
-        return ""
-    return alias[:96].rstrip()
-
-
 def _proxy_representative_key(proxy: Mapping[str, Any]) -> str:
     """Choose the same representative when duplicate configs arrive in any order."""
 
@@ -576,62 +577,8 @@ def _proxy_representative_key(proxy: Mapping[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _proxy_secret_values(proxy: Mapping[str, Any]) -> tuple[str, ...]:
-    values: set[str] = set()
-    for field in (
-        "password",
-        "uuid",
-        "username",
-        "token",
-        "psk",
-        "auth",
-        "auth-str",
-        "obfs-password",
-        "private-key",
-    ):
-        value = str(proxy.get(field, "") or "").strip()
-        if len(value) >= 6:
-            values.add(value)
-    return tuple(sorted(values))
-
-
 def _safe_proxy_alias(value: Any, proxy: Mapping[str, Any]) -> str:
-    alias = _safe_alias(value)
-    if not alias:
-        return ""
-    if any(secret in alias for secret in _proxy_secret_values(proxy)):
-        return ""
-    server = canonical_server(proxy.get("server"))
-    port = canonical_port(proxy.get("port"))
-    lowered = alias.casefold()
-    endpoint_tokens = {
-        server.casefold(),
-        f"{server}:{port}".casefold(),
-        f"[{server}]:{port}".casefold(),
-    }
-    raw_server = str(proxy.get("server", "") or "").strip().rstrip(".")
-    if raw_server:
-        endpoint_tokens.update(
-            {
-                raw_server.casefold(),
-                f"{raw_server}:{port}".casefold(),
-                f"[{raw_server}]:{port}".casefold(),
-            }
-        )
-    if any(token and token in lowered for token in endpoint_tokens):
-        return ""
-    if HOSTNAME_TEXT_RE.search(alias) or PORT_TEXT_RE.search(alias):
-        return ""
-    for token in re.findall(r"(?:[0-9A-Fa-f:.]+)", alias):
-        candidate = token.strip("[](){}<>,;|")
-        if not candidate or not any(char in candidate for char in ".:"):
-            continue
-        try:
-            ipaddress.ip_address(candidate)
-        except ValueError:
-            continue
-        return ""
-    return alias
+    return sanitize_public_proxy_alias(value, proxy)
 
 
 def _read_github_failed_count(path: str | Path | None) -> int:
@@ -702,11 +649,11 @@ def prepare_candidate_identity_input(
     if not isinstance(records, list) or not isinstance(sources, list):
         raise CandidateSnapshotError("candidate provenance staging is malformed")
 
-    endpoint_cache: dict[str, dict[str, Any] | EndpointSafetyError] = {}
+    endpoint_cache: dict[tuple[str, int, str], dict[str, Any] | EndpointSafetyError] = {}
 
     def validate_with_endpoint(proxy: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
         validated = _validated_proxy(proxy)
-        endpoint = canonical_endpoint(validated.get("server"), validated.get("port"))
+        endpoint = proxy_endpoint_safety_cache_key(validated)
         if endpoint not in endpoint_cache:
             try:
                 endpoint_cache[endpoint] = validate_proxy_endpoint(
@@ -1005,11 +952,10 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
 
 def write_candidate_identity_input(path: str | Path, payload: Mapping[str, Any]) -> None:
     validate_candidate_identity_input(payload)
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    temporary.write_bytes(_json_bytes(dict(payload)))
-    temporary.replace(destination)
+    try:
+        write_private_bytes_atomic(path, _json_bytes(dict(payload)))
+    except CandidateHandoffError as exc:
+        raise CandidateSnapshotError("unable to write private candidate identity input") from exc
 
 
 def load_candidate_identity_input(path: str | Path) -> dict[str, Any]:
@@ -1320,9 +1266,18 @@ def _choose_names(entries: Mapping[str, dict[str, Any]]) -> dict[str, str]:
     chosen: dict[str, str] = {}
     used = set(reserved)
     for candidate_id_value in sorted(entries):
-        aliases = [_safe_alias(value) for value in entries[candidate_id_value]["metadata"]["aliases"]]
+        proxy = entries[candidate_id_value]["proxy"]
+        aliases = [
+            _safe_proxy_alias(value, proxy)
+            for value in entries[candidate_id_value]["metadata"]["aliases"]
+        ]
         aliases = sorted({alias for alias in aliases if alias})
-        base = aliases[0] if aliases else "Node"
+        metadata = entries[candidate_id_value]["metadata"]
+        base = aliases[0] if aliases else structured_proxy_name(
+            region_hints=metadata.get("region_hints", []),
+            protocol=proxy.get("type", ""),
+            protected_asia=bool(metadata.get("protected_asia", False)),
+        )
         name = base
         if name in used:
             name = f"{base} [{candidate_id_value[-6:]}]"
@@ -1486,7 +1441,13 @@ def build_candidate_snapshot(
         entries[candidate_id_value] = {
             "proxy": proxy,
             "metadata": {
-                "aliases": sorted(set(aliases) | set((old_metadata or {}).get("aliases", []))),
+                "aliases": sorted(
+                    {
+                        safe_alias
+                        for alias in set(aliases) | set((old_metadata or {}).get("aliases", []))
+                        if (safe_alias := _safe_proxy_alias(alias, proxy))
+                    }
+                ),
                 "source_ids": sorted(set(source_ids) | set((old_metadata or {}).get("source_ids", []))),
                 "first_seen_at": first_seen_at,
                 "last_seen_at": run_at,
@@ -1552,6 +1513,13 @@ def build_candidate_snapshot(
             if public_ids["candidate_id"] != candidate_id_value:
                 raise CandidateSnapshotError("previous candidate identity changed")
             metadata = copy.deepcopy(old_metadata)
+            metadata["aliases"] = sorted(
+                {
+                    safe_alias
+                    for alias in metadata.get("aliases", [])
+                    if (safe_alias := _safe_proxy_alias(alias, proxy))
+                }
+            )
             metadata["source_ids"] = sorted(set(metadata["source_ids"]) | set(retain_sources))
             metadata["endpoint_checked_at"] = str(payload["endpoint_checked_at"])
             entries[candidate_id_value] = {"proxy": proxy, "metadata": metadata}

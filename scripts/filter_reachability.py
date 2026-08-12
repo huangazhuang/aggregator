@@ -14,13 +14,19 @@ from typing import Any
 
 import yaml
 
-sys.path.insert(0, os.path.abspath("subscribe"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(1, str(ROOT / "subscribe"))
 
 import clash  # noqa: E402
 import executable  # noqa: E402
 import utils  # noqa: E402
 
-from scripts.pipeline_utils import calculate_publish_floor
+from scripts.pipeline_utils import (
+    build_candidate_v2_clash_profile,
+    calculate_publish_floor,
+    dump_clash_yaml,
+)
 
 
 REPORT_FILE = Path("data/github-check-report.json")
@@ -52,6 +58,10 @@ def ratio_setting(name: str, default: float) -> float:
         return default
 
 
+def candidate_v2_enabled() -> bool:
+    return os.environ.get("ENABLE_CANDIDATE_V2", "false").strip().lower() == "true"
+
+
 def previous_proxy_count(path: Path) -> int:
     try:
         data = json.loads(path.read_text(encoding="utf-8")) or {}
@@ -64,18 +74,31 @@ def select_reachability_passes(
     checks: list[dict[str, Any]],
     tested: list[dict[str, Any]],
     valid_masks: list[list[bool]],
+    *,
+    bind_by_index: bool = False,
 ) -> list[dict[str, Any]]:
     """Keep protected Asia plus ordinary proxies that passed every target."""
 
-    tested_passed_names = (
-        {
-            str(tested[index].get("name", ""))
-            for index in range(len(tested))
-            if all(mask[index] for mask in valid_masks)
-        }
-        if valid_masks
-        else set()
-    )
+    tested_passed_indexes = {
+        index
+        for index in range(len(tested))
+        if valid_masks and all(mask[index] for mask in valid_masks)
+    }
+    if bind_by_index:
+        tested_index = 0
+        selected: list[dict[str, Any]] = []
+        for proxy in checks:
+            if utils.is_preferred_asian_proxy(proxy):
+                selected.append(proxy)
+                continue
+            if tested_index in tested_passed_indexes:
+                selected.append(proxy)
+            tested_index += 1
+        return selected
+
+    tested_passed_names = {
+        str(tested[index].get("name", "")) for index in tested_passed_indexes
+    }
     return [
         proxy
         for proxy in checks
@@ -85,6 +108,7 @@ def select_reachability_passes(
 
 
 def main() -> int:
+    candidate_v2 = candidate_v2_enabled()
     targets = [
         (os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"), 200),
         ("https://www.google.com/generate_204", 204),
@@ -114,7 +138,19 @@ def main() -> int:
     clash_bin, _ = executable.which_bin()
     binary = workspace / clash_bin
     utils.chmod(str(binary))
-    checks = clash.generate_config(str(workspace), validated, "reach-check.yaml")
+    if candidate_v2:
+        check_profile = build_candidate_v2_clash_profile(
+            validated,
+            external_controller=clash.EXTERNAL_CONTROLLER,
+            test_url=os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"),
+        )
+        checks = check_profile["proxies"]
+        check_text, rejected = dump_clash_yaml(check_profile)
+        if rejected:
+            fail_closed("Candidate V2 contains invalid REALITY short IDs")
+        (workspace / "reach-check.yaml").write_text(check_text, encoding="utf-8")
+    else:
+        checks = clash.generate_config(str(workspace), validated, "reach-check.yaml")
     if not checks:
         fail_closed("Mihomo test configuration contains no valid proxies")
 
@@ -175,7 +211,12 @@ def main() -> int:
         lines.append("all valid proxies are protected Asia; network tests skipped")
         print(lines[-1])
 
-    passed = select_reachability_passes(checks, tested, valid_masks)
+    passed = select_reachability_passes(
+        checks,
+        tested,
+        valid_masks,
+        bind_by_index=candidate_v2,
+    )
     ordinary_passed = sum(1 for proxy in passed if not utils.is_preferred_asian_proxy(proxy))
     report = {
         "kind": "github-reachability-report",
@@ -213,20 +254,31 @@ def main() -> int:
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write("### Reachability filter\n" + "".join(f"- {line}\n" for line in lines))
 
-    config = {
-        "mixed-port": 7890,
-        "external-controller": clash.EXTERNAL_CONTROLLER,
-        "mode": "Rule",
-        "log-level": "silent",
-    }
-    config.update(clash.filter_proxies(passed))
-    for group in config.get("proxy-groups", []):
-        if group.get("type") == "url-test":
-            group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
+    if candidate_v2:
+        config = build_candidate_v2_clash_profile(
+            passed,
+            external_controller=clash.EXTERNAL_CONTROLLER,
+            test_url=os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"),
+        )
+        content, rejected = dump_clash_yaml(config)
+        if rejected:
+            fail_closed("Candidate V2 contains invalid REALITY short IDs", lines)
+        profile.write_text(content, encoding="utf-8")
+    else:
+        config = {
+            "mixed-port": 7890,
+            "external-controller": clash.EXTERNAL_CONTROLLER,
+            "mode": "Rule",
+            "log-level": "silent",
+        }
+        config.update(clash.filter_proxies(passed))
+        for group in config.get("proxy-groups", []):
+            if group.get("type") == "url-test":
+                group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
 
-    with profile.open("w", encoding="utf-8") as handle:
-        yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
-        yaml.dump(config, handle, allow_unicode=True)
+        with profile.open("w", encoding="utf-8") as handle:
+            yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
+            yaml.dump(config, handle, allow_unicode=True)
     return 0
 
 

@@ -29,6 +29,7 @@ from scripts.proxy_identity import (
     canonical_port,
     canonical_proxy_fingerprint,
     exit_id,
+    legacy_v1_proxy_fingerprint,
     validate_public_id,
 )
 
@@ -1324,14 +1325,15 @@ def bootstrap_legacy_profile(
     private_bindings: list[tuple[str, str]] = []
     legacy_names = [str(item["name"]) for item in proxies]
     for proxy in proxies:
+        fingerprint = legacy_v1_proxy_fingerprint(proxy)
         cid = candidate_id(
-            proxy,
+            fingerprint,
             key=identity_settings.key,
             identity_key_version=identity_settings.identity_key_version,
             identity_epoch=identity_settings.identity_epoch,
         )
         aliases[cid] = str(proxy.get("name") or "")
-        private_bindings.append((cid, canonical_proxy_fingerprint(proxy)))
+        private_bindings.append((cid, fingerprint))
     if len(aliases) != len(proxies):
         raise HistoryMigrationError("legacy profile contains duplicate proxy identities")
     assert_unique_public_id_bindings(private_bindings)

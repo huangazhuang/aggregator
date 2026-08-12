@@ -380,7 +380,9 @@ jobs:
             echo "Candidate V2 endpoint sanitization has no provenance input." >&2
             exit 1
           fi
-          python -m scripts.sanitize_candidate_endpoints "${args[@]}"
+          python -m scripts.sanitize_candidate_endpoints \
+            --rebuild-from-provenance \
+            "${args[@]}"
 
       - name: Drop GFW-blocked entries via configured China-side probe
         if: env.PROBE_URL != ''

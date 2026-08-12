@@ -40,7 +40,7 @@ from scripts.gmgn_selection import (
 )
 from scripts.proxy_identity import (
     assert_unique_public_id_bindings,
-    canonical_proxy_fingerprint,
+    legacy_v1_proxy_fingerprint,
     validate_identity_version,
     validate_proxy_fingerprint,
     validate_public_id,
@@ -177,9 +177,9 @@ def boolean_argument(value: Any) -> bool:
 
 
 def proxy_fingerprint(proxy: dict[str, Any]) -> str:
-    """Compatibility wrapper around the sole GMGN canonical identity owner."""
+    """Keep V1 publication compatible with its pre-V2 fingerprint contract."""
 
-    return canonical_proxy_fingerprint(proxy)
+    return legacy_v1_proxy_fingerprint(proxy)
 
 
 def _normalized_block_counts(summary: dict[str, Any]) -> list[int] | None:

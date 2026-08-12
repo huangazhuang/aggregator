@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -19,6 +20,7 @@ from scripts.proxy_identity import (
     endpoint_id,
     exit_id,
     load_identity_test_vector,
+    legacy_v1_proxy_fingerprint,
     server_id,
     validate_public_id,
     validate_proxy_fingerprint,
@@ -66,19 +68,18 @@ class ProxyIdentityTests(unittest.TestCase):
 
     def test_every_connection_field_change_changes_identity(self) -> None:
         mutations = {
-            "protocol": lambda item: item.__setitem__("type", "trojan"),
             "server": lambda item: item.__setitem__("server", "other.example"),
             "port": lambda item: item.__setitem__("port", 8443),
             "credential": lambda item: item.__setitem__(
                 "uuid", "00000000-0000-4000-8000-000000000002"
             ),
-            "transport": lambda item: item.__setitem__("network", "grpc"),
+            "transport": lambda item: item["ws-opts"].__setitem__("path", "/other"),
             "tls": lambda item: item.__setitem__("tls", False),
             "reality": lambda item: item.__setitem__(
                 "reality-opts", {"public-key": "fixture-public-key", "short-id": "01"}
             ),
             "nested-list-order": lambda item: item.__setitem__("alpn", ["h2", "http/1.1"]),
-            "scalar-type": lambda item: item.__setitem__("udp", 1),
+            "scalar": lambda item: item.__setitem__("udp", True),
         }
         baseline = canonical_proxy_fingerprint(self.proxy)
         for label, mutate in mutations.items():
@@ -89,6 +90,51 @@ class ProxyIdentityTests(unittest.TestCase):
 
         with self.assertRaises(IdentityError):
             canonical_proxy_fingerprint({**self.proxy, 1: "invalid-key"})
+
+    def test_anytls_tls_fingerprint_is_connection_identity(self) -> None:
+        base = {
+            "name": "JP AnyTLS",
+            "type": "anytls",
+            "server": "anytls.example",
+            "port": 443,
+            "password": "anytls-secret",
+            "fingerprint": "chrome",
+        }
+        changed = {**base, "fingerprint": "firefox"}
+
+        self.assertNotEqual(
+            canonical_proxy_fingerprint(base),
+            canonical_proxy_fingerprint(changed),
+        )
+        self.assertNotEqual(self.candidate(base), self.candidate(changed))
+
+    def test_legacy_v1_fingerprint_keeps_old_projection_without_weakening_v2(self) -> None:
+        legacy_http = {
+            "name": "Legacy HTTP",
+            "type": "http",
+            "server": "legacy-http.example",
+            "port": 8080,
+            "udp": True,
+        }
+        projected = copy.deepcopy(legacy_http)
+        projected.pop("name")
+        expected = hashlib.sha256(
+            json.dumps(
+                projected,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        self.assertEqual(legacy_v1_proxy_fingerprint(legacy_http), expected)
+        self.assertEqual(
+            legacy_v1_proxy_fingerprint(legacy_http),
+            legacy_v1_proxy_fingerprint({**legacy_http, "name": "Renamed"}),
+        )
+        with self.assertRaises(IdentityError):
+            canonical_proxy_fingerprint(legacy_http)
 
     def test_identity_domains_and_versions_are_separated(self) -> None:
         ids = compute_public_ids(

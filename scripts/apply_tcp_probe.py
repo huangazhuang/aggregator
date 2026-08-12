@@ -14,10 +14,14 @@ from typing import Any
 
 import yaml
 
-sys.path.insert(0, os.path.abspath("subscribe"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(1, str(ROOT / "subscribe"))
 
 import clash  # noqa: E402
 import utils  # noqa: E402
+
+from scripts.pipeline_utils import build_candidate_v2_clash_profile, dump_clash_yaml
 
 
 CACHE_FILE = Path("data/cn-fc-check.json")
@@ -29,6 +33,10 @@ def should_probe_proxy(proxy: dict[str, Any]) -> bool:
     """TCP-check every protocol except transports that require UDP."""
 
     return str(proxy.get("type", "")).lower() not in TCP_PROBE_SKIP_TYPES
+
+
+def candidate_v2_enabled() -> bool:
+    return os.environ.get("ENABLE_CANDIDATE_V2", "false").strip().lower() == "true"
 
 
 def endpoint_key(proxy: dict[str, Any]) -> str:
@@ -98,8 +106,10 @@ def main() -> int:
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 result = json.loads(response.read().decode())
-        except Exception as exc:
-            print(f"::warning::FC probe failed ({exc}); keeping unprobed endpoints this round")
+        except Exception:
+            # Raw urllib/socket exceptions may contain a secret URL, runner
+            # address, or response detail. Keep the public Actions log generic.
+            print("::warning::FC probe request failed; keeping unprobed endpoints this round")
             break
         classification_totals.update(
             {
@@ -143,20 +153,31 @@ def main() -> int:
     if not dropped or not kept:
         return 0
 
-    config = {
-        "mixed-port": 7890,
-        "external-controller": clash.EXTERNAL_CONTROLLER,
-        "mode": "Rule",
-        "log-level": "silent",
-    }
-    config.update(clash.filter_proxies(kept))
-    for group in config.get("proxy-groups", []):
-        if group.get("type") == "url-test":
-            group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
+    if candidate_v2_enabled():
+        config = build_candidate_v2_clash_profile(
+            kept,
+            external_controller=clash.EXTERNAL_CONTROLLER,
+            test_url=os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"),
+        )
+        content, rejected = dump_clash_yaml(config)
+        if rejected:
+            raise RuntimeError("Candidate V2 contains invalid REALITY short IDs")
+        profile.write_text(content, encoding="utf-8")
+    else:
+        config = {
+            "mixed-port": 7890,
+            "external-controller": clash.EXTERNAL_CONTROLLER,
+            "mode": "Rule",
+            "log-level": "silent",
+        }
+        config.update(clash.filter_proxies(kept))
+        for group in config.get("proxy-groups", []):
+            if group.get("type") == "url-test":
+                group["url"] = os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/")
 
-    with profile.open("w", encoding="utf-8") as handle:
-        yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
-        yaml.dump(config, handle, allow_unicode=True)
+        with profile.open("w", encoding="utf-8") as handle:
+            yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
+            yaml.dump(config, handle, allow_unicode=True)
     return 0
 
 

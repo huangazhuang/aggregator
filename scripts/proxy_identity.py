@@ -8,6 +8,7 @@ This module deliberately performs no DNS, HTTP, Mihomo, or publication I/O.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import ipaddress
@@ -19,6 +20,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+from scripts.proxy_schema import ProxySchemaError, connection_proxy_projection
 
 
 IdentityKind = Literal["candidate", "server", "endpoint", "exit", "asn"]
@@ -40,10 +43,11 @@ PUBLIC_ID_PREFIXES: dict[IdentityKind, str] = {
     "asn": "asn1_",
 }
 
-# These top-level fields describe collection, measurement, display, or derived
-# state rather than the connection identity.  All other validated proxy fields
-# are retained, including protocol, credentials, transport, TLS, and REALITY.
-NON_CONNECTION_PROXY_FIELDS = frozenset(
+# Trusted internal callers may attach these annotations before computing an
+# identity. They are stripped explicitly, then the shared strict proxy schema
+# owns the complete connection-field projection. Unknown fields are never
+# silently treated as metadata.
+INTERNAL_PROXY_METADATA_FIELDS = frozenset(
     {
         "name",
         "sub",
@@ -68,7 +72,6 @@ NON_CONNECTION_PROXY_FIELDS = frozenset(
         "endpoint_id",
         "exit_id",
         "output_name",
-        "fingerprint",
         "selection_tier",
         "tier",
         "summary",
@@ -186,14 +189,17 @@ def canonical_proxy_projection(proxy: Mapping[str, Any]) -> dict[str, Any]:
         raise IdentityError("proxy must be a mapping")
     if any(not isinstance(key, str) for key in proxy):
         raise IdentityError("proxy contains a non-string mapping key")
-    projected = {
+    if any(key.startswith("_") for key in proxy):
+        raise IdentityError("proxy contains a private field")
+    candidate = {
         key: value
         for key, value in proxy.items()
-        if key not in NON_CONNECTION_PROXY_FIELDS
-        and not key.startswith("_")
+        if key not in INTERNAL_PROXY_METADATA_FIELDS
     }
-    if not projected:
-        raise IdentityError("proxy contains no connection identity fields")
+    try:
+        projected = connection_proxy_projection(candidate)
+    except ProxySchemaError as exc:
+        raise IdentityError("proxy does not match the supported connection schema") from exc
     return _canonical_json_value(projected, "proxy")
 
 
@@ -217,6 +223,28 @@ def canonical_proxy_fingerprint(proxy: Mapping[str, Any]) -> str:
     """Return the private full SHA-256 fingerprint of a validated proxy."""
 
     return hashlib.sha256(canonical_proxy_bytes(proxy)).hexdigest()
+
+
+def legacy_v1_proxy_fingerprint(proxy: Mapping[str, Any]) -> str:
+    """Reproduce the pre-V2 GMGN fingerprint for compatibility-only callers.
+
+    V1 accepted Mihomo-compatible fields outside Candidate V2's strict schema.
+    Keep its historical name-independent JSON projection isolated here so the
+    strict canonical identity remains the only fingerprint used by V2.
+    """
+
+    if not isinstance(proxy, Mapping):
+        raise IdentityError("proxy must be a mapping")
+    payload = copy.deepcopy(dict(proxy))
+    payload.pop("name", None)
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def canonical_server(server: Any) -> str:
@@ -623,6 +651,7 @@ __all__ = [
     "endpoint_id",
     "exit_id",
     "load_identity_test_vector",
+    "legacy_v1_proxy_fingerprint",
     "server_id",
     "validate_public_id",
     "validate_identity_version",

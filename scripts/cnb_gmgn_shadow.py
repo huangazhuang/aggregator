@@ -45,7 +45,7 @@ from scripts.cnb_mihomo_filter import (
     wait_for_mihomo,
 )
 from scripts.pipeline_utils import dump_clash_yaml, normalize_reality_short_ids
-from scripts.proxy_identity import canonical_proxy_fingerprint
+from scripts.proxy_identity import legacy_v1_proxy_fingerprint
 
 
 SHADOW_SCHEMA_VERSION = 2
@@ -298,9 +298,9 @@ def load_fresh_source_snapshot(
 
 
 def proxy_fingerprint(proxy: dict[str, Any]) -> str:
-    """Compatibility wrapper around the C3 canonical identity owner."""
+    """Keep V1 sharding compatible with its pre-V2 fingerprint contract."""
 
-    return canonical_proxy_fingerprint(proxy)
+    return legacy_v1_proxy_fingerprint(proxy)
 
 
 def partition_proxies(

@@ -244,6 +244,16 @@ def decrypt_handoff(
         ) from exc
 
 
+def write_private_bytes_atomic(path: str | Path, content: bytes) -> Path:
+    """Create or replace a private file atomically with mode 0600 from birth."""
+
+    destination = Path(path)
+    if not isinstance(content, bytes):
+        raise CandidateHandoffError("candidate private output must be bytes")
+    _write_bytes_atomic(destination, content, mode=0o600)
+    return destination
+
+
 def _write_bytes_atomic(path: Path, content: bytes, *, mode: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
@@ -297,7 +307,7 @@ def encrypt_file(
         run_id=run_id,
         trigger_sha=trigger_sha,
     )
-    _write_bytes_atomic(output, encrypted, mode=0o600)
+    write_private_bytes_atomic(output, encrypted)
     return output
 
 
@@ -322,7 +332,7 @@ def decrypt_file(
         trigger_sha=trigger_sha,
     )
     output = Path(destination)
-    _write_bytes_atomic(output, plaintext, mode=0o600)
+    write_private_bytes_atomic(output, plaintext)
     return output
 
 

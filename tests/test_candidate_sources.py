@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from scripts.candidate_sources import provenance_for_task
+from scripts.candidate_sources import (
+    load_provenance_staging,
+    provenance_for_task,
+    write_provenance_staging,
+)
 from subscribe import collect
 from subscribe.collect import _airport_quota_targets, select_airport_domains_with_stats
 from subscribe.workflow import TaskConfig, dedup_task
@@ -141,6 +146,44 @@ class ProvenanceSourceTests(unittest.TestCase):
 
         self.assertEqual(len(tasks), 1)
         self.assertTrue(tasks[0].publish_derivatives)
+
+    def test_anytls_tls_fingerprint_survives_private_staging_round_trip(self) -> None:
+        source_task = SimpleNamespace(
+            name="JP AnyTLS",
+            sub="https://raw.githubusercontent.com/acme/asia/main/anytls.yaml",
+            domain="",
+            publish_derivatives=True,
+        )
+        candidate = {
+            "name": "JP AnyTLS 01",
+            "type": "anytls",
+            "server": "anytls.example",
+            "port": 443,
+            "password": "anytls-secret",
+            "fingerprint": "chrome",
+        }
+        sources, records = provenance_for_task(
+            source_task,
+            [candidate],
+            observed_at="2026-08-12T00:00:00Z",
+        )
+        self.assertEqual(records[0]["proxy"]["fingerprint"], "chrome")
+
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            path = Path(directory, "provenance.json")
+            write_provenance_staging(
+                path,
+                sources=sources,
+                records=records,
+                generated_at="2026-08-12T00:00:00Z",
+            )
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            loaded = load_provenance_staging(path)
+
+        self.assertEqual(loaded["records"][0]["proxy"]["fingerprint"], "chrome")
 
 
 if __name__ == "__main__":

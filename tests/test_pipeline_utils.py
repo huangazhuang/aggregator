@@ -7,11 +7,14 @@ import yaml
 
 from scripts.cnb_mihomo_filter import calculate_cnb_publish_floor, load_optional_json
 from scripts.pipeline_utils import (
+    build_candidate_v2_clash_profile,
     calculate_publish_floor,
     dump_clash_yaml,
+    exact_unique_proxy_variants,
     filtered_profile,
     normalize_reality_short_ids,
 )
+from scripts.proxy_identity import canonical_proxy_fingerprint
 from subscribe import clash
 
 
@@ -132,6 +135,112 @@ class ProfileFilteringTests(unittest.TestCase):
         self.assertEqual(output["proxy-groups"][0]["proxies"], ["c", "a"])
         self.assertEqual(output["proxy-groups"][1]["proxies"], ["auto", "DIRECT", "c"])
         self.assertEqual([item["name"] for item in profile["proxies"]], ["a", "b", "c"])
+
+
+class CandidateV2ExactProfileTests(unittest.TestCase):
+    def variants(self) -> list[dict]:
+        return [
+            {
+                "name": "ASIA-KEEP HK shared",
+                "type": "ss",
+                "server": "shared.example",
+                "port": 443,
+                "cipher": "aes-128-gcm",
+                "password": "secret-a",
+                "plugin": "obfs",
+                "plugin-opts": {"mode": "tls", "host": "one.example"},
+            },
+            {
+                "name": "ASIA-KEEP HK shared",
+                "type": "ss",
+                "server": "shared.example",
+                "port": 443,
+                "cipher": "aes-128-gcm",
+                "password": "secret-a",
+                "plugin": "obfs",
+                "plugin-opts": {"mode": "tls", "host": "two.example"},
+            },
+            {
+                "name": "ASIA-KEEP HK shared",
+                "type": "vless",
+                "server": "shared.example",
+                "port": 443,
+                "uuid": "12345678-1234-1234-1234-123456789abc",
+                "network": "ws",
+                "ws-opts": {"path": "/one"},
+                "tls": True,
+            },
+            {
+                "name": "ASIA-KEEP HK shared",
+                "type": "http",
+                "server": "shared.example",
+                "port": 443,
+                "username": "user-one",
+                "password": "http-one",
+                "tls": True,
+            },
+            {
+                "name": "ASIA-KEEP HK shared",
+                "type": "http",
+                "server": "shared.example",
+                "port": 443,
+                "username": "user-two",
+                "password": "http-two",
+                "tls": True,
+            },
+        ]
+
+    def test_keeps_same_endpoint_connection_variants_and_folds_only_exact_duplicates(self) -> None:
+        variants = self.variants()
+        exact_duplicate = yaml.safe_load(yaml.safe_dump(variants[0]))
+        exact_duplicate["name"] = "ordinary duplicate alias"
+
+        output = exact_unique_proxy_variants([*variants, exact_duplicate])
+
+        self.assertEqual(len(output), len(variants))
+        self.assertEqual(
+            {canonical_proxy_fingerprint(proxy) for proxy in output},
+            {canonical_proxy_fingerprint(proxy) for proxy in variants},
+        )
+        self.assertEqual(len({proxy["name"] for proxy in output}), len(output))
+        duplicate_result = next(
+            proxy
+            for proxy in output
+            if canonical_proxy_fingerprint(proxy)
+            == canonical_proxy_fingerprint(variants[0])
+        )
+        self.assertEqual(duplicate_result["name"], "ASIA-KEEP HK shared")
+
+    def test_basic_profile_is_deterministic_and_references_every_variant(self) -> None:
+        variants = self.variants()
+
+        first = build_candidate_v2_clash_profile(
+            variants,
+            external_controller="127.0.0.1:9090",
+            test_url="https://gmgn.ai/",
+        )
+        second = build_candidate_v2_clash_profile(
+            reversed(variants),
+            external_controller="127.0.0.1:9090",
+            test_url="https://gmgn.ai/",
+        )
+
+        self.assertEqual(first, second)
+        names = [proxy["name"] for proxy in first["proxies"]]
+        self.assertEqual(first["proxy-groups"][0]["proxies"], names)
+        self.assertEqual(first["proxy-groups"][1]["proxies"], ["automatic", *names])
+
+    def test_exact_helper_rejects_unknown_state_and_name_chains(self) -> None:
+        proxy = self.variants()[0]
+        proxy["metrics"] = {"collector_note": "private-sentinel"}
+
+        with self.assertRaisesRegex(ValueError, "schema is unsupported"):
+            exact_unique_proxy_variants([proxy])
+        chained = dict(proxy)
+        chained.pop("metrics")
+        chained["dialer-proxy"] = "upstream-name"
+        with self.assertRaisesRegex(ValueError, "schema is unsupported"):
+            exact_unique_proxy_variants([chained])
 
 
 if __name__ == "__main__":

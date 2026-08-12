@@ -346,13 +346,15 @@ class ShadowPrivacyTests(unittest.TestCase):
 
 class ShadowPartitionTests(unittest.TestCase):
     PROXIES = [
-        {"name": "node-a", "type": "ss", "server": "a.example", "port": 1},
-        {"name": "node-b", "type": "ss", "server": "b.example", "port": 2},
-        {"name": "node-c", "type": "ss", "server": "c.example", "port": 3},
-        {"name": "node-d", "type": "ss", "server": "d.example", "port": 4},
-        {"name": "node-e", "type": "ss", "server": "e.example", "port": 5},
-        {"name": "node-f", "type": "ss", "server": "f.example", "port": 6},
-        {"name": "node-g", "type": "ss", "server": "g.example", "port": 7},
+        {
+            "name": f"node-{letter}",
+            "type": "ss",
+            "server": f"{letter}.example",
+            "port": index,
+            "cipher": "aes-128-gcm",
+            "password": f"secret-{letter}",
+        }
+        for index, letter in enumerate("abcdefg", start=1)
     ]
 
     def test_partition_is_complete_balanced_and_input_order_independent(self):
@@ -368,10 +370,30 @@ class ShadowPartitionTests(unittest.TestCase):
         sizes = [len(shard) for shard in first]
         self.assertLessEqual(max(sizes) - min(sizes), 1)
 
+    def test_partition_accepts_legacy_http_udp_field(self):
+        proxy = {
+            "name": "Legacy HTTP",
+            "type": "http",
+            "server": "legacy-http.example",
+            "port": 8080,
+            "udp": True,
+        }
+
+        shards = partition_proxies([proxy], 4)
+
+        self.assertEqual(sum(shards, []), [proxy])
+
     def test_capacity_estimate_accounts_for_all_timeout_batches(self):
         shards = partition_proxies(
             [
-                {"name": f"node-{index}", "server": f"{index}.example", "port": index}
+                {
+                    "name": f"node-{index}",
+                    "type": "ss",
+                    "server": f"{index}.example",
+                    "port": (index % 65_535) + 1,
+                    "cipher": "aes-128-gcm",
+                    "password": f"secret-{index}",
+                }
                 for index in range(5000)
             ],
             4,
@@ -584,7 +606,6 @@ class ShadowProbeTests(unittest.TestCase):
                 "port": 443,
                 "cipher": "aes-128-gcm",
                 "password": "private-password",
-                "uuid": "private-uuid",
             }
             shard_path.write_text(
                 yaml.safe_dump({"proxies": [proxy]}, allow_unicode=True, sort_keys=False),
@@ -719,7 +740,7 @@ class ShadowProbeTests(unittest.TestCase):
             self.assertEqual(selection["proxy"]["server"], "secret.example")
             self.assertEqual(selection["proxy"]["port"], 443)
             self.assertEqual(selection["proxy"]["password"], "private-password")
-            self.assertEqual(selection["proxy"]["uuid"], "private-uuid")
+            self.assertEqual(selection["proxy"]["cipher"], "aes-128-gcm")
             self.assertEqual(selection["summary"], public_payload["results"][0])
             self.assertEqual(set(selection), SELECTION_RESULT_FIELDS)
             self.assertRegex(selection["summary"]["node_id"], r"^n1_[0-9a-f]{24}$")

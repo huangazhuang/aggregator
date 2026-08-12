@@ -27,7 +27,12 @@ from scripts.gmgn_history import (
     validate_history,
     write_history_atomic,
 )
-from scripts.proxy_identity import IdentitySettings, candidate_id, canonical_proxy_fingerprint
+from scripts.proxy_identity import (
+    IdentitySettings,
+    candidate_id,
+    canonical_proxy_fingerprint,
+    legacy_v1_proxy_fingerprint,
+)
 
 
 KEY = b"documented-history-test-key"
@@ -600,6 +605,66 @@ class HistoryMigrationTests(unittest.TestCase):
                 identity_settings=OLD,
                 selection_policy_version=POLICY,
             )
+
+    def test_legacy_bootstrap_uses_v1_fingerprint_for_tolerated_fields(self) -> None:
+        proxies = [
+            {
+                "name": "legacy HTTP",
+                "type": "http",
+                "server": "http.example",
+                "port": 443,
+                "udp": True,
+            },
+            {
+                "name": "legacy gRPC",
+                "type": "vless",
+                "server": "grpc.example",
+                "port": 443,
+                "uuid": "00000000-0000-4000-8000-000000000101",
+                "tls": True,
+                "network": "grpc",
+                "grpc-opts": {
+                    "grpc-service-name": "legacy",
+                    "grpc-mode": "gun",
+                },
+            },
+        ]
+        profile_bytes = yaml.safe_dump(
+            {"proxies": proxies, "proxy-groups": []},
+            allow_unicode=True,
+            sort_keys=False,
+        ).encode("utf-8")
+        status = {
+            "kind": "cnb-gmgn-publish-status",
+            "schema_version": 1,
+            "profile_sha256": hashlib.sha256(profile_bytes).hexdigest(),
+            "published_count": len(proxies),
+            "run_id": "legacy-compatible-run",
+            "source_sha256": sha(1),
+            "run_at": timestamp(0),
+        }
+
+        history = bootstrap_legacy_profile(
+            profile_bytes,
+            status,
+            identity_settings=OLD,
+            selection_policy_version=POLICY,
+        )
+
+        expected_ids = {
+            candidate_id(
+                legacy_v1_proxy_fingerprint(item),
+                key=OLD.key,
+                identity_key_version=OLD.identity_key_version,
+                identity_epoch=OLD.identity_epoch,
+            )
+            for item in proxies
+        }
+        self.assertEqual(set(history["nodes"]), expected_ids)
+        self.assertEqual(
+            {node["output_name"] for node in history["nodes"].values()},
+            {"legacy HTTP", "legacy gRPC"},
+        )
 
 
 if __name__ == "__main__":

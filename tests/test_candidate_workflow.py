@@ -557,6 +557,8 @@ class CandidateWorkflowContractTests(unittest.TestCase):
             "python -m scripts.sanitize_candidate_endpoints",
             sanitizer["run"],
         )
+        self.assertIn("--rebuild-from-provenance", sanitizer["run"])
+        self.assertEqual(self.text.count("--rebuild-from-provenance"), 1)
         self.assertLess(
             names.index("Sanitize Candidate V2 endpoints before any proxy network access"),
             names.index("Drop GFW-blocked entries via configured China-side probe"),
@@ -565,6 +567,29 @@ class CandidateWorkflowContractTests(unittest.TestCase):
             names.index("Sanitize Candidate V2 endpoints before any proxy network access"),
             names.index("Filter proxies by required site reachability"),
         )
+
+    def test_candidate_v2_rebuild_is_gated_without_changing_the_v1_network_path(self) -> None:
+        steps = self.jobs["collect"]["steps"]
+        sanitizer = next(
+            step
+            for step in steps
+            if step.get("name")
+            == "Sanitize Candidate V2 endpoints before any proxy network access"
+        )
+        fc_probe = next(
+            step
+            for step in steps
+            if step.get("name") == "Drop GFW-blocked entries via configured China-side probe"
+        )
+        reachability = next(
+            step
+            for step in steps
+            if step.get("name") == "Filter proxies by required site reachability"
+        )
+
+        self.assertEqual(sanitizer["if"], "env.ENABLE_CANDIDATE_V2 == 'true'")
+        self.assertEqual(fc_probe["if"], "env.PROBE_URL != ''")
+        self.assertNotIn("if", reachability)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import socket
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,7 @@ from scripts.candidate_snapshot import (
     validate_candidate_snapshot,
     validate_legacy_candidate_baseline,
     write_candidate_snapshot,
+    write_candidate_identity_input,
 )
 from scripts.candidate_sources import (
     EndpointResolutionInfrastructureError,
@@ -52,6 +54,18 @@ def proxy(name: str, server: str, password: str) -> dict:
         "port": 443,
         "cipher": "aes-128-gcm",
         "password": password,
+    }
+
+
+def tuic_proxy(name: str, server: str, password: str, *, ip: str) -> dict:
+    return {
+        "name": name,
+        "type": "tuic",
+        "server": server,
+        "port": 443,
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "password": password,
+        "ip": ip,
     }
 
 
@@ -148,6 +162,51 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
         )
         self.assertEqual(result["policy_version"], "endpoint-safety-v1")
         self.assertEqual(result["resolved_address_count"], 2)
+        tuic_result = validate_proxy_endpoint(
+            tuic_proxy("TUIC public", "8.8.8.8", "fake", ip="1.1.1.1"),
+            checked_at=RUN0,
+        )
+        self.assertEqual(tuic_result["resolved_address_count"], 1)
+
+    def test_rejects_non_public_tuic_ip_override(self) -> None:
+        for override in (
+            "127.0.0.1",
+            "10.0.0.1",
+            "100.64.0.1",
+            "169.254.169.254",
+            "192.0.2.1",
+            "224.0.0.1",
+            "::1",
+            "fe80::1",
+            "ff02::1",
+            "2001:4860:4860::8888%eth0",
+            "not-an-ip",
+        ):
+            candidate = tuic_proxy("TUIC override", "8.8.8.8", "fake", ip=override)
+            with self.subTest(override=override), self.assertRaises(EndpointSafetyError):
+                validate_proxy_endpoint(candidate)
+
+    def test_prepare_does_not_reuse_tuic_override_safety_for_same_server(self) -> None:
+        public = tuic_proxy("JP public override", "8.8.8.8", "public-secret", ip="1.1.1.1")
+        private = tuic_proxy("KR private override", "8.8.8.8", "private-secret", ip="10.0.0.1")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, records = provenance_for_task(source, [public, private], observed_at=RUN0)
+
+        identity_input = prepare_candidate_identity_input(
+            yaml.safe_dump({"proxies": [public, private]}, allow_unicode=True).encode(),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="confirmed_absent",
+        )
+
+        self.assertEqual(len(identity_input["profile"]["proxies"]), 1)
+        self.assertEqual(identity_input["profile"]["proxies"][0]["ip"], "1.1.1.1")
+        self.assertEqual(len(identity_input["records"]), 1)
+        self.assertEqual(len(identity_input["quarantined_records"]), 1)
 
     def test_distinguishes_definitive_candidate_dns_failure_from_infrastructure(self) -> None:
         def missing(_host: str, _port: int) -> list[str]:
@@ -384,6 +443,23 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
 
 
 class CandidateProvenanceSnapshotTests(unittest.TestCase):
+    def test_private_identity_input_is_created_with_restrictive_mode(self) -> None:
+        node = proxy("JP private", "node.example", "private-secret")
+        source = task(
+            "community", "https://raw.githubusercontent.com/acme/community/main/sub.yaml"
+        )
+        payload = staging([node], [(source, [node], None)], run_at=RUN0)
+
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            path = Path(directory, "identity-input.json")
+            write_candidate_identity_input(path, payload)
+
+            self.assertTrue(path.is_file())
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_exact_duplicate_merges_all_sources_and_asia_evidence(self) -> None:
         ordinary = proxy("ordinary alias", "node.example", "fake-secret-alpha")
         asia = {**ordinary, "name": "NRT Asia alias"}
@@ -475,6 +551,89 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
             self.assertEqual(json.loads((root / "status.json").read_text()), snapshot.status)
             self.assertEqual(json.loads((root / "candidate-metadata.json").read_text()), snapshot.metadata)
 
+    def test_anytls_tls_fingerprint_survives_full_snapshot_and_keeps_distinct_ids(self) -> None:
+        first = {
+            "name": "JP AnyTLS Chrome",
+            "type": "anytls",
+            "server": "anytls.example",
+            "port": 443,
+            "password": "anytls-secret",
+            "fingerprint": "chrome",
+        }
+        second = {**first, "name": "KR AnyTLS Firefox", "fingerprint": "firefox"}
+        source = task(
+            "asia-anytls",
+            "https://raw.githubusercontent.com/acme/asia/main/anytls.yaml",
+        )
+
+        snapshot = build_candidate_snapshot(
+            staging([first, second], [(source, [first, second], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        validated = validate_candidate_snapshot(
+            snapshot.profile_bytes,
+            snapshot.status,
+            snapshot.metadata,
+            settings=IDENTITY,
+        )
+        parsed = yaml.safe_load(snapshot.profile_bytes)
+
+        self.assertEqual(len(validated.ordered_candidates), 2)
+        self.assertEqual(len(snapshot.metadata["candidates"]), 2)
+        self.assertEqual(
+            {item["fingerprint"] for item in parsed["proxies"]},
+            {"chrome", "firefox"},
+        )
+
+    def test_tampered_historical_alias_is_rejected_before_it_can_be_reused(self) -> None:
+        node = proxy("JP safe", "node.example", "top-secret")
+        node["plugin"] = "obfs"
+        node["plugin-opts"] = {"mode": "tls", "host": "front.example"}
+        source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+        initial = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        candidate_id_value = next(iter(initial.metadata["candidates"]))
+        previous_metadata = copy.deepcopy(initial.metadata)
+        previous_metadata["candidates"][candidate_id_value]["aliases"] = [
+            "JP runner 10.0.0.5"
+        ]
+        previous_status = copy.deepcopy(initial.status)
+        previous_status["candidate_metadata_sha256"] = hashlib.sha256(
+            (
+                json.dumps(
+                    previous_metadata,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+        ).hexdigest()
+        identity_input = prepare_candidate_identity_input(
+                initial.profile_bytes,
+                {
+                    "sources": provenance_for_task(source, [node], observed_at="2026-08-02T00:00:00Z")[0],
+                    "records": provenance_for_task(source, [node], observed_at="2026-08-02T00:00:00Z")[1],
+                },
+                run_at="2026-08-02T00:00:00Z",
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="present",
+                previous_profile=yaml.safe_load(initial.profile_bytes),
+                previous_status=previous_status,
+                previous_metadata=previous_metadata,
+                resolver=public_resolver,
+            )
+        with self.assertRaises(CandidateSnapshotError):
+            build_candidate_snapshot(identity_input, settings=IDENTITY)
+
     def test_proxy_credentials_cannot_be_repeated_as_public_aliases(self) -> None:
         node = proxy("fake-secret", "node.example", "fake-secret")
         source = task("community", "https://raw.githubusercontent.com/acme/community/main/sub.yaml")
@@ -486,6 +645,27 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
         metadata = snapshot.ordered_candidates[0].metadata
         self.assertEqual(metadata["aliases"], [])
         self.assertNotIn("fake-secret", json.dumps(snapshot.metadata))
+
+    def test_nested_proxy_credentials_cannot_be_repeated_as_public_aliases(self) -> None:
+        node = proxy("JP nested-secret-987654", "node.example", "top-secret")
+        node["plugin"] = "shadow-tls"
+        node["plugin-opts"] = {
+            "host": "front.example",
+            "password": "nested-secret-987654",
+        }
+        source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+
+        snapshot = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+
+        metadata = snapshot.ordered_candidates[0].metadata
+        self.assertEqual(metadata["aliases"], [])
+        self.assertNotIn("nested-secret-987654", json.dumps(snapshot.metadata))
 
     def test_endpoint_material_cannot_be_repeated_as_public_aliases(self) -> None:
         aliases = (
@@ -514,6 +694,57 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
 
 
 class CandidateLegacyBootstrapTests(unittest.TestCase):
+    def test_legacy_baseline_accepts_v1_fields_that_candidate_v2_rejects(self) -> None:
+        legacy_nodes = [
+            {
+                "name": "legacy HTTP",
+                "type": "http",
+                "server": "http.example",
+                "port": 443,
+                "udp": True,
+            },
+            {
+                "name": "JP legacy gRPC",
+                "type": "vless",
+                "server": "grpc.example",
+                "port": 443,
+                "uuid": "00000000-0000-4000-8000-000000000001",
+                "tls": True,
+                "network": "grpc",
+                "grpc-opts": {
+                    "grpc-service-name": "legacy",
+                    "grpc-mode": "gun",
+                },
+            },
+        ]
+        profile_bytes = legacy_profile_bytes(legacy_nodes)
+
+        baseline = validate_legacy_candidate_baseline(
+            profile_bytes,
+            legacy_status(profile_bytes, protected_asia_count=1),
+        )
+
+        self.assertEqual(baseline["candidate_count"], 2)
+        self.assertEqual(baseline["protected_asia_count"], 1)
+
+        source = task(
+            "legacy-shaped-current",
+            "https://raw.githubusercontent.com/acme/current/main/sub.yaml",
+        )
+        sources, records = provenance_for_task(source, legacy_nodes, observed_at=RUN0)
+        with self.assertRaisesRegex(CandidateSnapshotError, "schema is unsupported"):
+            prepare_candidate_identity_input(
+                profile_bytes,
+                {"sources": sources, "records": records},
+                run_at=RUN0,
+                mode="collect",
+                main_sha=MAIN_SHA,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="confirmed_absent",
+                resolver=public_resolver,
+            )
+
     def test_valid_legacy_profile_is_a_counts_only_retention_baseline(self) -> None:
         old_jp = proxy("JP legacy", "old-jp.example", "old-secret")
         old_global = proxy("legacy global", "old-global.example", "old-global-secret")

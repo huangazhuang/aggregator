@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from scripts.candidate_handoff import CandidateHandoffError, write_private_bytes_atomic
 from scripts.proxy_identity import IdentityError, canonical_port, canonical_server
+from scripts.proxy_schema import ProxySchemaError, validate_proxy_schema
 from subscribe.asia import (
     PREFERRED_ASIA_MARKER_PATTERN,
     preferred_asia_region_hints,
@@ -51,7 +53,7 @@ BLOCKED_PLATFORM_IPS = frozenset(
         "168.63.129.16",
     }
 )
-PRIVATE_PROXY_FIELDS = frozenset(
+COLLECTOR_PROXY_METADATA_FIELDS = frozenset(
     {
         "sub",
         "source",
@@ -73,7 +75,6 @@ PRIVATE_PROXY_FIELDS = frozenset(
         "server_id",
         "endpoint_id",
         "exit_id",
-        "fingerprint",
     }
 )
 
@@ -157,8 +158,16 @@ def safe_source_descriptor(
 
 
 def _safe_proxy_copy(proxy: Mapping[str, Any]) -> dict[str, Any]:
+    output = _collector_proxy_copy(proxy)
+    try:
+        return validate_proxy_schema(output)
+    except ProxySchemaError as exc:
+        raise CandidateSourceError("candidate proxy schema is unsupported") from exc
+
+
+def _collector_proxy_copy(proxy: Mapping[str, Any]) -> dict[str, Any]:
     output = copy.deepcopy(dict(proxy))
-    for field in PRIVATE_PROXY_FIELDS:
+    for field in COLLECTOR_PROXY_METADATA_FIELDS:
         output.pop(field, None)
     return output
 
@@ -220,9 +229,16 @@ def provenance_for_task(
             continue
         alias = str(proxy.get("name", "") or "").strip()
         hints, evidence = _region_evidence(proxy, task_name)
+        try:
+            safe_proxy = _safe_proxy_copy(proxy)
+        except CandidateSourceError:
+            # Preserve the exact invalid candidate only in the private staging
+            # boundary so the downstream sanitizer can count and quarantine it.
+            # It is never handed to identity, Mihomo, or public serialization.
+            safe_proxy = _collector_proxy_copy(proxy)
         records.append(
             {
-                "proxy": _safe_proxy_copy(proxy),
+                "proxy": safe_proxy,
                 "alias": alias,
                 "source_id": descriptor["source_id"],
                 "source_alias": descriptor["alias"],
@@ -245,8 +261,6 @@ def write_provenance_staging(
 ) -> None:
     """Write a private identity handoff atomically; it must never be published."""
 
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "kind": PROVENANCE_STAGING_KIND,
         "schema_version": PROVENANCE_STAGING_SCHEMA_VERSION,
@@ -255,12 +269,14 @@ def write_provenance_staging(
         "sources": sorted((dict(item) for item in sources), key=lambda item: item["source_id"]),
         "records": [dict(item) for item in records],
     }
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(destination)
+    content = (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    try:
+        write_private_bytes_atomic(path, content)
+    except CandidateHandoffError as exc:
+        raise CandidateSourceError("unable to write private provenance staging") from exc
 
 
 def load_provenance_staging(path: str | Path) -> dict[str, Any]:
@@ -333,6 +349,13 @@ def load_provenance_staging(path: str | Path) -> dict[str, Any]:
             raise CandidateSourceError("provenance record fields are incomplete or unexpected")
         if item["source_id"] not in source_ids or not isinstance(item["proxy"], dict):
             raise CandidateSourceError("provenance record source binding is invalid")
+        try:
+            item["proxy"] = validate_proxy_schema(item["proxy"])
+        except ProxySchemaError:
+            # Invalid untrusted candidates are allowed only inside this private
+            # staging file. Every consumer must validate before identity or
+            # network access and count the rejected record explicitly.
+            item["proxy"] = copy.deepcopy(item["proxy"])
         if item["source_visibility"] not in SOURCE_VISIBILITIES:
             raise CandidateSourceError("provenance record source visibility is unsupported")
         source = sources_by_id[item["source_id"]]
@@ -400,7 +423,51 @@ def is_acceptable_public_ip(value: Any) -> bool:
         address = ipaddress.ip_address(str(value or "").strip())
     except ValueError:
         return False
-    return address.compressed not in BLOCKED_PLATFORM_IPS and address.is_global
+    return bool(
+        address.compressed not in BLOCKED_PLATFORM_IPS
+        and address.is_global
+        and not address.is_private
+        and not address.is_loopback
+        and not address.is_link_local
+        and not address.is_multicast
+        and not address.is_reserved
+        and not address.is_unspecified
+        and not getattr(address, "is_site_local", False)
+        and getattr(address, "scope_id", None) is None
+    )
+
+
+def _canonical_tuic_override_ip(proxy: Mapping[str, Any]) -> str:
+    value = proxy.get("ip")
+    if proxy.get("type") != "tuic" or value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value != value.strip():
+        raise EndpointSafetyError("proxy TUIC IP override is malformed")
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise EndpointSafetyError("proxy TUIC IP override is malformed") from exc
+    if getattr(address, "scope_id", None) is not None:
+        raise EndpointSafetyError("proxy TUIC IP override is malformed")
+    return address.compressed
+
+
+def proxy_endpoint_safety_cache_key(proxy: Mapping[str, Any]) -> tuple[str, int, str]:
+    """Return endpoint material whose safety result may be reused.
+
+    TUIC can connect to its optional ``ip`` override instead of the address
+    resolved from ``server``.  The override therefore belongs in the cache
+    boundary even though the public endpoint identity remains server/port.
+    """
+
+    if not isinstance(proxy, Mapping):
+        raise EndpointSafetyError("proxy endpoint input must be a mapping")
+    try:
+        server = canonical_server(proxy.get("server"))
+        port = canonical_port(proxy.get("port"))
+    except IdentityError as exc:
+        raise EndpointSafetyError("proxy endpoint is malformed") from exc
+    return server, port, _canonical_tuic_override_ip(proxy)
 
 
 def validate_proxy_endpoint(
@@ -413,11 +480,9 @@ def validate_proxy_endpoint(
 
     if not isinstance(proxy, Mapping):
         raise EndpointSafetyError("proxy endpoint input must be a mapping")
-    try:
-        server = canonical_server(proxy.get("server"))
-        port = canonical_port(proxy.get("port"))
-    except IdentityError as exc:
-        raise EndpointSafetyError("proxy endpoint is malformed") from exc
+    server, port, tuic_override_ip = proxy_endpoint_safety_cache_key(proxy)
+    if tuic_override_ip and not is_acceptable_public_ip(tuic_override_ip):
+        raise EndpointSafetyError("proxy TUIC IP override is not publicly routable")
     try:
         literal = ipaddress.ip_address(server)
     except ValueError:
@@ -471,6 +536,7 @@ __all__ = [
     "is_acceptable_public_ip",
     "load_provenance_staging",
     "merge_provenance_staging",
+    "proxy_endpoint_safety_cache_key",
     "provenance_for_task",
     "safe_source_descriptor",
     "utc_timestamp",

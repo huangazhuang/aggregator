@@ -256,6 +256,20 @@ class PublishTestCase(unittest.TestCase):
 
 
 class SelectionPolicyTests(PublishTestCase):
+    def test_v1_fingerprint_accepts_legacy_http_udp_field(self):
+        item = {
+            "name": "Legacy HTTP",
+            "type": "http",
+            "server": "legacy-http.example",
+            "port": 8080,
+            "udp": True,
+        }
+
+        self.assertEqual(
+            proxy_fingerprint(item),
+            proxy_fingerprint({**item, "name": "Renamed"}),
+        )
+
     def test_asia_core_uses_halves_but_flexible_uses_only_total(self):
         candidates = [
             candidate("core", asia=True, index=1, within=14, first=5, second=9),

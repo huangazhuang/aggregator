@@ -113,6 +113,23 @@ class AsiaFilterBypassTests(unittest.TestCase):
             ["🇹🇼 Taiwan retained", "ordinary-pass"],
         )
 
+    def test_candidate_v2_binds_site_results_by_variant_index_not_name(self) -> None:
+        checks = [
+            {"name": "same-name", "type": "ss", "password": "one"},
+            {"name": "same-name", "type": "vless", "uuid": "two"},
+            {"name": "same-name", "type": "http", "username": "three"},
+        ]
+        masks = [[True, False, True], [True, True, True]]
+
+        selected = select_reachability_passes(
+            checks,
+            checks,
+            masks,
+            bind_by_index=True,
+        )
+
+        self.assertEqual([proxy["type"] for proxy in selected], ["ss", "http"])
+
 
 
 def probe_summary(
