@@ -12,6 +12,7 @@ import yaml
 
 from scripts.candidate_snapshot import main as candidate_main
 from scripts.candidate_sources import provenance_for_task, write_provenance_staging
+from scripts.sanitize_candidate_endpoints import sanitize_candidate_profile_files
 
 
 class CandidatePipelineComponentTests(unittest.TestCase):
@@ -21,6 +22,8 @@ class CandidatePipelineComponentTests(unittest.TestCase):
             root = Path(directory)
             profile = root / "source.yaml"
             provenance = root / "provenance.json"
+            sanitized_profile = root / "sanitized.yaml"
+            endpoint_safety_evidence = root / "endpoint-safety.json"
             identity_input = root / "identity-input.json"
             public = root / "public"
             node = {
@@ -52,6 +55,13 @@ class CandidatePipelineComponentTests(unittest.TestCase):
                 records=records,
                 generated_at="2026-08-11T00:00:00Z",
             )
+            sanitize_candidate_profile_files(
+                profile,
+                [provenance],
+                output_path=sanitized_profile,
+                rebuild_from_provenance=True,
+                safety_evidence_path=endpoint_safety_evidence,
+            )
 
             environment = {
                 "GMGN_IDENTITY_HMAC_KEY": "component-identity-key",
@@ -64,7 +74,7 @@ class CandidatePipelineComponentTests(unittest.TestCase):
                         [
                             "prepare",
                             "--profile",
-                            str(profile),
+                            str(sanitized_profile),
                             "--provenance",
                             str(provenance),
                             "--output",
@@ -81,6 +91,10 @@ class CandidatePipelineComponentTests(unittest.TestCase):
                             "https://example.invalid/candidate-metadata.json",
                             "--previous-state",
                             "confirmed_absent",
+                            "--endpoint-safety-evidence",
+                            str(endpoint_safety_evidence),
+                            "--sanitized-profile",
+                            str(sanitized_profile),
                         ]
                     ),
                     0,

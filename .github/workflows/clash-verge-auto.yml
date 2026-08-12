@@ -382,7 +382,9 @@ jobs:
           fi
           python -m scripts.sanitize_candidate_endpoints \
             --rebuild-from-provenance \
+            --safety-evidence data/candidate-endpoint-safety-evidence.json \
             "${args[@]}"
+          cp "data/${PROFILE_FILE}" data/candidate-sanitized-clash.yaml
 
       - name: Drop GFW-blocked entries via configured China-side probe
         if: env.PROBE_URL != ''
@@ -437,6 +439,8 @@ jobs:
             --candidate-metadata-url "${metadata_url}"
             --previous-state "$(cat data/previous-ref-state.txt)"
             --github-check-report data/github-check-report.json
+            --endpoint-safety-evidence data/candidate-endpoint-safety-evidence.json
+            --sanitized-profile data/candidate-sanitized-clash.yaml
           )
           found=false
           for name in manual-candidate-provenance.json collect-candidate-provenance.json crawler-candidate-provenance.json; do

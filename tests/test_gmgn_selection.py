@@ -165,7 +165,7 @@ def candidate_record(
             "protocol": "ss",
             "server_id": server_id(server_index),
             "endpoint_id": endpoint_id(index),
-            "endpoint_safety_policy_version": "endpoint-safety-v1",
+            "endpoint_safety_policy_version": "endpoint-safety-v2",
             "endpoint_checked_at": "2026-08-11T00:00:00Z",
         },
     }

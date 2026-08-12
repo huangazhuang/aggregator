@@ -11,6 +11,7 @@ import re
 import socket
 import time
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,13 @@ from subscribe.asia import (
 PROVENANCE_STAGING_KIND = "github-candidate-provenance-staging"
 PROVENANCE_STAGING_SCHEMA_VERSION = 1
 SOURCE_POLICY_VERSION = "candidate-source-v2"
-ENDPOINT_SAFETY_POLICY_VERSION = "endpoint-safety-v1"
+ENDPOINT_SAFETY_POLICY_VERSION = "endpoint-safety-v2"
 _TRANSIENT_DNS_RETRY_DELAYS = (0.25, 1.0, 2.0)
+_TARGET_DNS_REOBSERVATION_DELAY_SECONDS = 5.0
+_DNS_CANARY_HOSTS = ("example.com", "one.one.one.one", "dns.google")
+_DNS_CANARY_PORT = 443
+_CANDIDATE_DNS_FAILURE_MINIMUM = 3
+_CANDIDATE_DNS_FAILURE_RATIO = 0.02
 
 SOURCE_OUTCOMES = frozenset(
     {"success", "empty", "timeout", "rate_limited", "parse_error", "network_error"}
@@ -90,8 +96,26 @@ class EndpointSafetyError(CandidateSourceError):
     """Raised when a proxy endpoint is not safe to hand to the identity stage."""
 
 
+class EndpointResolutionCandidateError(EndpointSafetyError):
+    """Raised when healthy DNS infrastructure cannot resolve one candidate."""
+
+
 class EndpointResolutionInfrastructureError(CandidateSourceError):
     """Raised when DNS infrastructure is too uncertain to classify a candidate."""
+
+
+@dataclass(frozen=True)
+class _ResolutionObservation:
+    addresses: tuple[str, ...] = ()
+    failure_kind: str = ""
+    failure_code: int | None = None
+
+
+@dataclass(frozen=True)
+class _CachedResolution:
+    addresses: tuple[str, ...] = ()
+    failure_kind: str = ""
+    failure_code: int | None = None
 
 
 def utc_timestamp(value: datetime | str | None = None) -> str:
@@ -481,15 +505,21 @@ def _default_resolver(
 ) -> list[str]:
     resolve = getaddrinfo or socket.getaddrinfo
     pause = sleeper if sleeper is not None else time.sleep
-    transient_code = getattr(socket, "EAI_AGAIN", None)
+    transient_codes = {
+        value
+        for value in (
+            getattr(socket, "EAI_AGAIN", None),
+            getattr(socket, "EAI_FAIL", None),
+        )
+        if value is not None
+    }
     for attempt in range(len(_TRANSIENT_DNS_RETRY_DELAYS) + 1):
         try:
             results = resolve(host, port, type=socket.SOCK_STREAM)
             break
         except socket.gaierror as exc:
             if (
-                transient_code is None
-                or exc.errno != transient_code
+                exc.errno not in transient_codes
                 or attempt >= len(_TRANSIENT_DNS_RETRY_DELAYS)
             ):
                 raise
@@ -520,6 +550,203 @@ def is_acceptable_public_ip(value: Any) -> bool:
         and not getattr(address, "is_site_local", False)
         and getattr(address, "scope_id", None) is None
     )
+
+
+def _resolution_observation(
+    resolver: Callable[[str, int], Iterable[str]],
+    host: str,
+    port: int,
+) -> _ResolutionObservation:
+    """Observe one DNS result without retaining untrusted exception text."""
+
+    try:
+        addresses = tuple(sorted({str(value) for value in resolver(host, port)}))
+    except socket.gaierror as exc:
+        return _ResolutionObservation(
+            failure_kind="gaierror",
+            failure_code=exc.errno,
+        )
+    except Exception:
+        return _ResolutionObservation(failure_kind="exception")
+    return _ResolutionObservation(addresses=addresses)
+
+
+class CandidateDnsResolutionSession:
+    """Classify endpoint DNS failures at run scope with hostname caching."""
+
+    def __init__(
+        self,
+        *,
+        expected_domain_hostnames: int,
+        resolver: Callable[[str, int], Iterable[str]] | None = None,
+        sleeper: Callable[[float], None] | None = None,
+    ) -> None:
+        if not isinstance(expected_domain_hostnames, int) or expected_domain_hostnames < 0:
+            raise ValueError("expected domain hostname count must be non-negative")
+        self._sleeper = sleeper if sleeper is not None else time.sleep
+        if resolver is None:
+            self._resolver = lambda host, port: _default_resolver(
+                host,
+                port,
+                sleeper=self._sleeper,
+            )
+        else:
+            self._resolver = resolver
+        self._expected_domain_hostnames = expected_domain_hostnames
+        self._cache: dict[str, _CachedResolution] = {}
+        self._candidate_failure_hosts: set[str] = set()
+        self._candidate_scope_canaries_healthy: bool | None = None
+
+    def _canaries_are_healthy(self) -> bool:
+        healthy = 0
+        ordinary_failure = False
+        for hostname in _DNS_CANARY_HOSTS:
+            observation = _resolution_observation(
+                self._resolver,
+                hostname,
+                _DNS_CANARY_PORT,
+            )
+            if observation.failure_kind == "exception":
+                ordinary_failure = True
+                break
+            if (
+                not observation.failure_kind
+                and observation.addresses
+                and all(
+                    is_acceptable_public_ip(address)
+                    for address in observation.addresses
+                )
+            ):
+                healthy += 1
+        if ordinary_failure:
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+        return healthy >= 2
+
+    def _cache_candidate_failure(self, hostname: str) -> None:
+        self._candidate_failure_hosts.add(hostname)
+        failure_count = len(self._candidate_failure_hosts)
+        if (
+            failure_count >= _CANDIDATE_DNS_FAILURE_MINIMUM
+            and failure_count / max(self._expected_domain_hostnames, 1)
+            > _CANDIDATE_DNS_FAILURE_RATIO
+        ):
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+        self._cache[hostname] = _CachedResolution(failure_kind="candidate")
+
+    @staticmethod
+    def _raise_cached_failure(value: _CachedResolution) -> None:
+        if value.failure_kind == "candidate":
+            raise EndpointResolutionCandidateError(
+                "proxy endpoint DNS resolution failed"
+            )
+        if value.failure_kind == "definitive":
+            raise socket.gaierror(value.failure_code or 0, "DNS resolution failed")
+        if value.failure_kind:
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+
+    def resolve(self, host: str, port: int) -> list[str]:
+        """Resolve one hostname once per run, classifying isolated transients."""
+
+        hostname = str(host or "").strip().lower()
+        cached = self._cache.get(hostname)
+        if cached is not None:
+            self._raise_cached_failure(cached)
+            return list(cached.addresses)
+
+        observation = _resolution_observation(self._resolver, hostname, port)
+        transient_codes = {
+            value
+            for value in (
+                getattr(socket, "EAI_AGAIN", None),
+                getattr(socket, "EAI_FAIL", None),
+            )
+            if value is not None
+        }
+        definitive_codes = {
+            value
+            for value in (
+                getattr(socket, "EAI_NONAME", None),
+                getattr(socket, "EAI_NODATA", None),
+                getattr(socket, "EAI_ADDRFAMILY", None),
+            )
+            if value is not None
+        }
+        if not observation.failure_kind:
+            self._cache[hostname] = _CachedResolution(addresses=observation.addresses)
+            return list(observation.addresses)
+        if observation.failure_kind == "exception":
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+        if observation.failure_code in definitive_codes:
+            self._cache[hostname] = _CachedResolution(
+                failure_kind="definitive",
+                failure_code=observation.failure_code,
+            )
+            self._raise_cached_failure(self._cache[hostname])
+        if observation.failure_code not in transient_codes:
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+
+        if self._candidate_scope_canaries_healthy is None:
+            self._candidate_scope_canaries_healthy = self._canaries_are_healthy()
+        if not self._candidate_scope_canaries_healthy:
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+        self._sleeper(_TARGET_DNS_REOBSERVATION_DELAY_SECONDS)
+        reobserved = _resolution_observation(self._resolver, hostname, port)
+        if not reobserved.failure_kind:
+            self._cache[hostname] = _CachedResolution(addresses=reobserved.addresses)
+            return list(reobserved.addresses)
+        if reobserved.failure_kind == "exception":
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+        if reobserved.failure_code in definitive_codes:
+            self._cache[hostname] = _CachedResolution(
+                failure_kind="definitive",
+                failure_code=reobserved.failure_code,
+            )
+            self._raise_cached_failure(self._cache[hostname])
+        if reobserved.failure_code not in transient_codes:
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+        self._cache_candidate_failure(hostname)
+        self._raise_cached_failure(self._cache[hostname])
+        raise AssertionError("unreachable")
+
+    def finalize(self) -> None:
+        """Fail closed if DNS health degraded after isolated quarantines."""
+
+        if self._candidate_failure_hosts and not self._canaries_are_healthy():
+            raise EndpointResolutionInfrastructureError(
+                "proxy endpoint DNS infrastructure failed"
+            )
+
+
+def count_proxy_domain_hostnames(proxies: Iterable[Mapping[str, Any]]) -> int:
+    """Count unique non-literal proxy servers expected to require DNS."""
+
+    hostnames: set[str] = set()
+    for proxy in proxies:
+        try:
+            server, _port, _override = proxy_endpoint_safety_cache_key(proxy)
+        except EndpointSafetyError:
+            continue
+        try:
+            ipaddress.ip_address(server)
+        except ValueError:
+            hostnames.add(server)
+    return len(hostnames)
 
 
 def _canonical_tuic_override_ip(proxy: Mapping[str, Any]) -> str:
@@ -583,6 +810,8 @@ def validate_proxy_endpoint(
         resolution_failure: CandidateSourceError | None = None
         try:
             addresses = list((resolver or _default_resolver)(server, port))
+        except EndpointResolutionCandidateError:
+            raise
         except socket.gaierror as exc:
             definitive_codes = {
                 value
@@ -621,11 +850,14 @@ def validate_proxy_endpoint(
 __all__ = [
     "CandidateSourceError",
     "ENDPOINT_SAFETY_POLICY_VERSION",
+    "EndpointResolutionCandidateError",
     "EndpointResolutionInfrastructureError",
+    "CandidateDnsResolutionSession",
     "EndpointSafetyError",
     "PROVENANCE_STAGING_KIND",
     "PROVENANCE_STAGING_SCHEMA_VERSION",
     "SOURCE_POLICY_VERSION",
+    "count_proxy_domain_hostnames",
     "is_acceptable_public_ip",
     "load_provenance_staging",
     "merge_provenance_staging",

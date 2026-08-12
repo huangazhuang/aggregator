@@ -570,6 +570,27 @@ class CandidateWorkflowContractTests(unittest.TestCase):
             sanitizer["run"],
         )
         self.assertIn("--rebuild-from-provenance", sanitizer["run"])
+        self.assertIn(
+            "--safety-evidence data/candidate-endpoint-safety-evidence.json",
+            sanitizer["run"],
+        )
+        self.assertIn(
+            'cp "data/${PROFILE_FILE}" data/candidate-sanitized-clash.yaml',
+            sanitizer["run"],
+        )
+        prepare = next(
+            step
+            for step in steps
+            if step.get("name") == "Prepare candidate V2 identity handoff"
+        )["run"]
+        self.assertIn(
+            "--endpoint-safety-evidence data/candidate-endpoint-safety-evidence.json",
+            prepare,
+        )
+        self.assertIn(
+            "--sanitized-profile data/candidate-sanitized-clash.yaml",
+            prepare,
+        )
         self.assertEqual(self.text.count("--rebuild-from-provenance"), 1)
         self.assertLess(
             names.index("Sanitize Candidate V2 endpoints before any proxy network access"),

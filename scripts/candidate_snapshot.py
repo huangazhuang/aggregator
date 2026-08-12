@@ -22,16 +22,22 @@ import yaml
 
 from scripts.candidate_handoff import CandidateHandoffError, write_private_bytes_atomic
 from scripts.candidate_sources import (
+    CandidateDnsResolutionSession,
     ENDPOINT_SAFETY_POLICY_VERSION,
     SAFE_PUBLIC_ALIAS_RE,
     SOURCE_OUTCOMES,
     SOURCE_POLICY_VERSION,
     CandidateSourceError,
     EndpointSafetyError,
+    count_proxy_domain_hostnames,
     merge_provenance_staging,
     proxy_endpoint_safety_cache_key,
     utc_timestamp,
     validate_proxy_endpoint,
+)
+from scripts.sanitize_candidate_endpoints import (
+    CandidateEndpointSanitizationError,
+    validate_endpoint_safety_evidence,
 )
 from scripts.asia_source_registry import estimate_gmgn_capacity
 from scripts.pipeline_utils import BUILTIN_PROXY_NAMES, dump_clash_yaml
@@ -614,6 +620,9 @@ def prepare_candidate_identity_input(
     previous_profile_bytes: bytes | None = None,
     github_failed_count: int = 0,
     resolver: Callable[[str, int], Iterable[str]] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    endpoint_safety_evidence: Mapping[str, Any] | None = None,
+    sanitized_profile_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Collection-stage validator that performs all DNS and untrusted-input work."""
 
@@ -649,16 +658,90 @@ def prepare_candidate_identity_input(
     if not isinstance(records, list) or not isinstance(sources, list):
         raise CandidateSnapshotError("candidate provenance staging is malformed")
 
+    validated_evidence: dict[str, Any] | None = None
+    safe_evidence_fingerprints: set[str] = set()
+    quarantined_evidence_fingerprints: set[str] = set()
+    if endpoint_safety_evidence is not None:
+        if sanitized_profile_bytes is None:
+            raise CandidateSnapshotError(
+                "candidate sanitized profile evidence is missing"
+            )
+        try:
+            validated_evidence = validate_endpoint_safety_evidence(
+                endpoint_safety_evidence
+            )
+        except CandidateEndpointSanitizationError as exc:
+            raise CandidateSnapshotError(
+                "candidate endpoint safety evidence is invalid"
+            ) from exc
+        expected_profile_sha = hashlib.sha256(sanitized_profile_bytes).hexdigest()
+        expected_provenance_sha = hashlib.sha256(
+            _json_bytes(dict(provenance))
+        ).hexdigest()
+        if (
+            validated_evidence["profile_sha256"] != expected_profile_sha
+            or validated_evidence["provenance_sha256"] != expected_provenance_sha
+            or validated_evidence["raw_count"] != len(records)
+        ):
+            raise CandidateSnapshotError(
+                "candidate endpoint safety evidence does not match its inputs"
+            )
+        safe_evidence_fingerprints = set(validated_evidence["safe_fingerprints"])
+        quarantined_evidence_fingerprints = set(
+            validated_evidence["quarantined_fingerprints"]
+        )
+        try:
+            sanitized_profile = yaml.safe_load(sanitized_profile_bytes)
+            sanitized_fingerprints = {
+                canonical_proxy_fingerprint(proxy)
+                for proxy in _profile_proxies(sanitized_profile)
+            }
+        except Exception as exc:
+            raise CandidateSnapshotError(
+                "candidate sanitized profile evidence is invalid"
+            ) from exc
+        if sanitized_fingerprints != safe_evidence_fingerprints:
+            raise CandidateSnapshotError(
+                "candidate sanitized profile evidence classification is inconsistent"
+            )
+
+    candidate_session = None
+    if validated_evidence is None:
+        current_and_observed = list(current_proxies) + [
+            item.get("proxy")
+            for item in records
+            if isinstance(item, Mapping) and isinstance(item.get("proxy"), Mapping)
+        ]
+        candidate_session = CandidateDnsResolutionSession(
+            expected_domain_hostnames=count_proxy_domain_hostnames(
+                proxy for proxy in current_and_observed if isinstance(proxy, Mapping)
+            ),
+            resolver=resolver,
+            sleeper=sleeper,
+        )
     endpoint_cache: dict[tuple[str, int, str], dict[str, Any] | EndpointSafetyError] = {}
 
-    def validate_with_endpoint(proxy: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    def validate_with_endpoint(
+        proxy: Mapping[str, Any],
+        *,
+        use_current_evidence: bool = True,
+    ) -> tuple[dict[str, Any], str]:
         validated = _validated_proxy(proxy)
+        fingerprint = canonical_proxy_fingerprint(validated)
+        if validated_evidence is not None and use_current_evidence:
+            if fingerprint in safe_evidence_fingerprints:
+                return validated, fingerprint
+            if fingerprint in quarantined_evidence_fingerprints:
+                raise EndpointSafetyError("proxy endpoint DNS resolution failed")
+            raise CandidateSnapshotError(
+                "candidate endpoint safety evidence does not cover a candidate"
+            )
         endpoint = proxy_endpoint_safety_cache_key(validated)
         if endpoint not in endpoint_cache:
             try:
                 endpoint_cache[endpoint] = validate_proxy_endpoint(
                     validated,
-                    resolver=resolver,
+                    resolver=(candidate_session.resolve if candidate_session else resolver),
                     checked_at=timestamp,
                 )
             except EndpointSafetyError as exc:
@@ -666,7 +749,7 @@ def prepare_candidate_identity_input(
         endpoint_result = endpoint_cache[endpoint]
         if isinstance(endpoint_result, EndpointSafetyError):
             raise endpoint_result
-        return validated, canonical_proxy_fingerprint(validated)
+        return validated, fingerprint
 
     current_by_fingerprint: dict[str, dict[str, Any]] = {}
     for proxy in current_proxies:
@@ -718,6 +801,39 @@ def prepare_candidate_identity_input(
         normalized["alias"] = _safe_proxy_alias(item.get("alias"), validated)
         valid_records.append(normalized)
 
+    if candidate_session is not None:
+        candidate_session.finalize()
+
+    if validated_evidence is not None:
+        actual_bindings = sorted(
+            (
+                item["fingerprint"],
+                item["source_id"],
+                tuple(item["region_hints"]),
+                "quarantined"
+                if item["fingerprint"] in quarantined_evidence_fingerprints
+                else "safe",
+            )
+            for item in observed_records
+        )
+        evidence_bindings = [
+            (
+                item["fingerprint"],
+                item["source_id"],
+                tuple(item["region_hints"]),
+                item["classification"],
+            )
+            for item in validated_evidence["observation_bindings"]
+        ]
+        if (
+            actual_bindings != evidence_bindings
+            or invalid_record_count != validated_evidence["invalid_count"]
+            or not set(current_by_fingerprint).issubset(safe_evidence_fingerprints)
+        ):
+            raise CandidateSnapshotError(
+                "candidate endpoint safety evidence classification is inconsistent"
+            )
+
     covered = {canonical_proxy_fingerprint(item["proxy"]) for item in valid_records}
     if not set(current_by_fingerprint).issubset(covered):
         raise CandidateSnapshotError("candidate profile is not fully covered by safe provenance")
@@ -726,13 +842,35 @@ def prepare_candidate_identity_input(
     previous_quarantined_fingerprints: list[str] = []
     if previous_state == "present" and safe_previous_profile is not None:
         previous_proxies = _profile_proxies(safe_previous_profile)
+        previous_only = [
+            proxy
+            for proxy in previous_proxies
+            if canonical_proxy_fingerprint(proxy)
+            not in safe_evidence_fingerprints | quarantined_evidence_fingerprints
+        ]
+        previous_session = CandidateDnsResolutionSession(
+            expected_domain_hostnames=count_proxy_domain_hostnames(previous_only),
+            resolver=resolver,
+            sleeper=sleeper,
+        )
         for proxy in previous_proxies:
             try:
-                validate_with_endpoint(proxy)
+                fingerprint = canonical_proxy_fingerprint(proxy)
+                if fingerprint in safe_evidence_fingerprints:
+                    continue
+                if fingerprint in quarantined_evidence_fingerprints:
+                    previous_quarantined_fingerprints.append(fingerprint)
+                    continue
+                validate_proxy_endpoint(
+                    proxy,
+                    resolver=previous_session.resolve,
+                    checked_at=timestamp,
+                )
             except EndpointSafetyError:
                 previous_quarantined_fingerprints.append(
                     canonical_proxy_fingerprint(proxy)
                 )
+        previous_session.finalize()
         safe_previous_profile["proxies"] = previous_proxies
 
     normalized_previous_status = copy.deepcopy(previous_status)
@@ -1354,6 +1492,9 @@ def build_candidate_snapshot(
             dict(payload["previous_metadata"]),
             settings=identity,
             fixture_path=fixture_path,
+            allowed_endpoint_safety_policy_versions=frozenset(
+                {"endpoint-safety-v1", ENDPOINT_SAFETY_POLICY_VERSION}
+            ),
         )
     elif payload["previous_state"] == "legacy_v1":
         previous_baseline = _validate_legacy_candidate_baseline_summary(
@@ -1525,6 +1666,7 @@ def build_candidate_snapshot(
                 }
             )
             metadata["source_ids"] = sorted(set(metadata["source_ids"]) | set(retain_sources))
+            metadata["endpoint_safety_policy_version"] = ENDPOINT_SAFETY_POLICY_VERSION
             metadata["endpoint_checked_at"] = str(payload["endpoint_checked_at"])
             entries[candidate_id_value] = {"proxy": proxy, "metadata": metadata}
             collision_bindings.extend(
@@ -1753,10 +1895,20 @@ def validate_candidate_snapshot(
     *,
     settings: IdentitySettings | None = None,
     fixture_path: str | Path = Path("tests/fixtures/gmgn_identity_v1.json"),
+    allowed_endpoint_safety_policy_versions: frozenset[str] | None = None,
 ) -> CandidateSnapshot:
     """Strict C1/C2 boundary validator with production-key identity preflight."""
 
     identity = settings or IdentitySettings.from_environment()
+    allowed_endpoint_policies = (
+        allowed_endpoint_safety_policy_versions
+        if allowed_endpoint_safety_policy_versions is not None
+        else frozenset({ENDPOINT_SAFETY_POLICY_VERSION})
+    )
+    if not allowed_endpoint_policies or not allowed_endpoint_policies.issubset(
+        {"endpoint-safety-v1", ENDPOINT_SAFETY_POLICY_VERSION}
+    ):
+        raise CandidateSnapshotError("candidate endpoint safety policy allowance is invalid")
     status_value = _strict_mapping(status, STATUS_FIELDS, "candidate status")
     metadata_value = _strict_mapping(metadata, METADATA_FIELDS, "candidate metadata")
     if status_value["kind"] != CANDIDATE_STATUS_KIND or status_value["schema_version"] != CANDIDATE_STATUS_SCHEMA_VERSION:
@@ -1772,7 +1924,11 @@ def validate_candidate_snapshot(
         raise CandidateSnapshotError("candidate identity epoch mismatch")
     if status_value["source_policy_version"] != SOURCE_POLICY_VERSION or metadata_value["source_policy_version"] != SOURCE_POLICY_VERSION:
         raise CandidateSnapshotError("candidate source policy mismatch")
-    if status_value["endpoint_safety_policy_version"] != ENDPOINT_SAFETY_POLICY_VERSION or metadata_value["endpoint_safety_policy_version"] != ENDPOINT_SAFETY_POLICY_VERSION:
+    endpoint_policy_version = status_value["endpoint_safety_policy_version"]
+    if (
+        endpoint_policy_version not in allowed_endpoint_policies
+        or metadata_value["endpoint_safety_policy_version"] != endpoint_policy_version
+    ):
         raise CandidateSnapshotError("candidate endpoint safety policy mismatch")
     utc_timestamp(status_value["run_at"])
     utc_timestamp(metadata_value["endpoint_checked_at"])
@@ -1922,7 +2078,7 @@ def validate_candidate_snapshot(
         item = _strict_mapping(candidate_values[candidate_id_value], CANDIDATE_FIELDS, "candidate metadata entry")
         if item["server_id"] != public_ids["server_id"] or item["endpoint_id"] != public_ids["endpoint_id"]:
             raise CandidateSnapshotError("candidate server or endpoint identity mismatch")
-        if item["endpoint_safety_policy_version"] != ENDPOINT_SAFETY_POLICY_VERSION:
+        if item["endpoint_safety_policy_version"] != endpoint_policy_version:
             raise CandidateSnapshotError("candidate endpoint policy mismatch")
         if item["endpoint_checked_at"] != metadata_value["endpoint_checked_at"]:
             raise CandidateSnapshotError("candidate endpoint check time mismatch")
@@ -2103,6 +2259,9 @@ def _prepare_command(args: argparse.Namespace) -> int:
     )
     previous_status = _load_json_file(args.previous_status)
     previous_metadata = _load_json_file(args.previous_metadata)
+    endpoint_safety_evidence = _load_json_file(args.endpoint_safety_evidence)
+    if endpoint_safety_evidence is None:
+        raise CandidateSnapshotError("candidate endpoint safety evidence is missing")
     payload = prepare_candidate_identity_input(
         Path(args.profile).read_bytes(),
         provenance,
@@ -2117,6 +2276,8 @@ def _prepare_command(args: argparse.Namespace) -> int:
         previous_metadata=previous_metadata,
         previous_profile_bytes=previous_profile_bytes,
         github_failed_count=_read_github_failed_count(args.github_check_report),
+        endpoint_safety_evidence=endpoint_safety_evidence,
+        sanitized_profile_bytes=Path(args.sanitized_profile).read_bytes(),
     )
     write_candidate_identity_input(args.output, payload)
     return 0
@@ -2154,6 +2315,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     prepare.add_argument("--previous-status", default="")
     prepare.add_argument("--previous-metadata", default="")
     prepare.add_argument("--github-check-report", default="")
+    prepare.add_argument("--endpoint-safety-evidence", required=True)
+    prepare.add_argument("--sanitized-profile", required=True)
     build = commands.add_parser("build")
     build.add_argument("--input", required=True)
     build.add_argument("--output-dir", required=True)

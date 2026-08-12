@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 import tempfile
 import unittest
@@ -16,9 +17,11 @@ from scripts.candidate_sources import (
 )
 from scripts.sanitize_candidate_endpoints import (
     CandidateEndpointSanitizationError,
+    build_endpoint_safety_evidence,
     rebuild_candidate_profile,
     sanitize_candidate_profile,
     sanitize_candidate_profile_files,
+    validate_endpoint_safety_evidence,
 )
 
 
@@ -366,6 +369,70 @@ class CandidateEndpointSanitizerTests(unittest.TestCase):
             parsed = yaml.safe_load(profile.read_bytes())
             self.assertEqual(len(parsed["proxies"]), 1)
             self.assertFalse((root / ".clash.yaml.tmp").exists())
+
+    def test_file_sanitizer_writes_private_strict_safety_evidence(self) -> None:
+        good = node("JP good", "good.example", "good-secret")
+        missing = node("KR missing", "missing.example", "missing-secret")
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            root = Path(directory)
+            profile = root / "clash.yaml"
+            provenance_file = root / "provenance.json"
+            evidence_file = root / "endpoint-safety.json"
+            profile.write_text(
+                yaml.safe_dump({"proxies": [good, missing]}, sort_keys=False),
+                encoding="utf-8",
+            )
+            value = provenance([good, missing])
+            write_provenance_staging(
+                provenance_file,
+                sources=value["sources"],
+                records=value["records"],
+                generated_at="2026-08-12T00:00:00Z",
+            )
+
+            def resolver(host: str, _port: int) -> list[str]:
+                if host == "missing.example":
+                    raise socket.gaierror(socket.EAI_NONAME, "sensitive missing detail")
+                return ["8.8.8.8"]
+
+            result = sanitize_candidate_profile_files(
+                profile,
+                [provenance_file],
+                resolver=resolver,
+                safety_evidence_path=evidence_file,
+            )
+
+            evidence = validate_endpoint_safety_evidence(
+                json.loads(evidence_file.read_text(encoding="utf-8"))
+            )
+            self.assertEqual(result.safe_count, 1)
+            self.assertEqual(len(evidence["observation_bindings"]), 2)
+            self.assertEqual(
+                {item["classification"] for item in evidence["observation_bindings"]},
+                {"safe", "quarantined"},
+            )
+            serialized = evidence_file.read_text(encoding="utf-8")
+            self.assertNotIn("missing.example", serialized)
+            self.assertNotIn("missing-secret", serialized)
+
+    def test_evidence_validator_sanitizes_unknown_regions(self) -> None:
+        candidate = node("JP safe", "8.8.8.8", "safe-secret")
+        result = rebuild_candidate_profile(provenance([candidate]))
+        profile_text = yaml.safe_dump(result.profile, sort_keys=False).encode()
+        value = build_endpoint_safety_evidence(
+            result,
+            profile_bytes=profile_text,
+            provenance=provenance([candidate]),
+        )
+        value["observation_bindings"][0]["region_hints"] = ["SECRET-HOST"]
+        with self.assertRaisesRegex(
+            CandidateEndpointSanitizationError,
+            "observations are invalid",
+        ) as raised:
+            validate_endpoint_safety_evidence(value)
+        self.assertNotIn("SECRET-HOST", str(raised.exception))
 
 
 if __name__ == "__main__":

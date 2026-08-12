@@ -31,7 +31,11 @@ from scripts.candidate_sources import (
     safe_source_descriptor,
     validate_proxy_endpoint,
 )
-from scripts.proxy_identity import IdentitySettings
+from scripts.sanitize_candidate_endpoints import (
+    build_endpoint_safety_evidence,
+    rebuild_candidate_profile,
+)
+from scripts.proxy_identity import IdentitySettings, canonical_proxy_fingerprint
 
 
 IDENTITY = IdentitySettings(
@@ -137,6 +141,21 @@ def legacy_status(profile_bytes: bytes, *, protected_asia_count: int | None = No
 
 
 class CandidateEndpointSafetyTests(unittest.TestCase):
+    def _sanitized_evidence(self, sources: list[dict], records: list[dict]):
+        provenance = {"sources": sources, "records": records}
+        result = rebuild_candidate_profile(provenance, resolver=public_resolver)
+        sanitized_bytes = yaml.safe_dump(
+            result.profile,
+            allow_unicode=True,
+            sort_keys=False,
+        ).encode()
+        evidence = build_endpoint_safety_evidence(
+            result,
+            profile_bytes=sanitized_bytes,
+            provenance=provenance,
+        )
+        return result, sanitized_bytes, evidence
+
     def test_rejects_literal_and_resolved_private_endpoints(self) -> None:
         for server in (
             "127.0.0.1",
@@ -161,7 +180,7 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
             resolver=public_resolver,
             checked_at=RUN0,
         )
-        self.assertEqual(result["policy_version"], "endpoint-safety-v1")
+        self.assertEqual(result["policy_version"], "endpoint-safety-v2")
         self.assertEqual(result["resolved_address_count"], 2)
         tuic_result = validate_proxy_endpoint(
             tuic_proxy("TUIC public", "8.8.8.8", "fake", ip="1.1.1.1"),
@@ -392,6 +411,233 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
                 previous_state="confirmed_absent",
                 resolver=resolver,
             )
+
+    def test_prepare_consumes_sanitizer_evidence_without_resolving_current_nodes(self) -> None:
+        first = proxy("JP first", "first.example", "first-secret")
+        second = proxy("KR second", "second.example", "second-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, records = provenance_for_task(source, [first, second], observed_at=RUN0)
+        result, sanitized_bytes, evidence = self._sanitized_evidence(sources, records)
+        retained = result.profile["proxies"][0]
+
+        identity_input = prepare_candidate_identity_input(
+            yaml.safe_dump({"proxies": [retained]}, sort_keys=False).encode(),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="confirmed_absent",
+            resolver=lambda host, _port: (_ for _ in ()).throw(
+                AssertionError(f"unexpected current DNS: {host}")
+            ),
+            endpoint_safety_evidence=evidence,
+            sanitized_profile_bytes=sanitized_bytes,
+        )
+
+        self.assertEqual(len(identity_input["profile"]["proxies"]), 1)
+        self.assertEqual(len(identity_input["records"]), 2)
+
+    def test_prepare_rejects_evidence_addition_and_config_change(self) -> None:
+        first = proxy("JP first", "first.example", "first-secret")
+        second = proxy("KR second", "second.example", "second-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        sources, records = provenance_for_task(source, [first], observed_at=RUN0)
+        result, sanitized_bytes, evidence = self._sanitized_evidence(sources, records)
+        common = dict(
+            provenance={"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="confirmed_absent",
+            endpoint_safety_evidence=evidence,
+            sanitized_profile_bytes=sanitized_bytes,
+        )
+        for changed in (
+            second,
+            {**result.profile["proxies"][0], "password": "changed-secret"},
+        ):
+            with self.subTest(changed=changed["name"]), self.assertRaisesRegex(
+                CandidateSnapshotError,
+                "does not cover a candidate",
+            ):
+                prepare_candidate_identity_input(
+                    yaml.safe_dump({"proxies": [changed]}, sort_keys=False).encode(),
+                    **common,
+                )
+
+    def test_current_evidence_quarantine_cannot_be_rechecked_and_restored_from_previous(self) -> None:
+        isolated = proxy("JP isolated", "isolated.example", "isolated-secret")
+        retained = [
+            proxy(f"JP retained {index}", f"8.8.8.{index}", f"safe-secret-{index}")
+            for index in range(1, 5)
+        ]
+        source_current = task(
+            "Asia current",
+            "https://raw.githubusercontent.com/acme/current/main/sub.yaml",
+        )
+        source_last_good = task(
+            "Asia last-good",
+            "https://raw.githubusercontent.com/acme/last-good/main/sub.yaml",
+        )
+        initial = build_candidate_snapshot(
+            staging(
+                [isolated, *retained],
+                [
+                    (source_current, [isolated, *retained], None),
+                    (source_last_good, [isolated], None),
+                ],
+                run_at=RUN0,
+            ),
+            settings=IDENTITY,
+        )
+        current_sources, current_records = provenance_for_task(
+            source_current,
+            [isolated, *retained],
+            observed_at="2026-08-02T00:00:00Z",
+        )
+        failed_sources, failed_records = provenance_for_task(
+            source_last_good,
+            [],
+            observed_at="2026-08-02T00:00:00Z",
+            outcome="timeout",
+        )
+        sanitizer_calls: dict[str, int] = {}
+
+        def sanitizer_resolver(host: str, _port: int) -> list[str]:
+            sanitizer_calls[host] = sanitizer_calls.get(host, 0) + 1
+            if host == "isolated.example":
+                raise socket.gaierror(socket.EAI_AGAIN, "temporary target failure")
+            return ["8.8.8.8"]
+
+        combined = {
+            "sources": current_sources + failed_sources,
+            "records": current_records + failed_records,
+        }
+        sanitized = rebuild_candidate_profile(
+            combined,
+            resolver=sanitizer_resolver,
+            sleeper=lambda _delay: None,
+        )
+        sanitized_bytes = yaml.safe_dump(
+            sanitized.profile,
+            allow_unicode=True,
+            sort_keys=False,
+        ).encode()
+        evidence = build_endpoint_safety_evidence(
+            sanitized,
+            profile_bytes=sanitized_bytes,
+            provenance=combined,
+        )
+
+        prepared = prepare_candidate_identity_input(
+            yaml.safe_dump({"proxies": retained}, sort_keys=False).encode(),
+            combined,
+            run_at="2026-08-02T00:00:00Z",
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="present",
+            previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_status=initial.status,
+            previous_metadata=initial.metadata,
+            resolver=lambda host, _port: (_ for _ in ()).throw(
+                AssertionError(f"quarantined evidence was re-resolved: {host}")
+            ),
+            endpoint_safety_evidence=evidence,
+            sanitized_profile_bytes=sanitized_bytes,
+        )
+
+        isolated_fingerprint = canonical_proxy_fingerprint(isolated)
+        self.assertIn(
+            isolated_fingerprint,
+            prepared["previous_quarantined_fingerprints"],
+        )
+        snapshot = build_candidate_snapshot(prepared, settings=IDENTITY)
+        self.assertEqual(len(snapshot.ordered_candidates), 4)
+        self.assertNotIn("isolated-secret", snapshot.profile_bytes.decode("utf-8"))
+
+    def test_previous_endpoint_policy_v1_migrates_once_to_v2(self) -> None:
+        node = proxy("JP migration", "migration.example", "migration-secret")
+        source = task("Asia source", "https://raw.githubusercontent.com/acme/asia/main/sub.yaml")
+        initial = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        previous_status = copy.deepcopy(initial.status)
+        previous_metadata = copy.deepcopy(initial.metadata)
+        previous_status["endpoint_safety_policy_version"] = "endpoint-safety-v1"
+        previous_metadata["endpoint_safety_policy_version"] = "endpoint-safety-v1"
+        for item in previous_metadata["candidates"].values():
+            item["endpoint_safety_policy_version"] = "endpoint-safety-v1"
+        previous_status["candidate_metadata_sha256"] = hashlib.sha256(
+            (
+                json.dumps(
+                    previous_metadata,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+        ).hexdigest()
+        sources, records = provenance_for_task(
+            source,
+            [node],
+            observed_at="2026-08-02T00:00:00Z",
+        )
+        prepared = prepare_candidate_identity_input(
+            initial.profile_bytes,
+            {"sources": sources, "records": records},
+            run_at="2026-08-02T00:00:00Z",
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="present",
+            previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_status=previous_status,
+            previous_metadata=previous_metadata,
+            resolver=public_resolver,
+        )
+
+        migrated = build_candidate_snapshot(prepared, settings=IDENTITY)
+        self.assertEqual(
+            migrated.status["endpoint_safety_policy_version"],
+            "endpoint-safety-v2",
+        )
+        self.assertTrue(
+            all(
+                item["endpoint_safety_policy_version"] == "endpoint-safety-v2"
+                for item in migrated.metadata["candidates"].values()
+            )
+        )
+
+        future_status = copy.deepcopy(previous_status)
+        future_metadata = copy.deepcopy(previous_metadata)
+        future_status["endpoint_safety_policy_version"] = "endpoint-safety-v3"
+        future_metadata["endpoint_safety_policy_version"] = "endpoint-safety-v3"
+        for item in future_metadata["candidates"].values():
+            item["endpoint_safety_policy_version"] = "endpoint-safety-v3"
+        future_status["candidate_metadata_sha256"] = hashlib.sha256(
+            (
+                json.dumps(
+                    future_metadata,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+        ).hexdigest()
+        prepared["previous_status"] = future_status
+        prepared["previous_metadata"] = future_metadata
+        with self.assertRaisesRegex(CandidateSnapshotError, "endpoint safety policy"):
+            build_candidate_snapshot(prepared, settings=IDENTITY)
 
     def test_previous_endpoint_drift_is_quarantined_without_invalidating_previous_snapshot(self) -> None:
         nodes = [
