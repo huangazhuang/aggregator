@@ -9,6 +9,7 @@ import ipaddress
 import json
 import re
 import socket
+import time
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ PROVENANCE_STAGING_KIND = "github-candidate-provenance-staging"
 PROVENANCE_STAGING_SCHEMA_VERSION = 1
 SOURCE_POLICY_VERSION = "candidate-source-v2"
 ENDPOINT_SAFETY_POLICY_VERSION = "endpoint-safety-v1"
+_TRANSIENT_DNS_RETRY_DELAYS = (0.25, 1.0, 2.0)
 
 SOURCE_OUTCOMES = frozenset(
     {"success", "empty", "timeout", "rate_limited", "parse_error", "network_error"}
@@ -470,10 +472,32 @@ def merge_provenance_staging(paths: Iterable[str | Path]) -> dict[str, Any]:
     }
 
 
-def _default_resolver(host: str, port: int) -> list[str]:
+def _default_resolver(
+    host: str,
+    port: int,
+    *,
+    getaddrinfo: Callable[..., Iterable[tuple[Any, ...]]] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> list[str]:
+    resolve = getaddrinfo or socket.getaddrinfo
+    pause = sleeper if sleeper is not None else time.sleep
+    transient_code = getattr(socket, "EAI_AGAIN", None)
+    for attempt in range(len(_TRANSIENT_DNS_RETRY_DELAYS) + 1):
+        try:
+            results = resolve(host, port, type=socket.SOCK_STREAM)
+            break
+        except socket.gaierror as exc:
+            if (
+                transient_code is None
+                or exc.errno != transient_code
+                or attempt >= len(_TRANSIENT_DNS_RETRY_DELAYS)
+            ):
+                raise
+            pause(_TRANSIENT_DNS_RETRY_DELAYS[attempt])
+
     addresses = {
         item[4][0]
-        for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        for item in results
         if item and item[0] in {socket.AF_INET, socket.AF_INET6}
     }
     return sorted(addresses)
@@ -556,6 +580,7 @@ def validate_proxy_endpoint(
         labels = server.split(".")
         if len(labels) < 2 or any(not HOST_LABEL_RE.fullmatch(label) for label in labels):
             raise EndpointSafetyError("proxy endpoint hostname is malformed")
+        resolution_failure: CandidateSourceError | None = None
         try:
             addresses = list((resolver or _default_resolver)(server, port))
         except socket.gaierror as exc:
@@ -569,14 +594,21 @@ def validate_proxy_endpoint(
                 if value is not None
             }
             if exc.errno in definitive_codes:
-                raise EndpointSafetyError("proxy endpoint DNS resolution failed") from exc
-            raise EndpointResolutionInfrastructureError(
+                resolution_failure = EndpointSafetyError(
+                    "proxy endpoint DNS resolution failed"
+                )
+            else:
+                resolution_failure = EndpointResolutionInfrastructureError(
+                    "proxy endpoint DNS infrastructure failed"
+                )
+        except Exception:
+            resolution_failure = EndpointResolutionInfrastructureError(
                 "proxy endpoint DNS infrastructure failed"
-            ) from exc
-        except Exception as exc:
-            raise EndpointResolutionInfrastructureError(
-                "proxy endpoint DNS infrastructure failed"
-            ) from exc
+            )
+        if resolution_failure is not None:
+            # Raise outside the handler so neither explicit nor implicit
+            # exception chaining can expose an untrusted resolver message.
+            raise resolution_failure
     if not addresses or any(not is_acceptable_public_ip(value) for value in addresses):
         raise EndpointSafetyError("proxy endpoint resolved outside the public Internet")
     return {
