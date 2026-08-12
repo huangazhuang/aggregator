@@ -746,6 +746,12 @@ main:
 
         - name: Prepare the offline identity-bound V2 manifest
           timeout: 10m
+          imports:
+            - https://cnb.cool/ASD12321_446/aggregator-gmgn-secrets/-/blob/main/secret.yml
+          env:
+            CNB_TOKEN: ""
+            GITHUB_TOKEN: ""
+            GIT_ASKPASS: ""
           script: |
             set -eu
             umask 077
@@ -940,6 +946,12 @@ main:
 
         - name: Redact measurements and exit identity offline
           timeout: 10m
+          imports:
+            - https://cnb.cool/ASD12321_446/aggregator-gmgn-secrets/-/blob/main/secret.yml
+          env:
+            CNB_TOKEN: ""
+            GITHUB_TOKEN: ""
+            GIT_ASKPASS: ""
           script: |
             set -eu
             umask 077

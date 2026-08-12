@@ -50,14 +50,14 @@ gstatic 探测流水线申请 2 个 CPU，同步流水线申请 1 个 CPU。手�
 
 仓库代码包含独立的手动 V2 shadow 路径，但它仍是验收通道，不是当前用户订阅入口，也没有自动定时触发。它只允许写入 `clash-cn-gmgn-v2-shadow`；在连续影子验收和用户确认迁移前，不会覆盖现有 gstatic、GMGN 正式分支或推荐链接。
 
-第一次真实 V2 shadow 前，必须在 CNB 创建独立的密钥仓库，并在其中用 `secret.yml` 保存 `GMGN_IDENTITY_HMAC_KEY`、`GMGN_IDENTITY_KEY_VERSION` 和 `GMGN_IDENTITY_EPOCH`。随后按 CNB 官方密钥仓库语法，在 `web_trigger_gmgn_v2_shadow` 对应 Pipeline 对象内加入静态引用：
+第一次真实 V2 shadow 前，必须在 CNB 创建独立的密钥仓库，并在其中用 `secret.yml` 保存 `GMGN_IDENTITY_HMAC_KEY`、`GMGN_IDENTITY_KEY_VERSION` 和 `GMGN_IDENTITY_EPOCH`。随后按 CNB 官方密钥仓库语法，只在 `web_trigger_gmgn_v2_shadow` 中需要身份密钥的两个离线 Job（identity prepare 与 redact）加入静态引用：
 
 ```yaml
 imports:
   - https://cnb.cool/<你的密钥仓库 slug>/-/blob/main/secret.yml
 ```
 
-密钥仓库 URL 因组织而异，不能在代码中猜测或提交占位地址；不要把真实 HMAC key 写入本仓库、普通仓库变量、日志或运行摘要。未配置 `imports:` 时，identity/redact 阶段会因缺少密钥而失败关闭，不会发布 V2 shadow。
+`imports:` 必须保持在 Job 级，不能上移到 Pipeline；CNB 的 Pipeline 级导入会让下载、探测和发布阶段也持有身份密钥。两个密钥 Job 还必须把 `CNB_TOKEN`、`GITHUB_TOKEN` 和 `GIT_ASKPASS` 覆盖为空，确保身份密钥与发布凭据不在同一任务环境。密钥仓库 URL 因组织而异，不能在代码中猜测或提交占位地址；不要把真实 HMAC key 写入本仓库、普通仓库变量、日志或运行摘要。未配置 `imports:` 时，identity/redact 阶段会因缺少密钥而失败关闭，不会发布 V2 shadow。
 
 GitHub 和 CNB 必须使用**同一组身份配置**：GitHub Actions Secret `GMGN_IDENTITY_HMAC_KEY` 与 CNB 密钥仓库中的同名值必须是完全相同的 key 字节；GitHub Variables 与 CNB secret 中的 `GMGN_IDENTITY_KEY_VERSION`、`GMGN_IDENTITY_EPOCH` 也必须逐字一致。不要在两端分别随机生成 key，也不要只配置 version/epoch 而遗漏 GitHub Secret。当前代码没有公开 fallback key；在 GitHub Secret 尚未配置时必须保持 Candidate V2 总开关关闭。两端会在处理真实节点前用固定测试向量校验四类 public ID，不一致即失败关闭。
 

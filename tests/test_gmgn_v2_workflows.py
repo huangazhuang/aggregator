@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,16 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+GMGN_SECRET_IMPORT_URL = (
+    "https://cnb.cool/ASD12321_446/aggregator-gmgn-secrets/"
+    "-/blob/main/secret.yml"
+)
+GMGN_SECRET_REPOSITORY = "ASD12321_446/aggregator-gmgn-secrets"
+GMGN_IDENTITY_CONFIG_NAMES = {
+    "GMGN_IDENTITY_HMAC_KEY",
+    "GMGN_IDENTITY_KEY_VERSION",
+    "GMGN_IDENTITY_EPOCH",
+}
 
 
 class GmgnV2WorkflowContractTests(unittest.TestCase):
@@ -21,7 +32,8 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         cls.tests = yaml.safe_load(cls.tests_text)
-        cls.cnb = yaml.safe_load((ROOT / ".cnb.yml").read_text(encoding="utf-8"))
+        cls.cnb_text = (ROOT / ".cnb.yml").read_text(encoding="utf-8")
+        cls.cnb = yaml.safe_load(cls.cnb_text)
         cls.coordinator_text = (ROOT / "scripts/cnb_gmgn_v2.py").read_text(
             encoding="utf-8"
         )
@@ -122,6 +134,92 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
             if stage["name"] == "Transactionally publish only the V2 shadow branch"
         )
         self.assertEqual(publish_stage["timeout"], "30m")
+
+    def test_only_offline_identity_jobs_import_the_secret_repository(self) -> None:
+        v2_pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
+        self.assertNotIn("imports", v2_pipeline)
+
+        import_routes = []
+        for scope, events in self.cnb.items():
+            if not isinstance(events, dict):
+                continue
+            for event, pipelines in events.items():
+                if not isinstance(pipelines, list):
+                    continue
+                for index, pipeline in enumerate(pipelines):
+                    if not isinstance(pipeline, dict):
+                        continue
+                    self.assertNotIn("imports", pipeline)
+                    for stage_index, stage in enumerate(pipeline.get("stages", [])):
+                        if not isinstance(stage, dict) or "imports" not in stage:
+                            continue
+                        import_routes.append(
+                            (scope, event, index, stage_index, stage["name"])
+                        )
+                        self.assertEqual(stage["imports"], [GMGN_SECRET_IMPORT_URL])
+                        self.assertEqual(
+                            stage["env"],
+                            {
+                                "CNB_TOKEN": "",
+                                "GITHUB_TOKEN": "",
+                                "GIT_ASKPASS": "",
+                            },
+                        )
+
+        self.assertEqual(
+            import_routes,
+            [
+                (
+                    "main",
+                    "web_trigger_gmgn_v2_shadow",
+                    0,
+                    2,
+                    "Prepare the offline identity-bound V2 manifest",
+                ),
+                (
+                    "main",
+                    "web_trigger_gmgn_v2_shadow",
+                    0,
+                    4,
+                    "Redact measurements and exit identity offline",
+                ),
+                (
+                    "cnb-gmgn-v2-*",
+                    "tag_push",
+                    0,
+                    2,
+                    "Prepare the offline identity-bound V2 manifest",
+                ),
+                (
+                    "cnb-gmgn-v2-*",
+                    "tag_push",
+                    0,
+                    4,
+                    "Redact measurements and exit identity offline",
+                ),
+            ],
+        )
+
+        self.assertEqual(self.cnb_text.count(GMGN_SECRET_IMPORT_URL), 2)
+        self.assertEqual(self.cnb_text.count(GMGN_SECRET_REPOSITORY), 2)
+
+    def test_cnb_workflow_contains_no_plaintext_identity_hmac_key(self) -> None:
+        def assert_no_identity_mapping_key(value: object) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    self.assertNotIn(key, GMGN_IDENTITY_CONFIG_NAMES)
+                    assert_no_identity_mapping_key(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    assert_no_identity_mapping_key(nested)
+
+        assert_no_identity_mapping_key(self.cnb)
+        plaintext_assignment = re.compile(
+            r"(?m)^\s*(?:export\s+)?[\"']?(?:"
+            + "|".join(sorted(GMGN_IDENTITY_CONFIG_NAMES))
+            + r")[\"']?\s*(?::|=)"
+        )
+        self.assertIsNone(plaintext_assignment.search(self.cnb_text))
 
     def test_setup_requires_identical_github_and_cnb_identity_configuration(self) -> None:
         self.assertIn("GitHub Actions Secret `GMGN_IDENTITY_HMAC_KEY`", self.setup_text)
