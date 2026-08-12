@@ -89,6 +89,17 @@ class TaskConfig:
     # freshness checked, endpoint validated, and capped before provenance.
     candidate_source: str = ""
 
+    # Candidate publication source role. Only explicitly configured fixed
+    # sources participate in the GitHub Candidate V2 source quorum; crawler,
+    # rotation, search, and retained-output tasks remain dynamic.
+    candidate_source_role: str = "dynamic"
+
+    def __post_init__(self) -> None:
+        role = str(self.candidate_source_role or "").strip().lower()
+        if role not in {"fixed", "dynamic"}:
+            raise ValueError("candidate_source_role must be fixed or dynamic")
+        self.candidate_source_role = role
+
 
 def execute(task_conf: TaskConfig) -> list:
     if not task_conf or not isinstance(task_conf, TaskConfig):
@@ -250,6 +261,10 @@ def exists(tasks: list, task: TaskConfig) -> bool:
                 item.candidate_source = task.candidate_source
             elif task.candidate_source and item.candidate_source != task.candidate_source:
                 logger.error("duplicate subscription has conflicting registered source policies")
+            # A duplicate fixed declaration must not be downgraded merely
+            # because a dynamic discovery path encountered the same URL first.
+            if task.candidate_source_role == "fixed":
+                item.candidate_source_role = "fixed"
             break
 
     return found

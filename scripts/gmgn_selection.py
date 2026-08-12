@@ -13,6 +13,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
 from scripts.candidate_snapshot import CANDIDATE_FIELDS as C1_CANDIDATE_METADATA_FIELDS
 from scripts.candidate_sources import ENDPOINT_SAFETY_POLICY_VERSION, SOURCE_ID_RE, utc_timestamp
 from scripts.gmgn_history import (
@@ -297,7 +298,7 @@ def validate_selection_input(raw: Any) -> dict[str, Any]:
     metadata_schema = _non_negative_int(
         snapshot["candidate_metadata_schema_version"], "candidate metadata schema"
     )
-    if metadata_schema != 1:
+    if metadata_schema != CANDIDATE_METADATA_SCHEMA_VERSION:
         raise SelectionError("candidate metadata schema is unsupported")
     key_version = validate_identity_version(snapshot["identity_key_version"], "identity_key_version")
     epoch = validate_identity_version(snapshot["identity_epoch"], "identity_epoch")

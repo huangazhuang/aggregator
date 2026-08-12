@@ -21,10 +21,18 @@ from typing import Any
 import yaml
 
 from scripts.candidate_handoff import CandidateHandoffError, write_private_bytes_atomic
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
+from scripts.candidate_gate_diagnostics import (
+    CandidateGateDiagnosticError,
+    build_candidate_gate_diagnostic,
+    format_candidate_gate_rejection,
+)
 from scripts.candidate_sources import (
     CandidateDnsResolutionSession,
     ENDPOINT_SAFETY_POLICY_VERSION,
     SAFE_PUBLIC_ALIAS_RE,
+    SOURCE_ID_RE,
+    SOURCE_KINDS,
     SOURCE_OUTCOMES,
     SOURCE_POLICY_VERSION,
     CandidateSourceError,
@@ -62,13 +70,12 @@ from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
 IDENTITY_INPUT_KIND = "github-candidate-identity-input"
-IDENTITY_INPUT_SCHEMA_VERSION = 3
+IDENTITY_INPUT_SCHEMA_VERSION = 4
 CANDIDATE_STATUS_KIND = "github-candidate-status"
 CANDIDATE_STATUS_SCHEMA_VERSION = 2
 CANDIDATE_METADATA_KIND = "github-candidate-metadata"
-CANDIDATE_METADATA_SCHEMA_VERSION = 1
 IDENTITY_FIXTURE_VERSION = "identity-fixture-v1"
-CANDIDATE_PUBLISH_POLICY_VERSION = "candidate-publish-v1"
+CANDIDATE_PUBLISH_POLICY_VERSION = "candidate-publish-v2"
 
 LAST_GOOD_MAX_AGE_SECONDS = 48 * 3600
 MISSING_CONFIRMATION_COUNT = 3
@@ -148,6 +155,17 @@ INPUT_RECORD_FIELDS = {
     "region_hints",
     "region_evidence",
 }
+SOURCE_EVENT_FIELDS = {
+    "source_id",
+    "alias",
+    "visibility",
+    "publish_derivatives",
+    "source_kind",
+    "configured_this_run",
+    "outcome",
+    "observed_at",
+    "last_success_at",
+}
 QUARANTINED_RECORD_FIELDS = {"fingerprint", "source_id", "region_hints"}
 OBSERVED_RECORD_FIELDS = QUARANTINED_RECORD_FIELDS
 METADATA_FIELDS = {
@@ -191,6 +209,8 @@ CANDIDATE_FIELDS = {
 SOURCE_FIELDS = {
     "alias",
     "visibility",
+    "source_kind",
+    "configured_this_run",
     "health_state",
     "last_event",
     "last_attempt_at",
@@ -965,11 +985,27 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
         raise CandidateSnapshotError("candidate input collections are malformed")
     source_ids: set[str] = set()
     for raw_source in payload["sources"]:
-        if not isinstance(raw_source, Mapping):
+        if not isinstance(raw_source, Mapping) or set(raw_source) != SOURCE_EVENT_FIELDS:
             raise CandidateSnapshotError("candidate source event is malformed")
         source_id = str(raw_source.get("source_id", ""))
-        if not source_id:
-            raise CandidateSnapshotError("candidate source event has no source ID")
+        if not SOURCE_ID_RE.fullmatch(source_id) or source_id in source_ids:
+            raise CandidateSnapshotError("candidate source event source ID is invalid")
+        if raw_source["visibility"] not in {"public", "opaque"}:
+            raise CandidateSnapshotError("candidate source event visibility is invalid")
+        if raw_source["source_kind"] not in SOURCE_KINDS:
+            raise CandidateSnapshotError("candidate source event kind is invalid")
+        if raw_source["configured_this_run"] is not True:
+            raise CandidateSnapshotError("candidate source event is not configured this run")
+        if raw_source["outcome"] not in SOURCE_OUTCOMES:
+            raise CandidateSnapshotError("candidate source event outcome is invalid")
+        if not isinstance(raw_source["publish_derivatives"], bool):
+            raise CandidateSnapshotError("candidate source event publication flag is invalid")
+        alias = str(raw_source["alias"] or "")
+        if alias and not SAFE_PUBLIC_ALIAS_RE.fullmatch(alias):
+            raise CandidateSnapshotError("candidate source event alias is unsafe")
+        utc_timestamp(raw_source["observed_at"])
+        if raw_source["last_success_at"]:
+            utc_timestamp(raw_source["last_success_at"])
         source_ids.add(source_id)
 
     def observed_binding(raw: Any, *, label: str) -> tuple[str, str, tuple[str, ...]]:
@@ -1134,10 +1170,17 @@ def _source_events(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         previous = events.get(source_id)
         if previous is None:
             events[source_id] = item
-        elif previous.get("outcome") != "success" and item.get("outcome") == "success":
-            events[source_id] = item
+            continue
+        preferred = previous
+        if previous.get("outcome") != "success" and item.get("outcome") == "success":
+            preferred = item
         elif previous.get("outcome") == item.get("outcome") and str(item.get("observed_at", "")) > str(previous.get("observed_at", "")):
-            events[source_id] = item
+            preferred = item
+        merged = dict(preferred)
+        if previous.get("source_kind") == "fixed" or item.get("source_kind") == "fixed":
+            merged["source_kind"] = "fixed"
+        merged["configured_this_run"] = True
+        events[source_id] = merged
     return events
 
 
@@ -1235,17 +1278,18 @@ def _evaluate_publish_gate(
     eligible_sources = [
         item
         for item in sources.values()
-        if item.get("visibility") in {"public", "opaque"}
-        and item.get("health_state") != "confirmed_missing"
+        if item.get("configured_this_run") is True
+        and item.get("source_kind") == "fixed"
     ]
     eligible = len(eligible_sources)
     acceptable = sum(
         1
         for item in eligible_sources
-        if item.get("health_state") in {"healthy", "recovered", "using_last_good"}
+        if item.get("last_event") == "success"
+        or item.get("health_state") == "using_last_good"
     )
-    quorum_ratio = 1.0 if eligible <= 0 else acceptable / eligible
-    if quorum_ratio < SOURCE_QUORUM_RATIO:
+    quorum_ratio = 0.0 if eligible <= 0 else acceptable / eligible
+    if eligible <= 0 or quorum_ratio < SOURCE_QUORUM_RATIO:
         reasons.append("source_quorum_below_80")
 
     retain_ratios = {
@@ -1332,6 +1376,8 @@ def _source_state(
     for source_id in source_ids:
         event = events.get(source_id)
         old = previous_sources.get(source_id, {}) if isinstance(previous_sources, Mapping) else {}
+        configured_this_run = event is not None and event.get("configured_this_run") is True
+        source_kind = str((event or {}).get("source_kind", old.get("source_kind", "dynamic")))
         outcome = str((event or {}).get("outcome", "network_error"))
         last_attempt_at = str((event or {}).get("observed_at", run_at))
         old_last_success = str(old.get("last_success_at", ""))
@@ -1389,6 +1435,8 @@ def _source_state(
         output[source_id] = {
             "alias": str((event or {}).get("alias", old.get("alias", ""))),
             "visibility": str((event or {}).get("visibility", old.get("visibility", "opaque"))),
+            "source_kind": source_kind,
+            "configured_this_run": configured_this_run,
             "health_state": health_state,
             "last_event": outcome,
             "last_attempt_at": last_attempt_at,
@@ -1590,12 +1638,33 @@ def build_candidate_snapshot(
             raise CandidateSnapshotError("candidate GitHub check states are inconsistent")
         aliases = sorted({_safe_proxy_alias(item.get("alias"), proxy) for item in related} - {""})
         source_ids = sorted({str(item["source_id"]) for item in related})
-        region_hints = sorted(
+        current_region_hints = sorted(
             {region for item in related for region in item.get("region_hints", [])},
             key=lambda region: REGION_ORDER.index(region),
         )
-        region_evidence = sorted({value for item in related for value in item.get("region_evidence", [])})
-        protected_asia = bool(region_hints or "explicit:asia_keep" in region_evidence or is_preferred_asian_proxy(proxy))
+        current_region_evidence = sorted(
+            {value for item in related for value in item.get("region_evidence", [])}
+        )
+        old_metadata = (
+            previous.metadata["candidates"].get(candidate_id_value)
+            if previous is not None
+            else None
+        )
+        region_hints = sorted(
+            set(current_region_hints)
+            | set((old_metadata or {}).get("region_hints", [])),
+            key=lambda region: REGION_ORDER.index(region),
+        )
+        region_evidence = sorted(
+            set(current_region_evidence)
+            | set((old_metadata or {}).get("region_evidence", []))
+        )
+        protected_asia = bool(
+            region_hints
+            or "explicit:asia_keep" in region_evidence
+            or is_preferred_asian_proxy(proxy)
+            or (old_metadata or {}).get("protected_asia", False)
+        )
         github_check_state = (
             next(iter(explicit_check_states))
             if explicit_check_states
@@ -1608,7 +1677,6 @@ def build_candidate_snapshot(
                 "candidate GitHub check state contradicts Asia protection"
             )
         source_success = max(str(item["source_last_success_at"]) for item in related)
-        old_metadata = previous.metadata["candidates"].get(candidate_id_value) if previous is not None else None
         first_seen_at = str(old_metadata["first_seen_at"]) if old_metadata else run_at
         entries[candidate_id_value] = {
             "proxy": proxy,
@@ -1623,12 +1691,9 @@ def build_candidate_snapshot(
                 "first_seen_at": first_seen_at,
                 "last_seen_at": run_at,
                 "source_last_success_at": max(source_success, str((old_metadata or {}).get("source_last_success_at", ""))),
-                "region_hints": sorted(
-                    set(region_hints) | set((old_metadata or {}).get("region_hints", [])),
-                    key=lambda region: REGION_ORDER.index(region),
-                ),
-                "region_evidence": sorted(set(region_evidence) | set((old_metadata or {}).get("region_evidence", []))),
-                "protected_asia": protected_asia or bool((old_metadata or {}).get("protected_asia", False)),
+                "region_hints": region_hints,
+                "region_evidence": region_evidence,
+                "protected_asia": protected_asia,
                 "github_check_state": github_check_state,
                 "protocol": str(proxy.get("type", "")).lower(),
                 "server_id": public_ids["server_id"],
@@ -1744,7 +1809,7 @@ def build_candidate_snapshot(
         protected_asia_count += int(item["protected_asia"])
         github_counts[item["github_check_state"]] += 1
     source_counts = {
-        "configured": len(sources),
+        "configured": sum(item["configured_this_run"] for item in sources.values()),
         "healthy": sum(item["health_state"] in {"healthy", "recovered"} for item in sources.values()),
         "last_good": sum(item["health_state"] == "using_last_good" for item in sources.values()),
         "observing": sum(item["health_state"] == "observing_failure" for item in sources.values()),
@@ -1804,7 +1869,20 @@ def build_candidate_snapshot(
         "publish_gate": publish_gate,
     }
     if not publish_gate["passed"]:
-        raise CandidateSnapshotError("candidate publish gate rejected the staged snapshot")
+        try:
+            diagnostic = build_candidate_gate_diagnostic(
+                candidate_count=len(entries),
+                protected_asia_count=protected_asia_count,
+                region_counts=region_counts,
+                previous=previous_counts,
+                source_quorum=source_quorum,
+                reasons=publish_gate["reasons"],
+            )
+        except CandidateGateDiagnosticError:
+            raise CandidateSnapshotError(
+                "candidate publish gate rejected: diagnostic unavailable"
+            ) from None
+        raise CandidateSnapshotError(format_candidate_gate_rejection(diagnostic))
     return validate_candidate_snapshot(
         profile_bytes,
         status,
@@ -1837,6 +1915,10 @@ def _validate_source_metadata(sources: Any, *, run_at: str) -> dict[str, Any]:
         item = _strict_mapping(raw, SOURCE_FIELDS, "candidate source")
         if item["visibility"] not in {"public", "opaque"}:
             raise CandidateSnapshotError("candidate source visibility is unsupported")
+        if item["source_kind"] not in SOURCE_KINDS:
+            raise CandidateSnapshotError("candidate source kind is unsupported")
+        if not isinstance(item["configured_this_run"], bool):
+            raise CandidateSnapshotError("candidate source configured flag must be boolean")
         if item["health_state"] not in {"healthy", "using_last_good", "observing_failure", "confirmed_missing", "recovered"}:
             raise CandidateSnapshotError("candidate source health state is unsupported")
         if item["last_event"] not in SOURCE_OUTCOMES:
@@ -2064,7 +2146,7 @@ def validate_candidate_snapshot(
         raise CandidateSnapshotError("candidate publish gate is malformed")
 
     expected_source_counts = {
-        "configured": len(sources),
+        "configured": sum(item["configured_this_run"] for item in sources.values()),
         "healthy": sum(item["health_state"] in {"healthy", "recovered"} for item in sources.values()),
         "last_good": sum(item["health_state"] == "using_last_good" for item in sources.values()),
         "observing": sum(item["health_state"] == "observing_failure" for item in sources.values()),

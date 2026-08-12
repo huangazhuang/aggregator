@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 import tempfile
@@ -9,8 +10,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.candidate_sources import (
+    SOURCE_ID_VERSION,
+    SOURCE_POLICY_VERSION,
     load_provenance_staging,
     provenance_for_task,
+    safe_source_descriptor,
     write_provenance_staging,
 )
 from subscribe import collect
@@ -98,6 +102,7 @@ class TaskDeduplicationTests(unittest.TestCase):
                 sub="https://two.example/sub",
                 liveness=False,
                 publish_derivatives=True,
+                candidate_source_role="fixed",
             ),
         ]
 
@@ -106,15 +111,40 @@ class TaskDeduplicationTests(unittest.TestCase):
         self.assertEqual([task.name for task in deduplicated], ["first", "second"])
         self.assertFalse(deduplicated[1].liveness)
         self.assertTrue(deduplicated[1].publish_derivatives)
+        self.assertEqual(deduplicated[1].candidate_source_role, "fixed")
+
+    def test_invalid_source_role_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "fixed or dynamic"):
+            TaskConfig(
+                name="invalid",
+                bin_name="subconverter",
+                candidate_source_role="guessed",
+            )
 
 
 class ProvenanceSourceTests(unittest.TestCase):
+    def test_source_id_namespace_is_stable_across_policy_upgrade(self) -> None:
+        raw = "https://raw.githubusercontent.com/acme/source/main/sub.yaml"
+        descriptor = safe_source_descriptor(
+            raw,
+            task_name="stable-source",
+            publish_derivatives=True,
+        )
+        expected_digest = hashlib.sha256(
+            f"{SOURCE_ID_VERSION}\0public\0{raw}".encode("utf-8")
+        ).hexdigest()[:24]
+
+        self.assertEqual(SOURCE_ID_VERSION, "candidate-source-v2")
+        self.assertEqual(SOURCE_POLICY_VERSION, "candidate-source-v3")
+        self.assertEqual(descriptor["source_id"], f"public_{expected_digest}")
+
     def test_proxy_embedded_subscription_does_not_replace_stable_task_source(self) -> None:
         source_task = SimpleNamespace(
             name="stable-source",
             sub="https://raw.githubusercontent.com/acme/source/main/sub.yaml",
             domain="",
             publish_derivatives=True,
+            candidate_source_role="fixed",
         )
         first = {"name": "one", "type": "ss", "server": "one.example", "port": 443, "cipher": "aes-128-gcm", "password": "x", "sub": "https://private.example/a?token=first"}
         second = {**first, "sub": "https://private.example/a?token=rotated"}
@@ -123,6 +153,8 @@ class ProvenanceSourceTests(unittest.TestCase):
         second_sources, second_records = provenance_for_task(source_task, [second], observed_at="2026-08-11T06:00:00Z")
 
         self.assertEqual(first_sources[0]["source_id"], second_sources[0]["source_id"])
+        self.assertEqual(first_sources[0]["source_kind"], "fixed")
+        self.assertTrue(first_sources[0]["configured_this_run"])
         serialized = repr((first_sources, first_records, second_sources, second_records))
         self.assertNotIn("private.example", serialized)
         self.assertNotIn("token=", serialized)

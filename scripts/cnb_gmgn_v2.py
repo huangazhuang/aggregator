@@ -620,7 +620,6 @@ def _fetch_candidate(args: argparse.Namespace) -> int:
     if not SHA256_RE.fullmatch(expected):
         raise CoordinatorError("expected candidate source SHA is malformed")
     destination = Path(args.output_dir).resolve()
-    destination.mkdir(parents=True, exist_ok=True)
     nonce = secrets.token_hex(16)
     status_bytes = fetch_no_cache(args.status_url, nonce=nonce)
     profile_bytes = fetch_no_cache(args.profile_url, nonce=nonce)
@@ -638,6 +637,7 @@ def _fetch_candidate(args: argparse.Namespace) -> int:
     metadata_sha = hashlib.sha256(metadata_bytes).hexdigest()
     if status.get("candidate_metadata_sha256") != metadata_sha:
         raise CoordinatorError("candidate metadata SHA binding mismatch")
+    destination.mkdir(parents=True, exist_ok=True)
     _write_bytes(destination / "clash.yaml", profile_bytes)
     _write_bytes(destination / "status.json", status_bytes)
     _write_bytes(destination / "candidate-metadata.json", metadata_bytes)

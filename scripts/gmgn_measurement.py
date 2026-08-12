@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
 from scripts.proxy_identity import validate_public_id
 
 
@@ -480,7 +481,8 @@ def validate_manifest_v3(manifest: Mapping[str, Any]) -> dict[str, Any]:
     if (
         isinstance(value["candidate_metadata_schema_version"], bool)
         or not isinstance(value["candidate_metadata_schema_version"], int)
-        or value["candidate_metadata_schema_version"] != 1
+        or value["candidate_metadata_schema_version"]
+        != CANDIDATE_METADATA_SCHEMA_VERSION
     ):
         raise MeasurementError("manifest candidate metadata schema is invalid")
     if value["candidate_metadata_count"] != value["candidate_count"]:

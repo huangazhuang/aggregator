@@ -28,8 +28,12 @@ from subscribe.asia import (
 
 
 PROVENANCE_STAGING_KIND = "github-candidate-provenance-staging"
-PROVENANCE_STAGING_SCHEMA_VERSION = 1
-SOURCE_POLICY_VERSION = "candidate-source-v2"
+PROVENANCE_STAGING_SCHEMA_VERSION = 2
+# Source identity is a persistent namespace, independent of later policy and
+# schema upgrades. Keep this value fixed so existing public source IDs do not
+# rotate when SOURCE_POLICY_VERSION changes.
+SOURCE_ID_VERSION = "candidate-source-v2"
+SOURCE_POLICY_VERSION = "candidate-source-v3"
 ENDPOINT_SAFETY_POLICY_VERSION = "endpoint-safety-v2"
 _TRANSIENT_DNS_RETRY_DELAYS = (0.25, 1.0, 2.0)
 _TARGET_DNS_REOBSERVATION_DELAY_SECONDS = 5.0
@@ -42,6 +46,7 @@ SOURCE_OUTCOMES = frozenset(
     {"success", "empty", "timeout", "rate_limited", "parse_error", "network_error"}
 )
 SOURCE_VISIBILITIES = frozenset({"public", "opaque"})
+SOURCE_KINDS = frozenset({"fixed", "dynamic"})
 SOURCE_ID_RE = re.compile(r"^(?:public|opaque)_[0-9a-f]{24}$")
 SAFE_PUBLIC_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", flags=re.I)
@@ -139,7 +144,7 @@ def utc_timestamp(value: datetime | str | None = None) -> str:
 
 
 def _source_digest(raw_source: str, visibility: str) -> str:
-    material = f"{SOURCE_POLICY_VERSION}\0{visibility}\0{raw_source}".encode("utf-8")
+    material = f"{SOURCE_ID_VERSION}\0{visibility}\0{raw_source}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()[:24]
 
 
@@ -287,6 +292,11 @@ def provenance_for_task(
         bool(explicit_publish) if explicit_publish is not None else bool(default_publish_derivatives)
     )
     items = [dict(proxy) for proxy in (proxies or []) if isinstance(proxy, Mapping)]
+    source_kind = str(
+        getattr(task, "candidate_source_role", "dynamic") or ""
+    ).strip().lower()
+    if source_kind not in SOURCE_KINDS:
+        raise CandidateSourceError("candidate source kind is unsupported")
     normalized_outcome = str(outcome or ("success" if items else "empty")).strip().lower()
     if normalized_outcome not in SOURCE_OUTCOMES:
         raise CandidateSourceError("source outcome is unsupported")
@@ -303,6 +313,8 @@ def provenance_for_task(
     sources: dict[str, dict[str, Any]] = {
         descriptor["source_id"]: {
             **descriptor,
+            "source_kind": source_kind,
+            "configured_this_run": True,
             "outcome": normalized_outcome,
             "observed_at": timestamp,
             "last_success_at": timestamp if normalized_outcome == "success" else "",
@@ -399,6 +411,8 @@ def load_provenance_staging(path: str | Path) -> dict[str, Any]:
             "alias",
             "visibility",
             "publish_derivatives",
+            "source_kind",
+            "configured_this_run",
             "outcome",
             "observed_at",
             "last_success_at",
@@ -412,6 +426,10 @@ def load_provenance_staging(path: str | Path) -> dict[str, Any]:
         sources_by_id[source_id] = item
         if item["visibility"] not in SOURCE_VISIBILITIES or item["outcome"] not in SOURCE_OUTCOMES:
             raise CandidateSourceError("provenance source state is unsupported")
+        if item["source_kind"] not in SOURCE_KINDS:
+            raise CandidateSourceError("provenance source kind is unsupported")
+        if item["configured_this_run"] is not True:
+            raise CandidateSourceError("provenance source must be configured this run")
         if not isinstance(item["publish_derivatives"], bool):
             raise CandidateSourceError("provenance publish_derivatives must be boolean")
         alias = str(item["alias"] or "")
@@ -481,10 +499,17 @@ def merge_provenance_staging(paths: Iterable[str | Path]) -> dict[str, Any]:
             previous = sources.get(source_id)
             if previous is None:
                 sources[source_id] = dict(item)
-            elif previous.get("outcome") != "success" and item.get("outcome") == "success":
-                sources[source_id] = dict(item)
+                continue
+            preferred = previous
+            if previous.get("outcome") != "success" and item.get("outcome") == "success":
+                preferred = item
             elif previous.get("outcome") == item.get("outcome") and str(item["observed_at"]) >= str(previous["observed_at"]):
-                sources[source_id] = dict(item)
+                preferred = item
+            merged = dict(preferred)
+            if previous.get("source_kind") == "fixed" or item.get("source_kind") == "fixed":
+                merged["source_kind"] = "fixed"
+            merged["configured_this_run"] = True
+            sources[source_id] = merged
         records.extend(dict(item) for item in payload["records"])
     return {
         "kind": PROVENANCE_STAGING_KIND,
@@ -857,6 +882,8 @@ __all__ = [
     "PROVENANCE_STAGING_KIND",
     "PROVENANCE_STAGING_SCHEMA_VERSION",
     "SOURCE_POLICY_VERSION",
+    "SOURCE_ID_VERSION",
+    "SOURCE_KINDS",
     "count_proxy_domain_hostnames",
     "is_acceptable_public_ip",
     "load_provenance_staging",

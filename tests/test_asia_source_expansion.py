@@ -25,6 +25,7 @@ from scripts.asia_source_registry import (
     external_asia_domains,
     select_registered_source_candidates,
 )
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
 from scripts.evaluate_asia_sources import (
     EvaluationError,
     _audit_output_dir,
@@ -32,6 +33,9 @@ from scripts.evaluate_asia_sources import (
     evaluation_identity_settings,
 )
 from scripts.candidate_snapshot import (
+    CANDIDATE_METADATA_KIND,
+    CANDIDATE_STATUS_KIND,
+    CANDIDATE_STATUS_SCHEMA_VERSION,
     CandidateSnapshotError,
     build_candidate_snapshot,
     evaluate_candidate_publish_gate,
@@ -86,6 +90,7 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertTrue(all(item["enable"] is False for item in disabled))
         self.assertTrue(all(item["publish_derivatives"] is True for item in disabled))
         self.assertTrue(all(item["liveness"] is False for item in disabled))
+        self.assertTrue(all(item["candidate_source_role"] == "fixed" for item in disabled))
 
         source_only = external_asia_domains({"ENABLE_ASIA_SOURCE_AWESOME_VPN": "true"})
         self.assertTrue(all(item["enable"] is False for item in source_only))
@@ -119,9 +124,41 @@ class SourceRegistryTests(unittest.TestCase):
             item for item in config["domains"] if item.get("candidate_source") == "awesome-vpn"
         )
         self.assertTrue(source["enable"])
+        self.assertEqual(source["candidate_source_role"], "fixed")
         process_text = Path("subscribe/process.py").read_text(encoding="utf-8")
         self.assertIn('candidate_source = utils.trim(site.get("candidate_source", ""))', process_text)
         self.assertIn("candidate_source=candidate_source", process_text)
+
+    def test_generated_config_marks_only_stable_sources_fixed(self) -> None:
+        def add_rotation(subscriptions: list[str]) -> None:
+            subscriptions.append(
+                "https://raw.githubusercontent.com/aiboboxx/clashfree/main/clash20260813.yaml"
+            )
+
+        with patch.object(
+            build_crawler_config,
+            "add_rotating_clashfree_feed",
+            side_effect=add_rotation,
+        ):
+            config = build_crawler_config.build_config()
+
+        domains = {item["name"]: item for item in config["domains"]}
+        self.assertEqual(
+            domains["community-aggregators"]["candidate_source_role"], "fixed"
+        )
+        self.assertEqual(
+            domains["community-rotating-clashfree"]["candidate_source_role"],
+            "dynamic",
+        )
+        self.assertTrue(
+            all(
+                domains[spec["name"]]["candidate_source_role"] == "fixed"
+                for spec in build_crawler_config.ASIA_SOURCE_SPECS
+            )
+        )
+        self.assertEqual(
+            config["crawl"]["config"]["candidate_source_role"], "dynamic"
+        )
 
     def test_task_dedup_keeps_registered_source_policy(self) -> None:
         tasks = [
@@ -131,11 +168,13 @@ class SourceRegistryTests(unittest.TestCase):
                 bin_name="subconverter",
                 sub="https://example.invalid/sub",
                 candidate_source="awesome-vpn",
+                candidate_source_role="fixed",
             ),
         ]
         result = dedup_task(tasks)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].candidate_source, "awesome-vpn")
+        self.assertEqual(result[0].candidate_source_role, "fixed")
 
     def test_production_policy_fails_closed_when_flag_is_off(self) -> None:
         with self.assertRaisesRegex(AsiaSourceError, "feature flag is disabled"):
@@ -198,12 +237,14 @@ class SourceRegistryTests(unittest.TestCase):
             sub="https://raw.githubusercontent.com/awesome-vpn/awesome-vpn/master/clash.yaml",
             domain="",
             publish_derivatives=True,
+            candidate_source_role="fixed",
         )
         stable_source = SimpleNamespace(
             name="stable-source",
             sub="https://raw.githubusercontent.com/example/stable/master/clash.yaml",
             domain="",
             publish_derivatives=True,
+            candidate_source_role="fixed",
         )
         source_node = proxy("JP", 1)
         stable_node = proxy("KR", 2, port=18002)
@@ -358,14 +399,24 @@ class SourceLimitTests(unittest.TestCase):
 
 
 class SourceGateTests(unittest.TestCase):
-    def test_confirmed_missing_source_is_excluded_from_quorum(self) -> None:
+    def test_confirmed_missing_success_is_included_as_acceptable_quorum(self) -> None:
         _, quorum, gate = evaluate_candidate_publish_gate(
             candidate_count=10,
             protected_asia_count=5,
             region_counts={"HK": 1, "JP": 1, "KR": 1, "SG": 1, "TW": 1, "unknown": 5},
             sources={
-                "healthy": {"visibility": "public", "health_state": "healthy"},
-                "gone": {"visibility": "public", "health_state": "confirmed_missing"},
+                "healthy": {
+                    "source_kind": "fixed",
+                    "configured_this_run": True,
+                    "last_event": "success",
+                    "health_state": "healthy",
+                },
+                "gone": {
+                    "source_kind": "fixed",
+                    "configured_this_run": True,
+                    "last_event": "success",
+                    "health_state": "confirmed_missing",
+                },
             },
             previous={
                 "candidate_count": 10,
@@ -381,8 +432,8 @@ class SourceGateTests(unittest.TestCase):
             },
         )
         self.assertTrue(gate["passed"])
-        self.assertEqual(quorum["eligible"], 1)
-        self.assertEqual(quorum["healthy_or_last_good"], 1)
+        self.assertEqual(quorum["eligible"], 2)
+        self.assertEqual(quorum["healthy_or_last_good"], 2)
 
     def test_fresh_two_region_source_with_five_new_endpoints_passes(self) -> None:
         source = [
@@ -448,6 +499,7 @@ class SourceGateTests(unittest.TestCase):
             sub="https://raw.githubusercontent.com/awesome-vpn/awesome-vpn/master/clash.yaml",
             domain="",
             publish_derivatives=True,
+            candidate_source_role="fixed",
         )
         sources, records = provenance_for_task(
             task,
@@ -479,12 +531,14 @@ class SourceGateTests(unittest.TestCase):
             sub="https://raw.githubusercontent.com/awesome-vpn/awesome-vpn/master/clash.yaml",
             domain="",
             publish_derivatives=True,
+            candidate_source_role="fixed",
         )
         current_source = SimpleNamespace(
             name="current-source",
             sub="https://raw.githubusercontent.com/example/current/master/clash.yaml",
             domain="",
             publish_derivatives=True,
+            candidate_source_role="fixed",
         )
         initial_sources, initial_records = provenance_for_task(
             source,
@@ -567,7 +621,8 @@ class EvaluatorContractTests(unittest.TestCase):
             identity_epoch=IDENTITY.identity_epoch,
         )
         metadata = {
-            "schema_version": 2,
+            "kind": CANDIDATE_METADATA_KIND,
+            "schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
             "snapshot_id": "candidate_test",
             "profile_sha256": hashlib.sha256(current_profile_bytes).hexdigest(),
             "identity_key_version": "production-key-v1",
@@ -582,9 +637,11 @@ class EvaluatorContractTests(unittest.TestCase):
         }
         metadata_bytes = json.dumps(metadata, sort_keys=True).encode()
         status = {
+            "kind": CANDIDATE_STATUS_KIND,
+            "schema_version": CANDIDATE_STATUS_SCHEMA_VERSION,
             "profile_sha256": hashlib.sha256(current_profile_bytes).hexdigest(),
             "candidate_metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
-            "candidate_metadata_schema_version": 2,
+            "candidate_metadata_schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
             "candidate_count": 1,
             "candidate_metadata_count": 1,
             "snapshot_id": "candidate_test",
@@ -610,6 +667,94 @@ class EvaluatorContractTests(unittest.TestCase):
         )
         self.assertEqual(report["current_snapshot"]["contract"], "candidate-v2")
         self.assertEqual(report["current_snapshot"]["identity_key_version"], "production-key-v1")
+
+    def test_v2_sidecars_reject_wrong_kind_or_unsupported_schema(self) -> None:
+        current = proxy("HK", 92, port=26092)
+        current_profile_bytes = yaml.safe_dump(
+            {"proxies": [current]}, allow_unicode=True, sort_keys=False
+        ).encode()
+        public_ids = compute_public_ids(
+            current,
+            key=IDENTITY.key,
+            identity_key_version=IDENTITY.identity_key_version,
+            identity_epoch=IDENTITY.identity_epoch,
+        )
+        base_metadata = {
+            "kind": CANDIDATE_METADATA_KIND,
+            "schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
+            "snapshot_id": "candidate_test",
+            "profile_sha256": hashlib.sha256(current_profile_bytes).hexdigest(),
+            "identity_key_version": "production-key-v1",
+            "identity_epoch": "production-epoch-v1",
+            "candidate_count": 1,
+            "candidates": {
+                public_ids["candidate_id"]: {
+                    "endpoint_id": public_ids["endpoint_id"],
+                    "server_id": public_ids["server_id"],
+                }
+            },
+        }
+        source_profile_bytes = yaml.safe_dump({"proxies": []}).encode()
+        common = {
+            "source_key": "awesome-vpn",
+            "source_profile_bytes": source_profile_bytes,
+            "current_profile_bytes": current_profile_bytes,
+            "source_revision": {
+                "commit_sha": "e" * 40,
+                "updated_at": "2026-08-11T01:00:00Z",
+            },
+            "evaluated_at": "2026-08-11T02:00:00Z",
+            "settings": IDENTITY,
+            "allow_legacy_current": False,
+        }
+
+        cases = (
+            ("status kind", {"status_kind": "not-candidate-status"}, "status contract"),
+            (
+                "status schema",
+                {"status_schema": CANDIDATE_STATUS_SCHEMA_VERSION + 1},
+                "status contract",
+            ),
+            ("metadata kind", {"metadata_kind": "not-candidate-metadata"}, "metadata contract"),
+            (
+                "metadata schema",
+                {
+                    "metadata_schema": CANDIDATE_METADATA_SCHEMA_VERSION + 1,
+                    "binding_schema": CANDIDATE_METADATA_SCHEMA_VERSION + 1,
+                },
+                "metadata contract",
+            ),
+        )
+        for label, changes, expected_error in cases:
+            with self.subTest(case=label):
+                metadata = copy.deepcopy(base_metadata)
+                metadata["kind"] = changes.get("metadata_kind", CANDIDATE_METADATA_KIND)
+                metadata["schema_version"] = changes.get(
+                    "metadata_schema", CANDIDATE_METADATA_SCHEMA_VERSION
+                )
+                metadata_bytes = json.dumps(metadata, sort_keys=True).encode()
+                status = {
+                    "kind": changes.get("status_kind", CANDIDATE_STATUS_KIND),
+                    "schema_version": changes.get(
+                        "status_schema", CANDIDATE_STATUS_SCHEMA_VERSION
+                    ),
+                    "profile_sha256": hashlib.sha256(current_profile_bytes).hexdigest(),
+                    "candidate_metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
+                    "candidate_metadata_schema_version": changes.get(
+                        "binding_schema", CANDIDATE_METADATA_SCHEMA_VERSION
+                    ),
+                    "candidate_count": 1,
+                    "candidate_metadata_count": 1,
+                    "snapshot_id": "candidate_test",
+                    "identity_key_version": "production-key-v1",
+                    "identity_epoch": "production-epoch-v1",
+                }
+                with self.assertRaisesRegex(EvaluationError, expected_error):
+                    build_report(
+                        **common,
+                        current_status_bytes=json.dumps(status).encode(),
+                        current_metadata_bytes=metadata_bytes,
+                    )
 
     def test_report_is_aggregate_only_and_accepts_legacy_current_explicitly(self) -> None:
         source_profile = {
@@ -686,8 +831,8 @@ class EvaluatorContractTests(unittest.TestCase):
         for status in (
             {"profile_sha256": profile_sha},
             {
-                "kind": "github-candidate-status",
-                "schema_version": 2,
+                "kind": CANDIDATE_STATUS_KIND,
+                "schema_version": CANDIDATE_STATUS_SCHEMA_VERSION,
                 "profile_sha256": profile_sha,
                 "candidate_metadata_sha256": "0" * 64,
             },

@@ -60,6 +60,7 @@ env:
   REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
   FULL_FORK_SCAN: ${{ github.event.inputs.full_fork_scan || 'false' }}
   ENABLE_CANDIDATE_V2: ${{ github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false' }}
+  CANDIDATE_RUNTIME_KEY_EPOCH: ${{ vars.CANDIDATE_RUNTIME_KEY_EPOCH || 'runtime-key-v1' }}
   ENABLE_ASIA_SOURCE_AWESOME_VPN: ${{ vars.ENABLE_ASIA_SOURCE_AWESOME_VPN || 'false' }}
   FORK_SCAN_PAGES: ${{ vars.FORK_SCAN_PAGES || '2' }}
   SCHEDULE_NAME: ${{ github.event.schedule || '' }}
@@ -106,6 +107,42 @@ jobs:
 
       - name: Run pipeline unit tests
         run: python -m unittest discover -s tests -v
+
+      - name: Restore encrypted private collection state cache
+        id: runtime-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: candidate-runtime-state/runtime-state.enc
+          key: candidate-runtime-state-v2-${{ github.repository }}-${{ env.CANDIDATE_RUNTIME_KEY_EPOCH }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            candidate-runtime-state-v2-${{ github.repository }}-${{ env.CANDIDATE_RUNTIME_KEY_EPOCH }}-
+
+      - name: Decrypt private collection state cache
+        id: runtime-decrypt
+        if: steps.runtime-cache.outputs.cache-matched-key != ''
+        env:
+          CANDIDATE_HANDOFF_AES_KEY: ${{ secrets.CANDIDATE_HANDOFF_AES_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CANDIDATE_HANDOFF_AES_KEY}" ]; then
+            echo "CANDIDATE_HANDOFF_AES_KEY is required to restore private collection state." >&2
+            exit 1
+          fi
+          set +e
+          python -m scripts.candidate_runtime_state decrypt \
+            --input candidate-runtime-state/runtime-state.enc \
+            --output-dir data \
+            --repository "${GITHUB_REPOSITORY}" \
+            --key-epoch "${CANDIDATE_RUNTIME_KEY_EPOCH}"
+          decrypt_rc=$?
+          set -e
+          if [ "${decrypt_rc}" -ne 0 ]; then
+            echo "::warning::Encrypted private collection state was rejected; rebuilding from the last-good branch or a fresh collection."
+            echo "invalid=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "restored=true" >> "${GITHUB_OUTPUT}"
 
       - name: Restore previous data
         id: previous
@@ -181,14 +218,22 @@ jobs:
             fi
           fi
 
-          # crawler-subs.json / crawler-proxies.txt carry the crawler's accumulated
-          # subscription pool across runs; without them every run starts cold.
-          for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json cn-fc-check.json; do
-            if [ -n "${previous_tip}" ] && git show "${previous_tip}:${name}" > "/tmp/${name}" 2>/dev/null; then
-              cp "/tmp/${name}" "data/${name}"
-              echo "Restored ${name} from ${OUTPUT_BRANCH}."
+          # One-way migration: historical output branches may still contain
+          # private crawler/source runtime state. Import it only when no
+          # authenticated cache was restored; it is never copied back into any
+          # public artifact or output commit.
+          if [ -n "${previous_tip}" ] && [ "${{ steps.runtime-decrypt.outputs.restored }}" != "true" ]; then
+            restored_legacy_runtime=false
+            for name in subscribes.txt domains.txt valid-domains.txt crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
+              if [ "$(git cat-file -t "${previous_tip}:${name}" 2>/dev/null || true)" = "blob" ]; then
+                git show "${previous_tip}:${name}" > "data/${name}"
+                restored_legacy_runtime=true
+              fi
+            done
+            if [ "${restored_legacy_runtime}" = "true" ]; then
+              echo "Migrated legacy private collection state into the encrypted cache path."
             fi
-          done
+          fi
 
           if [ -f data/previous-status.json ]; then
             echo "Restored the previous publish status for strict-filter safeguards."
@@ -400,28 +445,43 @@ jobs:
       - name: Prepare publish files
         shell: bash
         run: |
-          mkdir -p public
-          cp "data/${PROFILE_FILE}" "public/${PROFILE_FILE}"
-
-          for name in subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
-            # Never publish manual subscription URLs: they may embed private tokens.
-            if [ "${name}" = "subscribes.txt" ] && [ "${{ steps.mode.outputs.mode }}" = "manual" ]; then
-              echo "Skip publishing subscribes.txt in manual mode."
-              continue
-            fi
-            if [ -f "data/${name}" ]; then
-              cp "data/${name}" "public/${name}"
-            fi
-          done
+          mkdir -p legacy-public
+          cp "data/${PROFILE_FILE}" "legacy-public/${PROFILE_FILE}"
 
           url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${OUTPUT_BRANCH}/${PROFILE_FILE}"
           python -m scripts.prepare_github_publish \
             --profile "data/${PROFILE_FILE}" \
-            --public-dir public \
+            --public-dir legacy-public \
             --profile-url "${url}" \
             --mode "${{ steps.mode.outputs.mode }}" \
             --alive-check "${REQUESTED_ALIVE_CHECK}" \
             --main-sha "${GITHUB_SHA}"
+          python -m scripts.public_bundle validate --directory legacy-public --kind legacy
+
+      - name: Encrypt private collection state for cache
+        id: runtime-encrypt
+        env:
+          CANDIDATE_HANDOFF_AES_KEY: ${{ secrets.CANDIDATE_HANDOFF_AES_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CANDIDATE_HANDOFF_AES_KEY}" ]; then
+            echo "CANDIDATE_HANDOFF_AES_KEY is required before private runtime state can be removed from the public branch." >&2
+            exit 1
+          fi
+          python -m scripts.candidate_runtime_state encrypt \
+            --input-dir data \
+            --output candidate-runtime-state/runtime-state.enc \
+            --repository "${GITHUB_REPOSITORY}" \
+            --key-epoch "${CANDIDATE_RUNTIME_KEY_EPOCH}"
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Save encrypted private collection state cache
+        if: steps.runtime-encrypt.outputs.ready == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: candidate-runtime-state/runtime-state.enc
+          key: candidate-runtime-state-v2-${{ github.repository }}-${{ env.CANDIDATE_RUNTIME_KEY_EPOCH }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Prepare candidate V2 identity handoff
         if: env.ENABLE_CANDIDATE_V2 == 'true'
@@ -494,7 +554,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clash-verge-public-staging
-          path: public
+          path: |
+            legacy-public/README.md
+            legacy-public/${{ env.PROFILE_FILE }}
+            legacy-public/last-run.txt
+            legacy-public/status.json
+          include-hidden-files: false
           if-no-files-found: error
           retention-days: 1
 
@@ -559,12 +624,21 @@ jobs:
           python -m scripts.candidate_snapshot build \
             --input candidate-private/identity-input.json \
             --output-dir candidate-public
+          python -m scripts.public_bundle validate \
+            --directory candidate-public \
+            --kind candidate
 
       - name: Upload validated candidate public staging
         uses: actions/upload-artifact@v4
         with:
           name: candidate-public-staging
-          path: candidate-public
+          path: |
+            candidate-public/README.md
+            candidate-public/${{ env.PROFILE_FILE }}
+            candidate-public/last-run.txt
+            candidate-public/status.json
+            candidate-public/candidate-metadata.json
+          include-hidden-files: false
           if-no-files-found: error
           retention-days: 1
 
@@ -594,7 +668,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: clash-verge-public-staging
-          path: public
+          path: legacy-public
 
       - name: Download candidate V2 public staging
         if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
@@ -603,7 +677,7 @@ jobs:
           name: candidate-public-staging
           path: candidate-public
 
-      - name: Select validated public staging
+      - name: Select validated candidate public staging
         if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
         run: |
           # candidate-metadata.json belongs only to the V2 snapshot. When V2 is
@@ -611,11 +685,33 @@ jobs:
           # exact legacy V1 file set instead of carrying a stale, unbound sidecar.
           # A failed V2 identity build never reaches this publish job, so the
           # existing V2 branch tip remains the last-good rollback point.
-          cp candidate-public/README.md public/README.md
-          cp candidate-public/${PROFILE_FILE} public/${PROFILE_FILE}
-          cp candidate-public/last-run.txt public/last-run.txt
-          cp candidate-public/status.json public/status.json
-          cp candidate-public/candidate-metadata.json public/candidate-metadata.json
+          python -m scripts.public_bundle validate \
+            --directory candidate-public \
+            --kind candidate
+          python -m scripts.public_bundle copy \
+            --source candidate-public \
+            --destination public \
+            --kind candidate
+
+      - name: Select validated legacy public staging
+        if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') != 'true' }}
+        run: |
+          python -m scripts.public_bundle copy \
+            --source legacy-public \
+            --destination public \
+            --kind legacy
+
+      - name: Validate exact public publication bundle
+        shell: bash
+        run: |
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then
+            bundle_kind=candidate
+          else
+            bundle_kind=legacy
+          fi
+          python -m scripts.public_bundle validate \
+            --directory public \
+            --kind "${bundle_kind}"
 
       - name: Set up Python for candidate remote smoke
         if: ${{ (github.event.inputs.candidate_v2 || vars.ENABLE_GITHUB_CANDIDATE_V2 || 'false') == 'true' }}
@@ -669,19 +765,21 @@ jobs:
           git reset
           cd "${GITHUB_WORKSPACE}"
 
-          for name in README.md "${PROFILE_FILE}" last-run.txt status.json candidate-metadata.json subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
-            if [ -f "public/${name}" ]; then
-              cp "public/${name}" "${publish_dir}/${name}"
-            fi
-          done
+          if [ "${ENABLE_CANDIDATE_V2}" = "true" ]; then
+            bundle_kind=candidate
+          else
+            bundle_kind=legacy
+          fi
+          python -m scripts.public_bundle copy \
+            --source public \
+            --destination "${publish_dir}" \
+            --kind "${bundle_kind}"
 
           cd "${publish_dir}"
-          git add README.md "${PROFILE_FILE}" last-run.txt status.json
-          for name in candidate-metadata.json subscribes.txt domains.txt valid-domains.txt collect-clash.yaml crawler-clash.yaml crawler-subs.json crawler-proxies.txt crawler-gitfork-subs.txt source-health.json domain-health.json crawler-v2rayse.txt crawler-v2rayse-modified.json cn-fc-check.json; do
-            if [ -f "${name}" ]; then
-              git add "${name}"
-            fi
-          done
+          git add -- README.md "${PROFILE_FILE}" last-run.txt status.json
+          if [ "${bundle_kind}" = "candidate" ]; then
+            git add -- candidate-metadata.json
+          fi
           git commit -m "Update Clash Verge profile" --allow-empty
           candidate_commit="$(git rev-parse HEAD)"
 

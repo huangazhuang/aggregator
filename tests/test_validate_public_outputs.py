@@ -13,6 +13,8 @@ import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
+from scripts.candidate_snapshot import CANDIDATE_STATUS_SCHEMA_VERSION
 from scripts.publish_transaction import PublicationError, write_publish_bundle
 from scripts.validate_public_outputs import (
     MihomoValidationError,
@@ -22,6 +24,7 @@ from scripts.validate_public_outputs import (
     main,
     validate_migration,
     validate_mihomo_profile,
+    validate_remote_candidate_snapshot,
     validate_remote_candidate_publication,
     validate_remote_bundle,
     validate_series,
@@ -48,7 +51,7 @@ def candidate_publication_fixture(main_sha: str = "b" * 40):
     profile_sha = hashlib.sha256(profile).hexdigest()
     metadata = {
         "kind": "github-candidate-metadata",
-        "schema_version": 1,
+        "schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
         "candidate_count": 1,
         "profile_sha256": profile_sha,
     }
@@ -58,7 +61,7 @@ def candidate_publication_fixture(main_sha: str = "b" * 40):
     ).encode("utf-8")
     status = {
         "kind": "github-candidate-status",
-        "schema_version": 2,
+        "schema_version": CANDIDATE_STATUS_SCHEMA_VERSION,
         "snapshot_id": "candidate_" + "1" * 24,
         "main_sha": main_sha,
         "candidate_count": 1,
@@ -78,6 +81,38 @@ def candidate_publication_fixture(main_sha: str = "b" * 40):
 
 
 class RemoteValidatorTests(unittest.TestCase):
+    def test_candidate_snapshot_validation_failure_leaves_no_evidence_directory(self) -> None:
+        files = {
+            "clash.yaml": b"proxies: []\n",
+            "status.json": b"{}\n",
+            "candidate-metadata.json": b"{}\n",
+        }
+
+        def opener(request, timeout):
+            del timeout
+            name = Path(urllib.parse.urlsplit(request.full_url).path).name
+            return FakeResponse(files[name])
+
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            evidence = Path(directory) / "candidate-evidence"
+            with (
+                patch(
+                    "scripts.validate_public_outputs.validate_candidate_snapshot",
+                    side_effect=PublicationError("candidate contract rejected"),
+                ),
+                self.assertRaisesRegex(PublicationError, "contract rejected"),
+            ):
+                validate_remote_candidate_snapshot(
+                    profile_url="https://example.invalid/clash.yaml",
+                    status_url="https://example.invalid/status.json",
+                    metadata_url="https://example.invalid/candidate-metadata.json",
+                    evidence_dir=evidence,
+                    opener=opener,
+                )
+            self.assertFalse(evidence.exists())
+
     def test_candidate_publication_smoke_reads_one_exact_revision_no_cache(self) -> None:
         revision = "a" * 40
         main_sha = "b" * 40

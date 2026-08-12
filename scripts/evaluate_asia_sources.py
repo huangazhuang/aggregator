@@ -21,7 +21,11 @@ from scripts.asia_source_registry import (
     fetch_source_revision,
     source_spec,
 )
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
 from scripts.candidate_snapshot import (
+    CANDIDATE_METADATA_KIND,
+    CANDIDATE_STATUS_KIND,
+    CANDIDATE_STATUS_SCHEMA_VERSION,
     CandidateSnapshotError,
     validate_legacy_candidate_baseline,
 )
@@ -175,6 +179,18 @@ def _validate_current_metadata_binding(
 ) -> None:
     """Validate public V2 cross-file bindings without loading the production HMAC key."""
 
+    if (
+        status.get("kind") != CANDIDATE_STATUS_KIND
+        or status.get("schema_version") != CANDIDATE_STATUS_SCHEMA_VERSION
+    ):
+        raise EvaluationError("current candidate status contract is unsupported")
+    if (
+        metadata.get("kind") != CANDIDATE_METADATA_KIND
+        or metadata.get("schema_version") != CANDIDATE_METADATA_SCHEMA_VERSION
+    ):
+        raise EvaluationError("current candidate metadata contract is unsupported")
+    if status.get("candidate_metadata_schema_version") != CANDIDATE_METADATA_SCHEMA_VERSION:
+        raise EvaluationError("current candidate metadata schema is inconsistent")
     expected_metadata_sha = str(status.get("candidate_metadata_sha256", "")).strip().lower()
     if expected_metadata_sha != hashlib.sha256(metadata_bytes).hexdigest():
         raise EvaluationError("current candidate metadata hash does not match status.json")
@@ -196,8 +212,6 @@ def _validate_current_metadata_binding(
     for field in ("snapshot_id", "identity_key_version", "identity_epoch"):
         if not status.get(field) or status.get(field) != metadata.get(field):
             raise EvaluationError(f"current candidate {field} is inconsistent")
-    if status.get("candidate_metadata_schema_version") != metadata.get("schema_version"):
-        raise EvaluationError("current candidate metadata schema is inconsistent")
     for candidate_id, item in candidates.items():
         if not isinstance(item, Mapping):
             raise EvaluationError("current candidate metadata entry is malformed")

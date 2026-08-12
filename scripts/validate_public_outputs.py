@@ -305,7 +305,6 @@ def validate_remote_candidate_snapshot(
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> Any:
     evidence = Path(evidence_dir).resolve()
-    evidence.mkdir(parents=True, exist_ok=True)
     nonce = secrets.token_hex(16)
     status_bytes = fetch_no_cache(status_url, nonce=nonce, opener=opener)
     profile_bytes = fetch_no_cache(profile_url, nonce=nonce, opener=opener)
@@ -318,6 +317,7 @@ def validate_remote_candidate_snapshot(
     snapshot = validate_candidate_snapshot(profile_bytes, status, metadata)
     if expected_profile_sha and snapshot.profile_sha256 != expected_profile_sha:
         raise PublicationError("candidate snapshot SHA differs from the trigger")
+    evidence.mkdir(parents=True, exist_ok=True)
     _write_evidence(evidence, "clash.yaml", profile_bytes)
     _write_evidence(evidence, "status.json", status_bytes)
     _write_evidence(evidence, "candidate-metadata.json", metadata_bytes)

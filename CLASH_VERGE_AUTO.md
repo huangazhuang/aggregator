@@ -59,8 +59,12 @@ python -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)
 job。Actions artifact 只保存 AES-256-GCM 认证密文，不保存完整 proxy、hostname、
 port、凭据、裸 fingerprint 或 previous profile。密钥缺失、Base64 无效、长度不是
 32 字节，或密文/运行上下文认证失败时，Candidate V2 会失败关闭并保留上一版输出。
-Candidate V2 关闭时不需要配置此密钥。它与 `GMGN_IDENTITY_HMAC_KEY` 用途不同，
-不得复用；后者仍只负责生成稳定的公开身份 ID。
+它与 `GMGN_IDENTITY_HMAC_KEY` 用途不同，不得复用；后者仍只负责生成稳定的公开身份 ID。
+所有自动运行（包括 Candidate V2 关闭时的 legacy 输出）都需要该密钥保存跨轮
+crawler/source 状态，因为这些私密状态不再发布到输出分支或公开 artifact。状态使用固定
+purpose/version 和 `CANDIDATE_RUNTIME_KEY_EPOCH` 派生出的独立子密钥加密后存入
+GitHub Actions cache；cache 中只有 AES-256-GCM 认证密文。轮换密钥时同时提升这个非秘密
+epoch，工作流会跳过旧 epoch；同 epoch 的损坏 cache 会被拒绝并由 last-good/新采集重建。
 
 订阅 URL 只能保存在 `Secrets` 中，不要使用 `Variables`。GitHub 会自动遮盖 Secret，普通变量则可能在 Actions 日志中显示明文。
 

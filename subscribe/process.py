@@ -418,6 +418,11 @@ def assign(
         # Optional controlled external source policy from the shared registry.
         candidate_source = utils.trim(site.get("candidate_source", ""))
 
+        # Explicit Candidate V2 source role; never infer this from a URL/name.
+        candidate_source_role = utils.trim(
+            site.get("candidate_source_role", "dynamic")
+        ).lower()
+
         # 拒绝跳过证书验证
         disable_insecure = site.get("secure", False)
 
@@ -493,6 +498,7 @@ def assign(
                 api_prefix=api_prefix,
                 publish_derivatives=publish_derivatives,
                 candidate_source=candidate_source,
+                candidate_source_role=candidate_source_role,
             )
             found = workflow.exists(tasks=tasks, task=task)
             if found:
@@ -536,6 +542,7 @@ def assign(
                     retry=retry,
                     bin_name=bin_name,
                     special_protocols=special_protocols,
+                    candidate_source_role="dynamic",
                 )
             )
             taskids.append(globalid)

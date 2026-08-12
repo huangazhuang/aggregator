@@ -289,6 +289,7 @@ def assign(
                 bin_name=bin_name,
                 special_protocols=special_protocols,
                 publish_derivatives=publish_derivatives,
+                candidate_source_role="dynamic",
             )
             for x in subscriptions
             if x
@@ -398,6 +399,7 @@ def assign(
                 chuck=chuck,
                 special_protocols=special_protocols,
                 publish_derivatives=publish_derivatives,
+                candidate_source_role="dynamic",
             )
         )
 

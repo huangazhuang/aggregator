@@ -210,6 +210,7 @@ def external_asia_domains(environment: Mapping[str, str] | None = None) -> list[
                 "rate": 20.0,
                 "secure": False,
                 "candidate_source": spec.key,
+                "candidate_source_role": "fixed",
             }
         )
     return domains

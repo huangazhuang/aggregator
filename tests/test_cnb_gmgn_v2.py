@@ -89,6 +89,33 @@ class TriggerAndPreflightTests(unittest.TestCase):
         for key in ("HOME", "TEMP", "TMP", "TMPDIR"):
             self.assertEqual(captured["env"][key], str(runtime.resolve()))
 
+    def test_candidate_fetch_hash_failure_leaves_no_staging_directory(self) -> None:
+        profile = b"proxies: []\n"
+        status = json.dumps(
+            {
+                "profile_sha256": "0" * 64,
+                "candidate_metadata_sha256": "0" * 64,
+            }
+        ).encode("utf-8")
+        metadata = b"{}\n"
+        payloads = [status, profile, metadata]
+
+        with self.temporary_directory() as directory:
+            output = Path(directory) / "candidate-staging"
+            args = Namespace(
+                expected_source_sha=SOURCE_SHA,
+                output_dir=str(output),
+                status_url="https://example.invalid/status.json",
+                profile_url="https://example.invalid/clash.yaml",
+                metadata_url="https://example.invalid/candidate-metadata.json",
+            )
+            with (
+                patch.object(cnb_gmgn_v2, "fetch_no_cache", side_effect=payloads),
+                self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "manual trigger"),
+            ):
+                cnb_gmgn_v2._fetch_candidate(args)
+            self.assertFalse(output.exists())
+
     def test_mihomo_runtime_uses_a_minimal_secret_free_environment(self) -> None:
         captured = {}
         process = MagicMock()

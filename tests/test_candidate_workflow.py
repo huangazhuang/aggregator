@@ -102,7 +102,7 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertNotIn(HANDOFF_SECRET, publish)
         self.assertEqual(
             self.text.count("secrets.CANDIDATE_HANDOFF_AES_KEY"),
-            2,
+            4,
         )
         self.assertNotIn("subscribe/process.py", identity)
         self.assertNotIn("mihomo", identity.lower())
@@ -215,7 +215,7 @@ class CandidateWorkflowContractTests(unittest.TestCase):
             upload_paths,
         )
 
-    def test_handoff_secret_is_not_required_when_candidate_v2_is_disabled(self) -> None:
+    def test_identity_handoff_is_v2_only_but_runtime_state_key_is_always_required(self) -> None:
         collect_steps = {
             step.get("name"): step for step in self.jobs["collect"]["steps"]
         }
@@ -228,6 +228,9 @@ class CandidateWorkflowContractTests(unittest.TestCase):
 
         publish = json.dumps(self.jobs["publish"], ensure_ascii=False)
         self.assertNotIn(HANDOFF_SECRET, publish)
+        runtime_encrypt = collect_steps["Encrypt private collection state for cache"]
+        self.assertNotIn("if", runtime_encrypt)
+        self.assertIn("is required", runtime_encrypt["run"])
 
     def test_setup_documents_the_dedicated_non_hmac_handoff_key(self) -> None:
         documentation = (
@@ -239,7 +242,7 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("Base64", documentation)
         self.assertIn("AES-256-GCM", documentation)
         self.assertIn("不得复用", documentation)
-        self.assertIn("Candidate V2 关闭时", documentation)
+        self.assertIn("所有自动运行", documentation)
 
     def test_previous_output_is_classified_as_absent_v2_or_explicit_legacy(self) -> None:
         collect_steps = {
@@ -371,13 +374,22 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         select_step = next(
             step
             for step in publish_job["steps"]
-            if step.get("name") == "Select validated public staging"
+            if step.get("name") == "Select validated candidate public staging"
         )
         self.assertIn("candidate_v2", select_step["if"])
         self.assertIn(
-            "cp candidate-public/candidate-metadata.json public/candidate-metadata.json",
+            "python -m scripts.public_bundle copy",
             select_step["run"],
         )
+        self.assertIn("--kind candidate", select_step["run"])
+
+        legacy_step = next(
+            step
+            for step in publish_job["steps"]
+            if step.get("name") == "Select validated legacy public staging"
+        )
+        self.assertIn("candidate_v2", legacy_step["if"])
+        self.assertIn("--kind legacy", legacy_step["run"])
 
         publish_step = next(
             step
@@ -387,6 +399,95 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn('git switch --orphan "${OUTPUT_BRANCH}"', publish_step["run"])
         self.assertNotIn("previous-candidate-metadata", publish_step["run"])
         self.assertIn("needs.candidate_identity.result == 'success'", publish_job["if"])
+
+    def test_public_artifacts_and_output_branch_use_exact_allowlists(self) -> None:
+        collect_steps = {
+            step.get("name"): step for step in self.jobs["collect"]["steps"]
+        }
+        legacy_upload = collect_steps["Upload legacy public staging"]["with"]
+        self.assertEqual(
+            set(str(legacy_upload["path"]).splitlines()),
+            {
+                "legacy-public/README.md",
+                "legacy-public/${{ env.PROFILE_FILE }}",
+                "legacy-public/last-run.txt",
+                "legacy-public/status.json",
+            },
+        )
+
+        identity_steps = {
+            step.get("name"): step
+            for step in self.jobs["candidate_identity"]["steps"]
+        }
+        candidate_upload = identity_steps[
+            "Upload validated candidate public staging"
+        ]["with"]
+        self.assertEqual(
+            set(str(candidate_upload["path"]).splitlines()),
+            {
+                "candidate-public/README.md",
+                "candidate-public/${{ env.PROFILE_FILE }}",
+                "candidate-public/last-run.txt",
+                "candidate-public/status.json",
+                "candidate-public/candidate-metadata.json",
+            },
+        )
+
+        public_workflow = "\n".join(
+            (
+                collect_steps["Prepare publish files"]["run"],
+                identity_steps["Build and validate candidate snapshot V2"]["run"],
+                next(
+                    step["run"]
+                    for step in self.jobs["publish"]["steps"]
+                    if step.get("name") == "Build and stage profile commit"
+                ),
+            )
+        )
+        for private_name in (
+            "subscribes.txt",
+            "crawler-subs.json",
+            "crawler-proxies.txt",
+            "source-health.json",
+            "domain-health.json",
+        ):
+            self.assertNotIn(private_name, public_workflow)
+        self.assertIn("scripts.public_bundle validate", public_workflow)
+        self.assertIn("scripts.public_bundle copy", public_workflow)
+
+    def test_private_collection_state_uses_only_encrypted_cache(self) -> None:
+        steps = {step.get("name"): step for step in self.jobs["collect"]["steps"]}
+        restore = steps["Restore encrypted private collection state cache"]
+        decrypt = steps["Decrypt private collection state cache"]
+        encrypt = steps["Encrypt private collection state for cache"]
+        save = steps["Save encrypted private collection state cache"]
+
+        self.assertEqual(restore["uses"], "actions/cache/restore@v4")
+        self.assertEqual(
+            restore["with"]["path"], "candidate-runtime-state/runtime-state.enc"
+        )
+        self.assertIn("candidate-runtime-state-v2-", restore["with"]["key"])
+        self.assertIn("CANDIDATE_RUNTIME_KEY_EPOCH", restore["with"]["key"])
+        self.assertIn("cache-matched-key != ''", decrypt["if"])
+        self.assertIn("scripts.candidate_runtime_state decrypt", decrypt["run"])
+        self.assertIn('if [ -z "${CANDIDATE_HANDOFF_AES_KEY}" ]; then', decrypt["run"])
+        self.assertIn('--key-epoch "${CANDIDATE_RUNTIME_KEY_EPOCH}"', decrypt["run"])
+        self.assertIn("Encrypted private collection state was rejected", decrypt["run"])
+        self.assertIn("scripts.candidate_runtime_state encrypt", encrypt["run"])
+        self.assertIn('if [ -z "${CANDIDATE_HANDOFF_AES_KEY}" ]; then', encrypt["run"])
+        self.assertIn('--key-epoch "${CANDIDATE_RUNTIME_KEY_EPOCH}"', encrypt["run"])
+        self.assertEqual(save["uses"], "actions/cache/save@v4")
+        self.assertEqual(save["if"], "steps.runtime-encrypt.outputs.ready == 'true'")
+        self.assertEqual(
+            save["with"]["path"], "candidate-runtime-state/runtime-state.enc"
+        )
+        self.assertIn("candidate-runtime-state-v2-", save["with"]["key"])
+
+        previous_restore = steps["Restore previous data"]["run"]
+        self.assertIn("One-way migration", previous_restore)
+        self.assertIn('steps.runtime-decrypt.outputs.restored', previous_restore)
+        self.assertNotIn('[ "${ENABLE_CANDIDATE_V2}" = "true" ]', previous_restore)
+        self.assertNotIn('cp "/tmp/${name}" "data/${name}"', previous_restore)
 
     def test_candidate_v2_uses_staging_remote_smoke_lease_and_rollback(self) -> None:
         self.assertEqual(

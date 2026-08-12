@@ -43,6 +43,7 @@ class CandidatePipelineComponentTests(unittest.TestCase):
                 sub="https://raw.githubusercontent.com/acme/component/main/jp.yaml",
                 domain="",
                 publish_derivatives=True,
+                candidate_source_role="fixed",
             )
             sources, records = provenance_for_task(
                 source_task,

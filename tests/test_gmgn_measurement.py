@@ -26,6 +26,7 @@ from scripts.gmgn_measurement import (
     summarize_control,
     write_private_fragment,
 )
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
 from scripts.gmgn_validity import (
     accepted_measurement,
     canonical_json_sha256,
@@ -97,14 +98,14 @@ def fake_snapshot(count: int = 4, *, run_at: str = "2026-08-11T00:00:00Z"):
         metadata_sha256=metadata_sha256,
         identity_key_version=KEY_VERSION,
         identity_epoch=EPOCH,
-        metadata={"schema_version": 1, "candidate_count": count},
+        metadata={"schema_version": CANDIDATE_METADATA_SCHEMA_VERSION, "candidate_count": count},
         status={
             "snapshot_id": snapshot_id_value,
             "run_at": run_at,
             "main_sha": "a" * 40,
             "profile_sha256": "b" * 64,
             "candidate_metadata_sha256": metadata_sha256,
-            "candidate_metadata_schema_version": 1,
+            "candidate_metadata_schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
             "candidate_metadata_count": count,
             "candidate_count": count,
             "identity_key_version": KEY_VERSION,

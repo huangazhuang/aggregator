@@ -39,6 +39,7 @@ BASE_CRAWL_CONFIG = {
     "ignorede": True,
     "liveness": True,
     "publish_derivatives": True,
+    "candidate_source_role": "dynamic",
     "rate": 20.0,
 }
 PREFERRED_ASIA_INCLUDE = preferred_asia_include_pattern()
@@ -175,6 +176,7 @@ def asia_domains() -> list[dict]:
             "ignorede": True,
             "liveness": False,
             "publish_derivatives": True,
+            "candidate_source_role": "fixed",
             "rate": 20.0,
             "secure": False,
         }
@@ -184,7 +186,8 @@ def asia_domains() -> list[dict]:
 
 def build_config() -> dict:
     subscriptions = list(COMMUNITY_SUBS)
-    add_rotating_clashfree_feed(subscriptions)
+    rotating_subscriptions: list[str] = []
+    add_rotating_clashfree_feed(rotating_subscriptions)
     telegram_users = {
         name: telegram_user()
         for name in (
@@ -219,10 +222,32 @@ def build_config() -> dict:
                 "ignorede": True,
                 "liveness": True,
                 "publish_derivatives": True,
+                "candidate_source_role": "fixed",
                 "rate": 20.0,
                 "secure": False,
             }
         ]
+        + (
+            [
+                {
+                    "name": "community-rotating-clashfree",
+                    "sub": rotating_subscriptions,
+                    "enable": True,
+                    "rename": "",
+                    "include": "",
+                    "exclude": "",
+                    "push_to": ["crawler"],
+                    "ignorede": True,
+                    "liveness": True,
+                    "publish_derivatives": True,
+                    "candidate_source_role": "dynamic",
+                    "rate": 20.0,
+                    "secure": False,
+                }
+            ]
+            if rotating_subscriptions
+            else []
+        )
         + asia_domains()
         + external_asia_domains(),
         "crawl": {

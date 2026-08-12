@@ -66,9 +66,14 @@ GitHub Candidate V2 还需要一个只存在于 GitHub Actions 的独立 Reposit
 仅供 collect job 加密、candidate identity job 解密私密身份输入；不能复用
 `GMGN_IDENTITY_HMAC_KEY`，也不需要复制到 CNB。上传的 artifact 只包含
 AES-256-GCM 认证密文，并绑定 GitHub repository、稳定的 run ID 和触发 SHA；同一
+配置密钥还会按固定 purpose/version 派生独立的 runtime-state 子密钥，只用于加密
+GitHub Actions cache 中的 crawler/source 跨轮状态；不会直接复用 handoff AES key
+字节，也不会把这些私密状态发布到输出分支或公开 artifact。该 cache 仍只有认证密文。
 workflow run 的失败 job 重跑仍可验证原 artifact，而跨 run 或跨提交替换会失败。
-缺失/无效密钥、密文篡改或跨运行替换都会在 identity build 前失败关闭。Candidate
-V2 开关关闭时，该密钥不参与现有 V1 流程。
+缺失/无效密钥、密文篡改或跨运行替换都会在 identity build 前失败关闭。由于公开输出
+现在严格只包含订阅白名单文件，所有 GitHub 自动运行也使用同一配置密钥的域隔离子密钥
+保存私密 crawler/source 跨轮状态；设置非秘密变量 `CANDIDATE_RUNTIME_KEY_EPOCH`
+（初始可用 `runtime-key-v1`），轮换 AES key 时同步提升 epoch，避免继续读取旧 cache。
 
 每个 source SHA 还会使用非订阅、非用户入口的 `clash-cn-gmgn-v2-processed/<source_sha>` 受控 ref 保存脱敏的 `queued/running/failed_infrastructure/rejected` 状态和 `retry_of`。该 ref 只允许一个 `state.json`，通过 CAS/force-with-lease 更新；accepted 的唯一权威仍是 V2 shadow bundle/history，避免双写。它不包含代理、出口 IP、原始错误、token 或 HMAC key，也不能作为 Clash 订阅链接。
 

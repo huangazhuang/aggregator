@@ -30,6 +30,7 @@ from scripts.gmgn_selection import (
     V2_GROUP_NAMES,
     select_candidates_v2,
 )
+from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
 from tests.test_gmgn_region import protected_history
 
 
@@ -180,7 +181,7 @@ def selection_input(records: list[dict], measurements: list[dict], regions: list
             "main_sha": "a" * 40,
             "profile_sha256": "b" * 64,
             "candidate_metadata_sha256": "c" * 64,
-            "candidate_metadata_schema_version": 1,
+            "candidate_metadata_schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
             "identity_key_version": "test-k1",
             "identity_epoch": "identity-v1",
             "candidates": records,
@@ -193,7 +194,7 @@ def selection_input(records: list[dict], measurements: list[dict], regions: list
             "main_sha": "a" * 40,
             "profile_sha256": "b" * 64,
             "candidate_metadata_sha256": "c" * 64,
-            "candidate_metadata_schema_version": 1,
+            "candidate_metadata_schema_version": CANDIDATE_METADATA_SCHEMA_VERSION,
             "candidate_metadata_count": len(records),
             "identity_key_version": "test-k1",
             "identity_epoch": "identity-v1",

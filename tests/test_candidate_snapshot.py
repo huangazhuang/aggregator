@@ -83,6 +83,7 @@ def task(name: str, source: str) -> SimpleNamespace:
         sub=source,
         domain="",
         publish_derivatives=True,
+        candidate_source_role="fixed",
     )
 
 
@@ -272,7 +273,7 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
             resolver=resolver,
         )
 
-        self.assertEqual(identity_input["schema_version"], 3)
+        self.assertEqual(identity_input["schema_version"], 4)
         self.assertEqual(len(identity_input["profile"]["proxies"]), 1)
         self.assertEqual(len(identity_input["records"]), 1)
         self.assertEqual(len(identity_input["quarantined_records"]), 2)
@@ -852,6 +853,34 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
         self.assertNotIn("fingerprint", public_json)
         self.assertNotIn("raw.githubusercontent.com", public_json)
 
+    def test_current_alias_without_region_keeps_previous_asia_protection(self) -> None:
+        asia = proxy("JP stable", "node.example", "fake-secret-alpha")
+        ordinary = {**asia, "name": "ordinary alias"}
+        source = task(
+            "community",
+            "https://raw.githubusercontent.com/acme/community/main/sub.yaml",
+        )
+        initial = build_candidate_snapshot(
+            staging([asia], [(source, [asia], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+
+        current = build_candidate_snapshot(
+            staging(
+                [ordinary],
+                [(source, [ordinary], None)],
+                run_at="2026-08-02T00:00:00Z",
+                previous=initial,
+            ),
+            settings=IDENTITY,
+        )
+
+        self.assertEqual(len(current.ordered_candidates), 1)
+        metadata = current.ordered_candidates[0].metadata
+        self.assertEqual(metadata["region_hints"], ["JP"])
+        self.assertTrue(metadata["protected_asia"])
+        self.assertEqual(metadata["github_check_state"], "bypassed_asia")
+
     def test_validator_rejects_hash_mismatch_and_orphan_metadata(self) -> None:
         node = proxy("node", "node.example", "fake-secret")
         source = task("community", "https://raw.githubusercontent.com/acme/community/main/sub.yaml")
@@ -1286,8 +1315,25 @@ class CandidateLegacyBootstrapTests(unittest.TestCase):
             resolver=public_resolver,
         )
 
-        with self.assertRaisesRegex(CandidateSnapshotError, "publish gate rejected"):
+        with self.assertRaisesRegex(CandidateSnapshotError, "publish gate rejected") as raised:
             build_candidate_snapshot(identity_input, settings=IDENTITY)
+
+        diagnostic = json.loads(
+            str(raised.exception).removeprefix("candidate publish gate rejected: ")
+        )
+        self.assertIn("asia_retention_below_70", diagnostic["reason_codes"])
+        self.assertIn("region_JP_dropped_to_zero", diagnostic["reason_codes"])
+        self.assertEqual(diagnostic["candidate"], {"current": 2, "minimum": 2})
+        self.assertEqual(diagnostic["protected_asia"], {"current": 1, "minimum": 2})
+        serialized = json.dumps(diagnostic, sort_keys=True)
+        for sensitive in (
+            "old-jp.example",
+            "current-asia.example",
+            "old-jp-secret",
+            "current-asia-secret",
+            "raw.githubusercontent.com",
+        ):
+            self.assertNotIn(sensitive, serialized)
 
         baseline = identity_input["previous_baseline"]
         _, _, gate = evaluate_candidate_publish_gate(
@@ -1300,6 +1346,85 @@ class CandidateLegacyBootstrapTests(unittest.TestCase):
         self.assertFalse(gate["passed"])
         self.assertIn("asia_retention_below_70", gate["reasons"])
         self.assertIn("region_JP_dropped_to_zero", gate["reasons"])
+
+    def test_candidate_cli_gate_rejection_is_aggregate_only_and_creates_no_output(self) -> None:
+        source_id_sentinel = "public_deadbeefdeadbeefdeadbeef"
+        alias_sentinel = "credential-sentinel-alias"
+        token_url_sentinel = "https://private.invalid/sub?token=credential-sentinel"
+        old_jp = proxy("JP old sensitive alias", "old-sensitive.example", "old-secret-521314")
+        old_global = proxy("old global", "old-global.example", "old-global-secret")
+        old_bytes = legacy_profile_bytes([old_jp, old_global])
+        current = proxy(
+            "ASIA-KEEP current sensitive alias",
+            "current-sensitive.example",
+            "current-secret-08",
+        )
+        source = task(
+            "current",
+            "https://raw.githubusercontent.com/acme/current/main/sub.yaml",
+        )
+        sources, records = provenance_for_task(source, [current], observed_at=RUN0)
+        original_source_id = sources[0]["source_id"]
+        sources[0]["source_id"] = source_id_sentinel
+        sources[0]["alias"] = alias_sentinel
+        records[0]["source_id"] = source_id_sentinel
+        records[0]["alias"] = token_url_sentinel
+        self.assertNotEqual(original_source_id, source_id_sentinel)
+        identity_input = prepare_candidate_identity_input(
+            legacy_profile_bytes([current]),
+            {"sources": sources, "records": records},
+            run_at=RUN0,
+            mode="collect",
+            main_sha=MAIN_SHA,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="legacy_v1",
+            previous_status=legacy_status(old_bytes, protected_asia_count=1),
+            previous_profile_bytes=old_bytes,
+            resolver=public_resolver,
+        )
+
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            root = Path(directory)
+            input_path = root / "identity-input.json"
+            output_dir = root / "public"
+            write_candidate_identity_input(input_path, identity_input)
+            environment = {
+                "GMGN_IDENTITY_HMAC_KEY": IDENTITY.key.decode("utf-8"),
+                "GMGN_IDENTITY_KEY_VERSION": IDENTITY.identity_key_version,
+                "GMGN_IDENTITY_EPOCH": IDENTITY.identity_epoch,
+            }
+            stderr = __import__("io").StringIO()
+            with patch.dict(os.environ, environment), patch("sys.stderr", stderr):
+                result = candidate_snapshot._run_cli(
+                    ["build", "--input", str(input_path), "--output-dir", str(output_dir)]
+                )
+
+            self.assertEqual(result, 1)
+            self.assertFalse(output_dir.exists())
+            message = stderr.getvalue().strip()
+            self.assertTrue(message.startswith("ERROR: candidate publish gate rejected: "))
+            diagnostic = json.loads(
+                message.removeprefix("ERROR: candidate publish gate rejected: ")
+            )
+            self.assertEqual(
+                set(diagnostic),
+                {"reason_codes", "candidate", "protected_asia", "regions", "source_quorum"},
+            )
+            self.assertIn("region_JP_dropped_to_zero", diagnostic["reason_codes"])
+            for sensitive in (
+                source_id_sentinel,
+                alias_sentinel,
+                token_url_sentinel,
+                "old-sensitive.example",
+                "current-sensitive.example",
+                "old-secret-521314",
+                "current-secret-08",
+                "aes-128-gcm",
+            ):
+                self.assertNotIn(sensitive, message)
 
     def test_legacy_baseline_accepts_v1_fields_that_candidate_v2_rejects(self) -> None:
         legacy_nodes = [
@@ -1689,7 +1814,12 @@ class CandidatePublishGateTests(unittest.TestCase):
 
     def _sources(self, healthy: int) -> dict:
         return {
-            f"source-{index}": {"visibility": "public", "health_state": "healthy" if index < healthy else "observing_failure"}
+            f"source-{index}": {
+                "source_kind": "fixed",
+                "configured_this_run": True,
+                "last_event": "success" if index < healthy else "timeout",
+                "health_state": "healthy" if index < healthy else "observing_failure",
+            }
             for index in range(5)
         }
 
@@ -1717,6 +1847,100 @@ class CandidatePublishGateTests(unittest.TestCase):
         self.assertIn("region_HK_retention_below_50", gate["reasons"])
         self.assertIn("region_HK_dropped_to_zero", gate["reasons"])
         self.assertIn("source_quorum_below_80", gate["reasons"])
+
+    def test_dynamic_sources_do_not_pollute_fixed_source_quorum(self) -> None:
+        sources = self._sources(4)
+        sources.update(
+            {
+                f"dynamic-{index}": {
+                    "source_kind": "dynamic",
+                    "configured_this_run": True,
+                    "last_event": "timeout",
+                    "health_state": "observing_failure",
+                }
+                for index in range(200)
+            }
+        )
+
+        _, quorum, gate = evaluate_candidate_publish_gate(
+            candidate_count=60,
+            protected_asia_count=7,
+            region_counts={"HK": 1, "JP": 1, "KR": 1, "SG": 1, "TW": 1, "unknown": 55},
+            sources=sources,
+            previous=self._previous(),
+        )
+
+        self.assertTrue(gate["passed"])
+        self.assertEqual(quorum["eligible"], 5)
+        self.assertEqual(quorum["healthy_or_last_good"], 4)
+
+    def test_zero_configured_fixed_sources_fails_closed(self) -> None:
+        _, quorum, gate = evaluate_candidate_publish_gate(
+            candidate_count=60,
+            protected_asia_count=7,
+            region_counts={"HK": 1, "JP": 1, "KR": 1, "SG": 1, "TW": 1, "unknown": 55},
+            sources={
+                "dynamic": {
+                    "source_kind": "dynamic",
+                    "configured_this_run": True,
+                    "last_event": "success",
+                    "health_state": "healthy",
+                }
+            },
+            previous=self._previous(),
+        )
+
+        self.assertFalse(gate["passed"])
+        self.assertEqual(quorum["eligible"], 0)
+        self.assertEqual(quorum["ratio"], 0.0)
+        self.assertIn("source_quorum_below_80", gate["reasons"])
+
+    def test_quorum_accepts_success_confirmed_missing_and_last_good_only(self) -> None:
+        sources = {
+            "success": {
+                "source_kind": "fixed",
+                "configured_this_run": True,
+                "last_event": "success",
+                "health_state": "healthy",
+            },
+            "confirmed": {
+                "source_kind": "fixed",
+                "configured_this_run": True,
+                "last_event": "success",
+                "health_state": "confirmed_missing",
+            },
+            "last-good": {
+                "source_kind": "fixed",
+                "configured_this_run": True,
+                "last_event": "timeout",
+                "health_state": "using_last_good",
+            },
+            "empty": {
+                "source_kind": "fixed",
+                "configured_this_run": True,
+                "last_event": "empty",
+                "health_state": "observing_failure",
+            },
+            "failure": {
+                "source_kind": "fixed",
+                "configured_this_run": True,
+                "last_event": "network_error",
+                "health_state": "observing_failure",
+            },
+        }
+
+        _, quorum, gate = evaluate_candidate_publish_gate(
+            candidate_count=60,
+            protected_asia_count=7,
+            region_counts={"HK": 1, "JP": 1, "KR": 1, "SG": 1, "TW": 1, "unknown": 55},
+            sources=sources,
+            previous=self._previous(),
+        )
+
+        self.assertFalse(gate["passed"])
+        self.assertEqual(quorum["eligible"], 5)
+        self.assertEqual(quorum["healthy_or_last_good"], 3)
+        self.assertEqual(quorum["ratio"], 0.6)
 
 if __name__ == "__main__":
     unittest.main()
