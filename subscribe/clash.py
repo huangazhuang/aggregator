@@ -616,7 +616,12 @@ def verify(item: dict, mihomo: bool = True) -> bool:
                         return False
 
                     short_id = reality_opts["short-id"]
-                    if type(short_id) != str:
+                    # ``verify`` normalizes valid REALITY short IDs to
+                    # ``QuotedStr`` so YAML emitters preserve leading zeroes.
+                    # QuotedStr is a str subclass, therefore accepting only
+                    # the exact built-in type makes a second verification
+                    # reject an otherwise valid, already-normalized proxy.
+                    if not isinstance(short_id, str):
                         if utils.is_number(short_id):
                             short_id = str(short_id)
                         else:

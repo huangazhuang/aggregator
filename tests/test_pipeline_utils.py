@@ -12,6 +12,7 @@ from scripts.pipeline_utils import (
     filtered_profile,
     normalize_reality_short_ids,
 )
+from subscribe import clash
 
 
 class PublishFloorTests(unittest.TestCase):
@@ -42,6 +43,46 @@ class PublishFloorTests(unittest.TestCase):
 
 
 class RealitySerializationTests(unittest.TestCase):
+    def test_reality_proxy_validation_is_idempotent_after_short_id_quoting(self) -> None:
+        proxy = {
+            "name": "reality",
+            "type": "vless",
+            "server": "public.example",
+            "port": 443,
+            "uuid": "12345678-1234-1234-1234-123456789abc",
+            "network": "tcp",
+            "tls": True,
+            "reality-opts": {
+                "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "short-id": "54462e21",
+            },
+        }
+
+        self.assertTrue(clash.verify(proxy, mihomo=True))
+        self.assertIsInstance(proxy["reality-opts"]["short-id"], clash.QuotedStr)
+        self.assertTrue(clash.verify(proxy, mihomo=True))
+
+    def test_reality_proxy_validation_still_rejects_bad_short_ids(self) -> None:
+        base = {
+            "name": "reality",
+            "type": "vless",
+            "server": "public.example",
+            "port": 443,
+            "uuid": "12345678-1234-1234-1234-123456789abc",
+            "network": "tcp",
+            "tls": True,
+            "reality-opts": {
+                "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "short-id": "",
+            },
+        }
+
+        for short_id in ("abc", "zz", "001122334455667788"):
+            with self.subTest(short_id=short_id):
+                proxy = yaml.safe_load(yaml.safe_dump(base))
+                proxy["reality-opts"]["short-id"] = short_id
+                self.assertFalse(clash.verify(proxy, mihomo=True))
+
     def test_numeric_looking_short_ids_remain_quoted_strings(self) -> None:
         profile = {
             "proxies": [
