@@ -9,9 +9,10 @@ import unittest
 from pathlib import Path
 
 from scripts.gmgn_history import empty_history, reduce_history
-from scripts.gmgn_measurement import VALIDITY_POLICY_VERSION
+from scripts.gmgn_measurement import ERROR_CATEGORIES, VALIDITY_POLICY_VERSION
 from scripts.gmgn_region import REGION_POLICY_VERSION
 from scripts.gmgn_selection import (
+    NODE_STATUS_SCHEMA_VERSION,
     SELECTION_POLICY_VERSION,
     V2_GROUP_NAMES,
 )
@@ -138,7 +139,7 @@ def selection_fixture(
     }
     node_status = {
         "kind": "cnb-gmgn-node-status",
-        "schema_version": 1,
+        "schema_version": NODE_STATUS_SCHEMA_VERSION,
         "run_id": run_id,
         "source_sha256": source_sha,
         "main_sha": MAIN_SHA,
@@ -169,6 +170,7 @@ def selection_fixture(
                 "over_1000_count": 0,
                 "no_result_count": 0,
                 "timeout_count": 0,
+                "error_counts": {category: 0 for category in ERROR_CATEGORIES},
                 "first_half_within_1000_count": 10,
                 "second_half_within_1000_count": 10,
                 "median_delay_ms": 80.0,
@@ -397,6 +399,23 @@ class PublishBundleTests(unittest.TestCase):
         selection = selection_fixture()
         selection["node_status"]["nodes"][0]["timeout_count"] = 1
         with self.assertRaisesRegex(PublicationError, "timeout count"):
+            build_publish_bundle(
+                selection_result=selection,
+                history=history_fixture(),
+                diagnostics=diagnostics_fixture(),
+                runtime={
+                    "python_version": "3.12",
+                    "pyyaml_version": "6.0.2",
+                    "mihomo_version": "fixture",
+                    "mihomo_sha256": "4" * 64,
+                },
+                accepted_at=ACCEPTED_AT,
+                source_run_at=SOURCE_RUN_AT,
+            )
+
+        selection = selection_fixture()
+        selection["node_status"]["nodes"][0]["error_counts"]["target_403"] = 1
+        with self.assertRaisesRegex(PublicationError, "error counts do not conserve"):
             build_publish_bundle(
                 selection_result=selection,
                 history=history_fixture(),

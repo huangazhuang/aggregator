@@ -31,6 +31,7 @@ from scripts.gmgn_history import (
     validate_history,
 )
 from scripts.gmgn_measurement import (
+    ERROR_CATEGORIES,
     MINIMUM_OBSERVATION_WINDOW_SECONDS,
     SHARD_COUNT,
     TOTAL_ROUNDS,
@@ -252,6 +253,7 @@ NODE_STATUS_ENTRY_FIELDS = frozenset(
         "over_1000_count",
         "no_result_count",
         "timeout_count",
+        "error_counts",
         "first_half_within_1000_count",
         "second_half_within_1000_count",
         "median_delay_ms",
@@ -662,6 +664,15 @@ def _validate_node_status(
             raise PublicationError("node-status region confidence is unsupported")
         for field in count_fields:
             node[field] = _non_negative_int(node[field], f"node-status {field}")
+        error_counts = node["error_counts"]
+        if not isinstance(error_counts, Mapping) or set(error_counts) != set(ERROR_CATEGORIES):
+            raise PublicationError("node-status error categories are incomplete")
+        node["error_counts"] = {
+            category: _non_negative_int(
+                error_counts[category], f"node-status error_counts.{category}"
+            )
+            for category in ERROR_CATEGORIES
+        }
         if node["response_count"] != node["within_1000_count"] + node["slow_response_count"]:
             raise PublicationError("node-status response counts do not conserve")
         if node["under_1000_count"] != node["within_1000_count"]:
@@ -672,6 +683,10 @@ def _validate_node_status(
             raise PublicationError("node-status attempts do not equal twenty rounds")
         if node["timeout_count"] > node["no_result_count"]:
             raise PublicationError("node-status timeout count exceeds no-result attempts")
+        if sum(node["error_counts"].values()) != node["no_result_count"]:
+            raise PublicationError("node-status error counts do not conserve")
+        if node["timeout_count"] != node["error_counts"]["client_timeout"]:
+            raise PublicationError("node-status timeout count disagrees with error counts")
         if (
             node["first_half_within_1000_count"]
             + node["second_half_within_1000_count"]

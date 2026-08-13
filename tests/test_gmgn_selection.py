@@ -255,13 +255,18 @@ class SelectionBoundaryTests(unittest.TestCase):
         self.assertNotIn(cid(4), result["priority_ids"])
         self.assertNotIn(cid(4), result["auto_ids"])
 
-    def test_unknown_region_never_gets_asia_threshold_but_can_pass_non_asia_strict(self):
-        records = [candidate_record(10), candidate_record(11)]
+    def test_unverified_region_never_enters_a_strict_tier(self):
+        records = [candidate_record(10), candidate_record(11), candidate_record(12)]
         measurements = [
             measurement(10, within=14, response=14, first=7, second=7),
             measurement(11, within=16, response=16, first=8, second=8),
+            measurement(12, within=20, response=20, first=10, second=10),
         ]
-        unknown = [region(10, country="US", confidence="source-specific"), region(11, country="US", confidence="verified")]
+        unknown = [
+            region(10, country="US", confidence="source-specific"),
+            region(11, country="US", confidence="verified"),
+            region(12, country="US", confidence="unknown"),
+        ]
         unknown[0]["source_region"] = "JP"
 
         result = select_candidates_v2(selection_input(records, measurements, unknown))
@@ -269,6 +274,10 @@ class SelectionBoundaryTests(unittest.TestCase):
         self.assertIn(cid(10), result["tier_ids"]["asia_manual_candidate"])
         self.assertIn(cid(11), result["tier_ids"]["non_asia_stable"])
         self.assertNotIn(cid(10), result["priority_ids"])
+        self.assertNotIn(cid(12), {item["candidate_id"] for item in result["selected"]})
+        statuses = {item["candidate_id"]: item for item in result["node_status"]["nodes"]}
+        self.assertIsNone(statuses[cid(12)]["eligible_tier"])
+        self.assertEqual(statuses[cid(12)]["reason"], "region_unknown_unverified")
 
     def test_history_bad_one_is_retained_but_confirmed_missing_is_not_reintroduced(self):
         record = candidate_record(4)
@@ -428,6 +437,8 @@ class GroupAndPrivacyTests(unittest.TestCase):
 
         self.assertEqual(first["priority_ids"], second["priority_ids"])
         self.assertEqual(first["tier_ids"], second["tier_ids"])
+        self.assertEqual(first["selection_policy_version"], "gmgn-selection-v3")
+        self.assertEqual(first["node_status"]["schema_version"], 2)
         public = json.dumps(first["node_status"], ensure_ascii=False)
         for secret in ("secret-", "node-400.example", "public_", '"server"', '"port"'):
             self.assertNotIn(secret, public)
@@ -452,6 +463,7 @@ class GroupAndPrivacyTests(unittest.TestCase):
                 "over_1000_count",
                 "no_result_count",
                 "timeout_count",
+                "error_counts",
                 "first_half_within_1000_count",
                 "second_half_within_1000_count",
                 "median_delay_ms",
@@ -463,9 +475,18 @@ class GroupAndPrivacyTests(unittest.TestCase):
         )
 
     def test_node_status_keeps_timeout_separate_from_slow_and_other_failures(self):
-        measured = measurement(450, within=14, response=17, first=7, second=7)
-        measured["error_counts"]["client_timeout"] = 1
-        measured["error_counts"]["connect"] = 2
+        measured = measurement(450, within=14, response=14, first=7, second=7)
+        measured["error_counts"] = {category: 0 for category in ERROR_CATEGORIES}
+        measured["error_counts"].update(
+            {
+                "target_403": 1,
+                "target_429": 1,
+                "connect": 1,
+                "client_timeout": 1,
+                "controller_request": 1,
+                "controller_unhealthy": 1,
+            }
+        )
         result = select_candidates_v2(
             selection_input(
                 [candidate_record(450)],
@@ -476,9 +497,11 @@ class GroupAndPrivacyTests(unittest.TestCase):
 
         status = result["node_status"]["nodes"][0]
         self.assertEqual(status["under_1000_count"], 14)
-        self.assertEqual(status["over_1000_count"], 3)
+        self.assertEqual(status["over_1000_count"], 0)
         self.assertEqual(status["timeout_count"], 1)
-        self.assertEqual(status["no_result_count"], 3)
+        self.assertEqual(status["no_result_count"], 6)
+        self.assertEqual(status["error_counts"], measured["error_counts"])
+        self.assertEqual(sum(status["error_counts"].values()), status["no_result_count"])
 
 
 if __name__ == "__main__":

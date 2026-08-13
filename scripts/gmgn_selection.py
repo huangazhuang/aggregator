@@ -31,13 +31,13 @@ from scripts.pipeline_utils import BUILTIN_PROXY_NAMES, dump_clash_yaml
 from scripts.proxy_identity import validate_identity_version, validate_public_id
 
 
-SELECTION_POLICY_VERSION = "gmgn-selection-v2"
+SELECTION_POLICY_VERSION = "gmgn-selection-v3"
 SELECTION_INPUT_KIND = "cnb-gmgn-selection-input"
 SELECTION_INPUT_SCHEMA_VERSION = 1
 SELECTION_RESULT_KIND = "cnb-gmgn-selection-result"
 SELECTION_RESULT_SCHEMA_VERSION = 1
 NODE_STATUS_KIND = "cnb-gmgn-node-status"
-NODE_STATUS_SCHEMA_VERSION = 1
+NODE_STATUS_SCHEMA_VERSION = 2
 DESIRED_CAPACITY = 80
 MAX_NODES = 150
 NON_ASIA_BASE_LIMIT = 10
@@ -514,10 +514,10 @@ def _classify(candidate: Mapping[str, Any]) -> tuple[str | None, str, bool]:
         return None, "new_asia_zero_response", True
     if protected:
         return "history_protected", "history_region_unavailable", True
+    if region["confidence"] == "unknown":
+        return None, "region_unknown_unverified", False
     if within >= 16:
         return "non_asia_stable", "non_asia_eligible", False
-    if region["confidence"] == "unknown":
-        return None, "region_unknown_below_threshold", False
     return None, "non_asia_below_threshold", False
 
 
@@ -926,6 +926,7 @@ def select_candidates_v2(raw_input: Mapping[str, Any], *, max_nodes: int = MAX_N
                 "over_1000_count": measurement["slow_response_count"],
                 "no_result_count": measurement["no_result_count"],
                 "timeout_count": measurement["error_counts"]["client_timeout"],
+                "error_counts": copy.deepcopy(measurement["error_counts"]),
                 "first_half_within_1000_count": measurement[
                     "first_half_within_1000_count"
                 ],

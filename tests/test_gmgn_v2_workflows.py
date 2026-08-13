@@ -135,6 +135,21 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(publish_stage["timeout"], "30m")
 
+    def test_v2_host_coordinator_installs_its_complete_import_closure(self) -> None:
+        """The CNB host imports coordinator dependencies before child-image use."""
+        pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
+        coordinator_stage = next(
+            stage
+            for stage in pipeline["stages"]
+            if stage["name"] == "Parse and deduplicate the manual V2 trigger"
+        )
+        script = coordinator_stage["script"]
+        self.assertIn("PyYAML==6.0.3", script)
+        self.assertIn("pycryptodomex==3.23.0", script)
+        self.assertIn("python3 -m scripts.cnb_gmgn_v2 trigger", script)
+        self.assertIn("python3 -m scripts.cnb_gmgn_v2 preflight", script)
+        self.assertIn("python3 -m scripts.cnb_gmgn_v2 processed", script)
+
     def test_only_offline_identity_jobs_import_the_secret_repository(self) -> None:
         v2_pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
         self.assertNotIn("imports", v2_pipeline)

@@ -599,7 +599,9 @@ main:
           script: |
             set -eu
             umask 077
-            python3 -m pip install --user --disable-pip-version-check PyYAML==6.0.3
+            python3 -m pip install --user --disable-pip-version-check \
+              PyYAML==6.0.3 \
+              pycryptodomex==3.23.0
             test -n "${CNB_BRANCH:-}"
             test -n "${CNB_REPO_SLUG:-}"
             mkdir -p .cnb-runtime/gmgn-v2/preflight
