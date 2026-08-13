@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -149,6 +152,68 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 -m scripts.cnb_gmgn_v2 trigger", script)
         self.assertIn("python3 -m scripts.cnb_gmgn_v2 preflight", script)
         self.assertIn("python3 -m scripts.cnb_gmgn_v2 processed", script)
+
+    def test_v2_cnb_scripts_are_posix_shell_compatible(self) -> None:
+        pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
+        scripts: list[tuple[str, str]] = []
+
+        def collect(label: str, value: object) -> None:
+            if isinstance(value, dict):
+                script = value.get("script")
+                if isinstance(script, str):
+                    scripts.append((label, script))
+                for key, nested in value.items():
+                    if key != "script":
+                        collect(f"{label}.{key}", nested)
+            elif isinstance(value, list):
+                for index, nested in enumerate(value):
+                    collect(f"{label}[{index}]", nested)
+
+        collect("v2", pipeline)
+        self.assertEqual(len(scripts), 11)
+        bash_array = re.compile(
+            r"(?m)(?:^|[; ])\w+\+?=\s*\(|\$\{\w+\[(?:@|\*)\]\}"
+        )
+        for label, script in scripts:
+            with self.subTest(script=label):
+                self.assertIsNone(bash_array.search(script))
+
+        shell = shutil.which("sh")
+        if shell is None:
+            return
+        for label, script in scripts:
+            with self.subTest(posix_parse=label):
+                parsed = subprocess.run(
+                    [shell, "-n"],
+                    input=script.encode("utf-8"),
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(parsed.returncode, 0, parsed.stderr.decode("utf-8"))
+
+    def test_v2_failure_stage_filter_keeps_safe_hyphenated_categories(self) -> None:
+        pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
+        failure_script = pipeline["failStages"][0]["script"]
+        self.assertIn("stage=preflight", failure_script)
+        self.assertIn("identity-config|prepare|fetch", failure_script)
+        match = re.search(r"tr -cd '([^']+)'", failure_script)
+        self.assertIsNotNone(match)
+        allowlist = match.group(1)
+        self.assertTrue(allowlist.endswith(r"\n-"))
+
+        if os.name == "nt":
+            return
+        tr = shutil.which("tr")
+        self.assertIsNotNone(tr)
+        filtered = subprocess.run(
+            [tr, "-cd", allowlist],
+            input=b"probe-shard-2?\nignored",
+            capture_output=True,
+            check=False,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        self.assertEqual(filtered.returncode, 0, filtered.stderr.decode("utf-8"))
+        self.assertEqual(filtered.stdout.splitlines()[0], b"probe-shard-2")
 
     def test_only_offline_identity_jobs_import_the_secret_repository(self) -> None:
         v2_pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]

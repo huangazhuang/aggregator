@@ -667,24 +667,23 @@ main:
             retry_of="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_of"] or "")')"
             retry_token_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_token_sha256"] or "")')"
             processed_tip="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["processed_tip"] or "absent")')"
-            processed_args=(
-              --source-sha "${source_sha}"
-              --attempt-id "${attempt_id}"
-              --state running
-              --remote "${remote_url}"
-              --work-dir .cnb-runtime/gmgn-v2/processed-running
+            set -- \
+              --source-sha "${source_sha}" \
+              --attempt-id "${attempt_id}" \
+              --state running \
+              --remote "${remote_url}" \
+              --work-dir .cnb-runtime/gmgn-v2/processed-running \
               --expected-tip "${processed_tip}"
-            )
-            if [ -n "${retry_of}" ]; then processed_args+=(--retry-of "${retry_of}"); fi
-            if [ -n "${retry_token_sha}" ]; then processed_args+=(--retry-token-sha256 "${retry_token_sha}"); fi
+            if [ -n "${retry_of}" ]; then set -- "$@" --retry-of "${retry_of}"; fi
+            if [ -n "${retry_token_sha}" ]; then set -- "$@" --retry-token-sha256 "${retry_token_sha}"; fi
             if [ "${processed_tip}" = absent ] && [ -n "${retry_of}" ]; then
-              processed_args+=(--allow-missing-primary)
+              set -- "$@" --allow-missing-primary
             fi
             env -u GMGN_IDENTITY_HMAC_KEY \
               -u GMGN_IDENTITY_KEY_VERSION \
               -u GMGN_IDENTITY_EPOCH \
               GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
-              python3 -m scripts.cnb_gmgn_v2 processed "${processed_args[@]}"
+              python3 -m scripts.cnb_gmgn_v2 processed "$@"
 
             main_sha="$(git rev-parse HEAD)"
             child_image="${V2_CHILD_IMAGE}:${main_sha}"
@@ -1062,9 +1061,9 @@ main:
           timeout: 2m
           script: |
             set -eu
-            stage=unknown
+            stage=preflight
             if test -s .cnb-runtime/gmgn-v2/current-stage.txt; then
-              stage="$(tr -cd 'A-Za-z0-9._-\n' < .cnb-runtime/gmgn-v2/current-stage.txt | head -n 1)"
+              stage="$(tr -cd 'A-Za-z0-9._\n-' < .cnb-runtime/gmgn-v2/current-stage.txt | head -n 1)"
             fi
             printf 'GMGN V2 shadow failed closed at safe stage category: %s\n' "${stage:-unknown}"
             printf '%s\n' 'No private fragment, proxy configuration, raw region, token, or identity key was published.'
@@ -1081,14 +1080,19 @@ main:
               retry_token_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/preflight.json", encoding="utf-8"))["retry_token_sha256"] or "")')"
               processed_state=rejected
               case "${stage:-unknown}" in
-                preflight|identity-config|fetch|probe-shard-*|redact|finalize|publish) processed_state=failed_infrastructure ;;
+                preflight|identity-config|prepare|fetch|probe-shard-*|redact|finalize|publish) processed_state=failed_infrastructure ;;
               esac
-              processed_args=(--source-sha "${source_sha}" --attempt-id "${attempt_id}" --state "${processed_state}" --remote "${remote_url}" --work-dir .cnb-runtime/gmgn-v2/processed-failed)
-              if [ -n "${retry_of}" ]; then processed_args+=(--retry-of "${retry_of}"); fi
-              if [ -n "${retry_token_sha}" ]; then processed_args+=(--retry-token-sha256 "${retry_token_sha}"); fi
+              set -- \
+                --source-sha "${source_sha}" \
+                --attempt-id "${attempt_id}" \
+                --state "${processed_state}" \
+                --remote "${remote_url}" \
+                --work-dir .cnb-runtime/gmgn-v2/processed-failed
+              if [ -n "${retry_of}" ]; then set -- "$@" --retry-of "${retry_of}"; fi
+              if [ -n "${retry_token_sha}" ]; then set -- "$@" --retry-token-sha256 "${retry_token_sha}"; fi
               env -u GMGN_IDENTITY_HMAC_KEY -u GMGN_IDENTITY_KEY_VERSION -u GMGN_IDENTITY_EPOCH \
                 GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
-                python3 -m scripts.cnb_gmgn_v2 processed "${processed_args[@]}" || \
+                python3 -m scripts.cnb_gmgn_v2 processed "$@" || \
                 printf '%s\n' 'WARNING: processed-state failure transition could not be recorded.' >&2
             fi
 
