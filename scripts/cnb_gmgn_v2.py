@@ -49,6 +49,8 @@ from scripts.asia_source_registry import (
     estimate_gmgn_capacity,
 )
 from scripts.candidate_snapshot import (
+    CANDIDATE_METADATA_KIND,
+    CANDIDATE_STATUS_KIND,
     CandidateSnapshotEntry,
     validate_candidate_snapshot,
 )
@@ -134,17 +136,25 @@ RAW_REGION_SCHEMA_VERSION = 1
 OPAQUE_REGION_KIND = "cnb-gmgn-region-observations"
 OPAQUE_REGION_SCHEMA_VERSION = 1
 TRIGGER_KIND = "cnb-gmgn-v2-trigger"
-TRIGGER_SCHEMA_VERSION = 1
+TRIGGER_SCHEMA_VERSION = 2
 PREFLIGHT_KIND = "cnb-gmgn-v2-preflight"
-PREFLIGHT_SCHEMA_VERSION = 1
+PREFLIGHT_SCHEMA_VERSION = 2
 TRIGGER_FIELDS = frozenset(
-    {"kind", "schema_version", "source_sha256", "retry", "retry_token"}
+    {
+        "kind",
+        "schema_version",
+        "source_sha256",
+        "candidate_commit",
+        "retry",
+        "retry_token",
+    }
 )
 PREFLIGHT_FIELDS = frozenset(
     {
         "kind",
         "schema_version",
         "source_sha256",
+        "candidate_commit",
         "retry",
         "attempt_id",
         "retry_of",
@@ -158,11 +168,12 @@ PREFLIGHT_FIELDS = frozenset(
 )
 INTERNAL_GROUP = "__gmgn_v2_probe__"
 
-NORMAL_TAG_RE = re.compile(r"^cnb-gmgn-v2-([0-9a-f]{64})$")
+NORMAL_TAG_RE = re.compile(r"^cnb-gmgn-v2-([0-9a-f]{64})-([0-9a-f]{40})$")
 RETRY_TAG_RE = re.compile(
-    r"^cnb-gmgn-v2-retry-([0-9a-f]{64})-([A-Za-z0-9][A-Za-z0-9._-]{0,63})$"
+    r"^cnb-gmgn-v2-retry-([0-9a-f]{64})-([0-9a-f]{40})-([A-Za-z0-9][A-Za-z0-9._-]{0,63})$"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 DIRECT_TARGETS: dict[str, dict[str, Any]] = {
     "control-gmgn-v1": {
@@ -284,6 +295,7 @@ def parse_trigger_tag(tag: str) -> dict[str, Any]:
     match = NORMAL_TAG_RE.fullmatch(value)
     if match is not None:
         source_sha = match.group(1)
+        candidate_commit = match.group(2)
         retry = False
         retry_token = None
     else:
@@ -291,12 +303,14 @@ def parse_trigger_tag(tag: str) -> dict[str, Any]:
         if retry_match is None:
             raise CoordinatorError("V2 trigger tag is malformed")
         source_sha = retry_match.group(1)
+        candidate_commit = retry_match.group(2)
         retry = True
-        retry_token = retry_match.group(2)
+        retry_token = retry_match.group(3)
     return {
         "kind": TRIGGER_KIND,
         "schema_version": TRIGGER_SCHEMA_VERSION,
         "source_sha256": source_sha,
+        "candidate_commit": candidate_commit,
         "retry": retry,
         "retry_token": retry_token,
     }
@@ -307,6 +321,7 @@ def _load_preflight_attempt(
     trigger_path: str | Path,
     *,
     expected_source_sha256: str,
+    expected_candidate_commit: str,
 ) -> Attempt:
     preflight = _load_json(preflight_path)
     trigger = _load_json(trigger_path)
@@ -325,6 +340,14 @@ def _load_preflight_attempt(
     source = str(expected_source_sha256).lower()
     if preflight["source_sha256"] != source or trigger["source_sha256"] != source:
         raise CoordinatorError("prepared source SHA differs from preflight or trigger")
+    candidate_commit = str(expected_candidate_commit).lower()
+    if not GIT_SHA_RE.fullmatch(candidate_commit):
+        raise CoordinatorError("expected candidate commit is malformed")
+    if (
+        preflight["candidate_commit"] != candidate_commit
+        or trigger["candidate_commit"] != candidate_commit
+    ):
+        raise CoordinatorError("prepared candidate commit differs from preflight or trigger")
     retry = trigger["retry"]
     if not isinstance(retry, bool) or preflight["retry"] is not retry:
         raise CoordinatorError("prepared retry flag differs from preflight")
@@ -511,6 +534,9 @@ def _preflight(args: argparse.Namespace) -> int:
     source_sha = str(args.source_sha).lower()
     if not SHA256_RE.fullmatch(source_sha):
         raise CoordinatorError("preflight source SHA is malformed")
+    candidate_commit = str(args.candidate_commit).lower()
+    if not GIT_SHA_RE.fullmatch(candidate_commit):
+        raise CoordinatorError("preflight candidate commit is malformed")
     work_dir = Path(args.work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     previous, history, run_index = _remote_previous(args.remote, work_dir)
@@ -538,13 +564,25 @@ def _preflight(args: argparse.Namespace) -> int:
                     "--refs",
                     "--tags",
                     args.remote,
+                    f"refs/tags/cnb-gmgn-v2-{source_sha}-{candidate_commit}",
+                ],
+                cwd=work_dir,
+            )
+            legacy_queued_lookup = _git_command(
+                [
+                    "ls-remote",
+                    "--refs",
+                    "--tags",
+                    args.remote,
                     f"refs/tags/cnb-gmgn-v2-{source_sha}",
                 ],
                 cwd=work_dir,
             )
-            if queued_lookup.returncode != 0:
+            if queued_lookup.returncode != 0 or legacy_queued_lookup.returncode != 0:
                 raise CoordinatorError("primary trigger lookup was unreadable")
-            queued_primary = bool(queued_lookup.stdout.strip())
+            queued_primary = bool(
+                queued_lookup.stdout.strip() or legacy_queued_lookup.stdout.strip()
+            )
             decision, attempt = decide_attempt(
                 source_sha,
                 retry_token=retry_token,
@@ -559,6 +597,7 @@ def _preflight(args: argparse.Namespace) -> int:
         "kind": PREFLIGHT_KIND,
         "schema_version": PREFLIGHT_SCHEMA_VERSION,
         "source_sha256": source_sha,
+        "candidate_commit": candidate_commit,
         "retry": bool(args.retry),
         "attempt_id": attempt.attempt_id,
         "retry_of": attempt.retry_of,
@@ -619,6 +658,19 @@ def _fetch_candidate(args: argparse.Namespace) -> int:
     expected = str(args.expected_source_sha).lower()
     if not SHA256_RE.fullmatch(expected):
         raise CoordinatorError("expected candidate source SHA is malformed")
+    candidate_commit = str(args.expected_candidate_commit).lower()
+    if not GIT_SHA_RE.fullmatch(candidate_commit):
+        raise CoordinatorError("expected candidate commit is malformed")
+    for url in (args.profile_url, args.status_url, args.metadata_url):
+        parsed = urllib.parse.urlsplit(str(url))
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or candidate_commit not in parsed.path.split("/")
+        ):
+            raise CoordinatorError("candidate URL is not bound to the expected immutable revision")
     destination = Path(args.output_dir).resolve()
     nonce = secrets.token_hex(16)
     status_bytes = fetch_no_cache(args.status_url, nonce=nonce)
@@ -631,6 +683,8 @@ def _fetch_candidate(args: argparse.Namespace) -> int:
         raise CoordinatorError("candidate sidecars are invalid JSON") from exc
     if not isinstance(status, Mapping) or not isinstance(metadata, Mapping):
         raise CoordinatorError("candidate sidecars must be JSON objects")
+    if status.get("kind") != CANDIDATE_STATUS_KIND or metadata.get("kind") != CANDIDATE_METADATA_KIND:
+        raise CoordinatorError("candidate sidecar kinds are unsupported")
     actual = hashlib.sha256(profile_bytes).hexdigest()
     if actual != expected or status.get("profile_sha256") != expected:
         raise CoordinatorError("candidate profile SHA differs from the manual trigger")
@@ -747,6 +801,7 @@ def _prepare(args: argparse.Namespace) -> int:
         args.preflight,
         args.trigger,
         expected_source_sha256=expected,
+        expected_candidate_commit=str(args.expected_candidate_commit),
     )
     manifest, shards = build_manifest_v3(
         snapshot,
@@ -1788,6 +1843,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     preflight = commands.add_parser("preflight")
     preflight.add_argument("--source-sha", required=True)
+    preflight.add_argument("--candidate-commit", required=True)
     preflight.add_argument("--remote", required=True)
     preflight.add_argument("--work-dir", required=True)
     preflight.add_argument("--output", required=True)
@@ -1815,6 +1871,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--status-url", required=True)
     fetch.add_argument("--metadata-url", required=True)
     fetch.add_argument("--expected-source-sha", required=True)
+    fetch.add_argument("--expected-candidate-commit", required=True)
     fetch.add_argument("--output-dir", required=True)
 
     prepare = commands.add_parser("prepare")
@@ -1822,6 +1879,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--status", required=True)
     prepare.add_argument("--metadata", required=True)
     prepare.add_argument("--expected-source-sha", required=True)
+    prepare.add_argument("--expected-candidate-commit", required=True)
     prepare.add_argument("--expected-main-sha", required=True)
     prepare.add_argument("--mihomo", required=True)
     prepare.add_argument("--identity-fixture", required=True)

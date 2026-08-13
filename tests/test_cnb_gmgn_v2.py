@@ -18,6 +18,7 @@ from scripts.publish_transaction import PreviousState
 
 
 SOURCE_SHA = "1" * 64
+CANDIDATE_COMMIT = "a" * 40
 
 
 def auxiliary_targets() -> dict[str, dict]:
@@ -46,16 +47,27 @@ class TriggerAndPreflightTests(unittest.TestCase):
         return tempfile.TemporaryDirectory(dir=preferred or None)
 
     def test_full_sha_tags_are_strict_and_retry_is_explicit(self) -> None:
-        normal = cnb_gmgn_v2.parse_trigger_tag(f"cnb-gmgn-v2-{SOURCE_SHA}")
+        normal = cnb_gmgn_v2.parse_trigger_tag(
+            f"cnb-gmgn-v2-{SOURCE_SHA}-{CANDIDATE_COMMIT}"
+        )
         self.assertEqual(normal["source_sha256"], SOURCE_SHA)
+        self.assertEqual(normal["candidate_commit"], CANDIDATE_COMMIT)
+        self.assertEqual(normal["schema_version"], 2)
         self.assertFalse(normal["retry"])
         retry = cnb_gmgn_v2.parse_trigger_tag(
-            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-infra-2"
+            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-{CANDIDATE_COMMIT}-infra-2"
         )
         self.assertTrue(retry["retry"])
         self.assertEqual(retry["retry_token"], "infra-2")
-        with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "malformed"):
-            cnb_gmgn_v2.parse_trigger_tag("cnb-gmgn-v2-1234")
+        for malformed in (
+            "cnb-gmgn-v2-1234",
+            f"cnb-gmgn-v2-{SOURCE_SHA}",
+            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-infra-2",
+        ):
+            with self.subTest(tag=malformed), self.assertRaisesRegex(
+                cnb_gmgn_v2.CoordinatorError, "malformed"
+            ):
+                cnb_gmgn_v2.parse_trigger_tag(malformed)
 
     def test_mihomo_version_probe_uses_a_minimal_secret_free_environment(self) -> None:
         captured = {}
@@ -93,21 +105,25 @@ class TriggerAndPreflightTests(unittest.TestCase):
         profile = b"proxies: []\n"
         status = json.dumps(
             {
+                "kind": cnb_gmgn_v2.CANDIDATE_STATUS_KIND,
                 "profile_sha256": "0" * 64,
                 "candidate_metadata_sha256": "0" * 64,
             }
         ).encode("utf-8")
-        metadata = b"{}\n"
+        metadata = json.dumps({"kind": cnb_gmgn_v2.CANDIDATE_METADATA_KIND}).encode(
+            "utf-8"
+        )
         payloads = [status, profile, metadata]
 
         with self.temporary_directory() as directory:
             output = Path(directory) / "candidate-staging"
             args = Namespace(
                 expected_source_sha=SOURCE_SHA,
+                expected_candidate_commit=CANDIDATE_COMMIT,
                 output_dir=str(output),
-                status_url="https://example.invalid/status.json",
-                profile_url="https://example.invalid/clash.yaml",
-                metadata_url="https://example.invalid/candidate-metadata.json",
+                status_url=f"https://example.invalid/{CANDIDATE_COMMIT}/status.json",
+                profile_url=f"https://example.invalid/{CANDIDATE_COMMIT}/clash.yaml",
+                metadata_url=f"https://example.invalid/{CANDIDATE_COMMIT}/candidate-metadata.json",
             )
             with (
                 patch.object(cnb_gmgn_v2, "fetch_no_cache", side_effect=payloads),
@@ -115,6 +131,22 @@ class TriggerAndPreflightTests(unittest.TestCase):
             ):
                 cnb_gmgn_v2._fetch_candidate(args)
             self.assertFalse(output.exists())
+
+    def test_candidate_fetch_rejects_a_moving_or_different_revision_before_network(self) -> None:
+        args = Namespace(
+            expected_source_sha=SOURCE_SHA,
+            expected_candidate_commit=CANDIDATE_COMMIT,
+            output_dir="unused",
+            status_url="https://example.invalid/clash-verge-output/status.json",
+            profile_url="https://example.invalid/clash-verge-output/clash.yaml",
+            metadata_url="https://example.invalid/clash-verge-output/candidate-metadata.json",
+        )
+        with (
+            patch.object(cnb_gmgn_v2, "fetch_no_cache") as fetch,
+            self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "immutable revision"),
+        ):
+            cnb_gmgn_v2._fetch_candidate(args)
+        fetch.assert_not_called()
 
     def test_mihomo_runtime_uses_a_minimal_secret_free_environment(self) -> None:
         captured = {}
@@ -155,12 +187,13 @@ class TriggerAndPreflightTests(unittest.TestCase):
         primary = build_attempt(SOURCE_SHA)
         retry = build_attempt(SOURCE_SHA, "infra-prepare")
         trigger = cnb_gmgn_v2.parse_trigger_tag(
-            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-infra-prepare"
+            f"cnb-gmgn-v2-retry-{SOURCE_SHA}-{CANDIDATE_COMMIT}-infra-prepare"
         )
         preflight = {
             "kind": cnb_gmgn_v2.PREFLIGHT_KIND,
             "schema_version": cnb_gmgn_v2.PREFLIGHT_SCHEMA_VERSION,
             "source_sha256": SOURCE_SHA,
+            "candidate_commit": CANDIDATE_COMMIT,
             "retry": True,
             "attempt_id": retry.attempt_id,
             "retry_of": primary.attempt_id,
@@ -189,11 +222,50 @@ class TriggerAndPreflightTests(unittest.TestCase):
                 preflight_path,
                 trigger_path,
                 expected_source_sha256=SOURCE_SHA,
+                expected_candidate_commit=CANDIDATE_COMMIT,
             )
             self.assertEqual(bound.attempt_id, retry.attempt_id)
             self.assertEqual(bound.retry_of, primary.attempt_id)
             self.assertEqual(bound.retry_token_sha256, retry.retry_token_sha256)
 
+            preflight["schema_version"] = 1
+            write_inputs()
+            with self.assertRaisesRegex(
+                cnb_gmgn_v2.CoordinatorError, "preflight fields|preflight contract"
+            ):
+                cnb_gmgn_v2._load_preflight_attempt(
+                    preflight_path,
+                    trigger_path,
+                    expected_source_sha256=SOURCE_SHA,
+                    expected_candidate_commit=CANDIDATE_COMMIT,
+                )
+
+            preflight["schema_version"] = cnb_gmgn_v2.PREFLIGHT_SCHEMA_VERSION
+            trigger["schema_version"] = 1
+            write_inputs()
+            with self.assertRaisesRegex(
+                cnb_gmgn_v2.CoordinatorError, "trigger fields|trigger contract"
+            ):
+                cnb_gmgn_v2._load_preflight_attempt(
+                    preflight_path,
+                    trigger_path,
+                    expected_source_sha256=SOURCE_SHA,
+                    expected_candidate_commit=CANDIDATE_COMMIT,
+                )
+
+            trigger["schema_version"] = cnb_gmgn_v2.TRIGGER_SCHEMA_VERSION
+
+            preflight["candidate_commit"] = "b" * 40
+            write_inputs()
+            with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "candidate commit"):
+                cnb_gmgn_v2._load_preflight_attempt(
+                    preflight_path,
+                    trigger_path,
+                    expected_source_sha256=SOURCE_SHA,
+                    expected_candidate_commit=CANDIDATE_COMMIT,
+                )
+
+            preflight["candidate_commit"] = CANDIDATE_COMMIT
             preflight["attempt_id"] = "f" * 24
             write_inputs()
             with self.assertRaisesRegex(cnb_gmgn_v2.CoordinatorError, "attempt ID"):
@@ -201,6 +273,7 @@ class TriggerAndPreflightTests(unittest.TestCase):
                     preflight_path,
                     trigger_path,
                     expected_source_sha256=SOURCE_SHA,
+                    expected_candidate_commit=CANDIDATE_COMMIT,
                 )
 
             preflight["attempt_id"] = retry.attempt_id
@@ -211,6 +284,7 @@ class TriggerAndPreflightTests(unittest.TestCase):
                     preflight_path,
                     trigger_path,
                     expected_source_sha256=SOURCE_SHA,
+                    expected_candidate_commit=CANDIDATE_COMMIT,
                 )
 
     def test_history_accepted_source_outside_last_five_is_still_noop(self) -> None:
@@ -237,6 +311,7 @@ class TriggerAndPreflightTests(unittest.TestCase):
             root = Path(directory)
             args = Namespace(
                 source_sha=SOURCE_SHA,
+                candidate_commit=CANDIDATE_COMMIT,
                 remote="https://example.invalid/repo.git",
                 work_dir=str(root / "work"),
                 output=str(root / "decision.json"),
@@ -260,6 +335,7 @@ class TriggerAndPreflightTests(unittest.TestCase):
             root = Path(directory)
             args = Namespace(
                 source_sha=SOURCE_SHA,
+                candidate_commit=CANDIDATE_COMMIT,
                 remote="https://example.invalid/repo.git",
                 work_dir=str(root / "work"),
                 output=str(root / "decision.json"),
@@ -267,6 +343,22 @@ class TriggerAndPreflightTests(unittest.TestCase):
                 retry=True,
                 retry_token="infra-2",
             )
+            commands = []
+
+            def git_command(command, **kwargs):
+                commands.append(command)
+                if command[-1] == f"refs/tags/cnb-gmgn-v2-{SOURCE_SHA}":
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout=(
+                            f"{'b' * 40} refs/tags/cnb-gmgn-v2-{SOURCE_SHA}\n"
+                        ),
+                    )
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="",
+                )
+
             with patch.object(
                 cnb_gmgn_v2,
                 "_remote_previous",
@@ -278,13 +370,22 @@ class TriggerAndPreflightTests(unittest.TestCase):
             ), patch.object(
                 cnb_gmgn_v2,
                 "_git_command",
-                return_value=SimpleNamespace(returncode=0, stdout="a refs/tags/cnb-gmgn-v2-primary\n"),
+                side_effect=git_command,
             ):
                 self.assertEqual(cnb_gmgn_v2._preflight(args), 0)
             decision = json.loads((root / "decision.json").read_text(encoding="utf-8"))
+            self.assertEqual(decision["schema_version"], 2)
             self.assertEqual(decision["decision"], "retry_failed_infrastructure")
             self.assertTrue(decision["should_run"])
             self.assertFalse((root / "noop").exists())
+            self.assertIn(
+                f"refs/tags/cnb-gmgn-v2-{SOURCE_SHA}-{CANDIDATE_COMMIT}",
+                commands[0],
+            )
+            self.assertIn(
+                f"refs/tags/cnb-gmgn-v2-{SOURCE_SHA}",
+                commands[1],
+            )
 
 
 class GuardedRuntimeTests(unittest.TestCase):

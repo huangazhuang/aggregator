@@ -55,6 +55,7 @@ env:
   TZ: Asia/Shanghai
   OUTPUT_BRANCH: clash-verge-output
   CANDIDATE_STAGING_BRANCH: clash-verge-output-staging
+  CANDIDATE_IMMUTABLE_REF_PREFIX: clash-verge-candidate-v2
   PROFILE_FILE: clash.yaml
   REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
   REQUESTED_ALIVE_CHECK: ${{ github.event.inputs.alive_check || 'true' }}
@@ -238,6 +239,30 @@ jobs:
           if [ -f data/previous-status.json ]; then
             echo "Restored the previous publish status for strict-filter safeguards."
           fi
+
+      - name: Refuse an implicit downgrade of candidate V2 last-good
+        if: env.ENABLE_CANDIDATE_V2 != 'true'
+        env:
+          EXPLICIT_LEGACY_DOWNGRADE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_v2 == 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_state="$(cat data/previous-ref-state.txt)"
+          case "${previous_state}" in
+            confirmed_absent|legacy_v1)
+              ;;
+            present)
+              if [ "${EXPLICIT_LEGACY_DOWNGRADE}" != "true" ]; then
+                echo "::error::Candidate V2 is the current last-good output; an implicit legacy run cannot remove its bound metadata."
+                exit 1
+              fi
+              echo "::warning::Explicit manual candidate V2 downgrade requested; publishing the exact legacy V1 file set."
+              ;;
+            *)
+              echo "Unknown previous candidate state: ${previous_state}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Build manual subscription config
         id: manual
@@ -892,6 +917,81 @@ jobs:
             exit "${failure_rc}"
           }
 
+          profile_sha="$(python -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["profile_sha256"])' "${publish_dir}/status.json")"
+          if ! printf '%s\n' "${profile_sha}" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "Candidate profile SHA is malformed." >&2
+            exit 1
+          fi
+          immutable_ref="refs/heads/${CANDIDATE_IMMUTABLE_REF_PREFIX}-${candidate_commit}"
+          set +e
+          immutable_lookup="$(git ls-remote --heads origin "${immutable_ref}")"
+          immutable_lookup_rc=$?
+          set -e
+          if [ "${immutable_lookup_rc}" -ne 0 ]; then
+            echo "Candidate immutable ref could not be read." >&2
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "${immutable_lookup}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+            echo "Candidate immutable ref lookup was ambiguous." >&2
+            exit 1
+          fi
+          immutable_tip="$(printf '%s\n' "${immutable_lookup}" | awk 'NF {print $1}')"
+          if [ -n "${immutable_tip}" ] && [ "${immutable_tip}" != "${candidate_commit}" ]; then
+            echo "Candidate immutable ref points to another commit." >&2
+            exit 1
+          fi
+          if [ -z "${immutable_tip}" ]; then
+            set +e
+            git push \
+              --force-with-lease="${immutable_ref}:" \
+              origin "${candidate_commit}:${immutable_ref}"
+            immutable_push_rc=$?
+            set -e
+            if [ "${immutable_push_rc}" -ne 0 ]; then
+              immutable_after="$(git ls-remote --heads origin "${immutable_ref}" || true)"
+              immutable_after_tip="$(printf '%s\n' "${immutable_after}" | awk 'NF {print $1}')"
+              if [ "${immutable_after_tip}" != "${candidate_commit}" ]; then
+                echo "Candidate immutable ref creation failed." >&2
+                exit "${immutable_push_rc}"
+              fi
+            fi
+          fi
+
+          index_ref="refs/heads/${CANDIDATE_IMMUTABLE_REF_PREFIX}-source-${profile_sha}"
+          set +e
+          index_lookup="$(git ls-remote --heads origin "${index_ref}")"
+          index_lookup_rc=$?
+          set -e
+          if [ "${index_lookup_rc}" -ne 0 ]; then
+            echo "Candidate source index could not be read." >&2
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "${index_lookup}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+            echo "Candidate source index lookup was ambiguous." >&2
+            exit 1
+          fi
+          index_tip="$(printf '%s\n' "${index_lookup}" | awk 'NF {print $1}')"
+          if [ -n "${index_tip}" ] && [ "${index_tip}" != "${candidate_commit}" ]; then
+            echo "Candidate profile SHA is already bound to another immutable commit." >&2
+            exit 1
+          fi
+          if [ -z "${index_tip}" ]; then
+            set +e
+            git push \
+              --force-with-lease="${index_ref}:" \
+              origin "${candidate_commit}:${index_ref}"
+            index_push_rc=$?
+            set -e
+            if [ "${index_push_rc}" -ne 0 ]; then
+              index_after="$(git ls-remote --heads origin "${index_ref}" || true)"
+              index_after_tip="$(printf '%s\n' "${index_after}" | awk 'NF {print $1}')"
+              if [ "${index_after_tip}" != "${candidate_commit}" ]; then
+                echo "Candidate source index creation failed." >&2
+                exit "${index_push_rc}"
+              fi
+            fi
+          fi
+
           git push \
             --force-with-lease="${output_ref}:${previous_tip}" \
             origin "${candidate_commit}:${output_ref}"
@@ -933,6 +1033,7 @@ jobs:
             echo "Candidate current smoke failed." >&2
             rollback_candidate_output "${smoke_rc}"
           fi
+          echo "Pinned immutable candidate source commit: ${candidate_commit}"
 
       - name: Summary
         shell: bash

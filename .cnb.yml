@@ -583,9 +583,7 @@ main:
         timeout: 28800
         cancel-in-progress: false
       env:
-        V2_SOURCE_PROFILE_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/clash.yaml
-        V2_SOURCE_STATUS_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/status.json
-        V2_SOURCE_METADATA_URL: https://raw.githubusercontent.com/huangazhuang/aggregator/clash-verge-output/candidate-metadata.json
+        V2_SOURCE_RAW_BASE: https://raw.githubusercontent.com/huangazhuang/aggregator
         V2_OUTPUT_BRANCH: clash-cn-gmgn-v2-shadow
         V2_CHILD_IMAGE: aggregator-gmgn-v2-child
         V2_WORKERS_PER_SHARD: "16"
@@ -628,6 +626,7 @@ main:
               --tag "${CNB_BRANCH}" \
               --output .cnb-runtime/gmgn-v2/trigger.json
             source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["source_sha256"])')"
+            candidate_commit="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["candidate_commit"])')"
             retry="$(python3 -c 'import json; print("true" if json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["retry"] else "false")')"
             retry_token="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["retry_token"] or "")')"
             web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
@@ -641,6 +640,7 @@ main:
                 GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
                 python3 -m scripts.cnb_gmgn_v2 preflight \
                   --source-sha "${source_sha}" \
+                  --candidate-commit "${candidate_commit}" \
                   --remote "${remote_url}" \
                   --work-dir .cnb-runtime/gmgn-v2/preflight \
                   --output .cnb-runtime/gmgn-v2/preflight.json \
@@ -654,6 +654,7 @@ main:
                 GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
                 python3 -m scripts.cnb_gmgn_v2 preflight \
                   --source-sha "${source_sha}" \
+                  --candidate-commit "${candidate_commit}" \
                   --remote "${remote_url}" \
                   --work-dir .cnb-runtime/gmgn-v2/preflight \
                   --output .cnb-runtime/gmgn-v2/preflight.json \
@@ -717,7 +718,9 @@ main:
             fi
             printf '%s\n' fetch > .cnb-runtime/gmgn-v2/current-stage.txt
             source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["source_sha256"])')"
+            candidate_commit="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["candidate_commit"])')"
             main_sha="$(git rev-parse HEAD)"
+            candidate_base="${V2_SOURCE_RAW_BASE}/${candidate_commit}"
             child_image="${V2_CHILD_IMAGE}:${main_sha}"
             run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
             container="gmgn-v2-fetch-${run_token}"
@@ -729,9 +732,10 @@ main:
               --name "${container}" \
               "${child_image}" \
               python -m scripts.cnb_gmgn_v2 fetch \
-                --profile-url "${V2_SOURCE_PROFILE_URL}" \
-                --status-url "${V2_SOURCE_STATUS_URL}" \
-                --metadata-url "${V2_SOURCE_METADATA_URL}" \
+                --profile-url "${candidate_base}/clash.yaml" \
+                --status-url "${candidate_base}/status.json" \
+                --metadata-url "${candidate_base}/candidate-metadata.json" \
+                --expected-candidate-commit "${candidate_commit}" \
                 --expected-source-sha "${source_sha}" \
                 --output-dir /work/.cnb-runtime/candidate
             if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \
@@ -765,6 +769,7 @@ main:
             test -n "${GMGN_IDENTITY_EPOCH:-}"
             printf '%s\n' prepare > .cnb-runtime/gmgn-v2/current-stage.txt
             source_sha="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["source_sha256"])')"
+            candidate_commit="$(python3 -c 'import json; print(json.load(open(".cnb-runtime/gmgn-v2/trigger.json", encoding="utf-8"))["candidate_commit"])')"
             main_sha="$(git rev-parse HEAD)"
             child_image="${V2_CHILD_IMAGE}:${main_sha}"
             run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
@@ -787,6 +792,7 @@ main:
                 --preflight /work/input/preflight.json \
                 --trigger /work/input/trigger.json \
                 --expected-source-sha "${source_sha}" \
+                --expected-candidate-commit "${candidate_commit}" \
                 --expected-main-sha "${main_sha}" \
                 --mihomo /opt/aggregator/clash/clash-linux-amd \
                 --identity-fixture /opt/aggregator/tests/fixtures/gmgn_identity_v1.json \

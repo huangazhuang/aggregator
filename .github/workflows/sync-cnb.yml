@@ -26,6 +26,11 @@ on:
         required: false
         default: ""
         type: string
+      gmgn_v2_candidate_commit:
+        description: Exact 40-character candidate output commit containing the bound public triple
+        required: false
+        default: ""
+        type: string
       gmgn_v2_retry_token:
         description: Optional explicit infrastructure retry token (letters, digits, dot, underscore, hyphen)
         required: false
@@ -47,6 +52,7 @@ jobs:
     timeout-minutes: 10
     env:
       CNB_REPO_URL: https://cnb.cool/ASD12321_446/aggregator.git
+      GITHUB_REPO_URL: https://github.com/${{ github.repository }}.git
       CNB_TOKEN_USER_NAME: cnb
       CNB_TOKEN: ${{ secrets.CNB_MIRROR_TOKEN }}
 
@@ -134,13 +140,19 @@ jobs:
           steps.credentials.outputs.enabled == 'true'
         env:
           GMGN_V2_SOURCE_SHA: ${{ inputs.gmgn_v2_source_sha }}
+          GMGN_V2_CANDIDATE_COMMIT: ${{ inputs.gmgn_v2_candidate_commit }}
           GMGN_V2_RETRY_TOKEN: ${{ inputs.gmgn_v2_retry_token }}
         shell: bash
         run: |
           source_sha="${GMGN_V2_SOURCE_SHA}"
+          candidate_commit="${GMGN_V2_CANDIDATE_COMMIT}"
           retry_token="${GMGN_V2_RETRY_TOKEN}"
           if [[ ! "${source_sha}" =~ ^[0-9a-f]{64}$ ]]; then
             echo "::error::gmgn_v2_source_sha must be the complete lowercase 64-character profile_sha256."
+            exit 1
+          fi
+          if [[ ! "${candidate_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::gmgn_v2_candidate_commit must be the exact lowercase 40-character candidate output commit."
             exit 1
           fi
           if [ -n "${retry_token}" ] && [[ ! "${retry_token}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
@@ -148,20 +160,62 @@ jobs:
             exit 1
           fi
 
+          verify_candidate_ref() {
+            ref="$1"
+            label="$2"
+            set +e
+            lookup="$(git ls-remote --refs --heads "${GITHUB_REPO_URL}" "${ref}")"
+            lookup_rc=$?
+            set -e
+            if [ "${lookup_rc}" -ne 0 ]; then
+              echo "::error::Unable to read the ${label}."
+              exit "${lookup_rc}"
+            fi
+            if [ "$(printf '%s\n' "${lookup}" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+              echo "::error::The ${label} is absent or ambiguous."
+              exit 1
+            fi
+            tip="$(printf '%s\n' "${lookup}" | awk 'NF {print $1}')"
+            if [ "${tip}" != "${candidate_commit}" ]; then
+              echo "::error::The ${label} does not bind the requested candidate commit."
+              exit 1
+            fi
+          }
+          verify_candidate_ref \
+            "refs/heads/clash-verge-candidate-v2-${candidate_commit}" \
+            "immutable candidate ref"
+          verify_candidate_ref \
+            "refs/heads/clash-verge-candidate-v2-source-${source_sha}" \
+            "candidate source index"
+
           if [ -n "${retry_token}" ]; then
-            primary_tag="cnb-gmgn-v2-${source_sha}"
+            primary_tag="cnb-gmgn-v2-${source_sha}-${candidate_commit}"
+            legacy_primary_tag="cnb-gmgn-v2-${source_sha}"
+            set +e
             primary="$(
               GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
                 GIT_TERMINAL_PROMPT=0 \
                 git ls-remote --refs --tags "${CNB_REPO_URL}" "refs/tags/${primary_tag}"
             )"
-            if [ -z "${primary}" ]; then
+            primary_lookup_rc=$?
+            legacy_primary="$(
+              GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+                GIT_TERMINAL_PROMPT=0 \
+                git ls-remote --refs --tags "${CNB_REPO_URL}" "refs/tags/${legacy_primary_tag}"
+            )"
+            legacy_primary_lookup_rc=$?
+            set -e
+            if [ "${primary_lookup_rc}" -ne 0 ] || [ "${legacy_primary_lookup_rc}" -ne 0 ]; then
+              echo "::error::Unable to verify the primary GMGN V2 trigger for this retry."
+              exit 1
+            fi
+            if [ -z "${primary}" ] && [ -z "${legacy_primary}" ]; then
               echo "::error::An infrastructure retry requires an existing primary GMGN V2 trigger."
               exit 1
             fi
-            v2_tag="cnb-gmgn-v2-retry-${source_sha}-${retry_token}"
+            v2_tag="cnb-gmgn-v2-retry-${source_sha}-${candidate_commit}-${retry_token}"
           else
-            v2_tag="cnb-gmgn-v2-${source_sha}"
+            v2_tag="cnb-gmgn-v2-${source_sha}-${candidate_commit}"
           fi
           set +e
           existing="$(
@@ -184,4 +238,4 @@ jobs:
           GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
             GIT_TERMINAL_PROMPT=0 \
             git push "${CNB_REPO_URL}" "refs/tags/${v2_tag}:refs/tags/${v2_tag}"
-          echo "CNB GMGN V2 trigger tag pushed for source ${source_sha}."
+          echo "CNB GMGN V2 trigger tag pushed for source ${source_sha} at candidate commit ${candidate_commit}."

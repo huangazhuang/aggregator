@@ -369,7 +369,7 @@ class CandidateWorkflowContractTests(unittest.TestCase):
             )
             self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
 
-    def test_disabling_v2_restores_v1_without_a_stale_metadata_sidecar(self) -> None:
+    def test_explicit_manual_v2_disable_can_restore_v1_without_stale_metadata(self) -> None:
         publish_job = self.jobs["publish"]
         select_step = next(
             step
@@ -399,6 +399,31 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn('git switch --orphan "${OUTPUT_BRANCH}"', publish_step["run"])
         self.assertNotIn("previous-candidate-metadata", publish_step["run"])
         self.assertIn("needs.candidate_identity.result == 'success'", publish_job["if"])
+
+        collect_steps = {
+            step.get("name"): step for step in self.jobs["collect"]["steps"]
+        }
+        guard = collect_steps["Refuse an implicit downgrade of candidate V2 last-good"]
+        self.assertEqual(guard["if"], "env.ENABLE_CANDIDATE_V2 != 'true'")
+        self.assertIn("github.event_name == 'workflow_dispatch'", self.text)
+        self.assertIn("github.event.inputs.candidate_v2 == 'false'", self.text)
+        self.assertIn('if [ "${EXPLICIT_LEGACY_DOWNGRADE}" != "true" ]', guard["run"])
+        self.assertIn("implicit legacy run cannot remove", guard["run"])
+
+    def test_implicit_legacy_run_preserves_candidate_v2_last_good(self) -> None:
+        steps = self.jobs["collect"]["steps"]
+        names = [step.get("name") for step in steps]
+        guard_index = names.index("Refuse an implicit downgrade of candidate V2 last-good")
+        self.assertGreater(guard_index, names.index("Restore previous data"))
+        self.assertLess(guard_index, names.index("Build manual subscription config"))
+        guard = steps[guard_index]["run"]
+        self.assertRegex(guard, r"confirmed_absent\|legacy_v1\)\s+;;")
+        self.assertRegex(
+            guard,
+            r"present\)[\s\S]*?EXPLICIT_LEGACY_DOWNGRADE[\s\S]*?exit 1",
+        )
+        self.assertRegex(guard, r"\*\)[\s\S]*?exit 1")
+        self.assertNotIn("ls-remote", guard)
 
     def test_public_artifacts_and_output_branch_use_exact_allowlists(self) -> None:
         collect_steps = {
@@ -518,6 +543,24 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertIn("rollback_candidate_output()", promote)
         self.assertIn('--force-with-lease="${output_ref}:${candidate_commit}"', promote)
         self.assertIn('origin "${previous_tip}:${output_ref}"', promote)
+        self.assertIn(
+            'immutable_ref="refs/heads/${CANDIDATE_IMMUTABLE_REF_PREFIX}-${candidate_commit}"',
+            promote,
+        )
+        self.assertIn(
+            'index_ref="refs/heads/${CANDIDATE_IMMUTABLE_REF_PREFIX}-source-${profile_sha}"',
+            promote,
+        )
+        self.assertIn("profile SHA is already bound to another immutable commit", promote)
+        self.assertIn('--force-with-lease="${index_ref}:"', promote)
+        self.assertIn('--force-with-lease="${immutable_ref}:"', promote)
+        self.assertIn('origin "${candidate_commit}:${immutable_ref}"', promote)
+        self.assertIn('if [ -n "${immutable_tip}" ] && [ "${immutable_tip}" != "${candidate_commit}" ]', promote)
+        immutable_push = promote.index('origin "${candidate_commit}:${immutable_ref}"')
+        index_push = promote.index('origin "${candidate_commit}:${index_ref}"')
+        output_promotion = promote.index('origin "${candidate_commit}:${output_ref}"')
+        self.assertLess(immutable_push, index_push)
+        self.assertLess(index_push, output_promotion)
         self.assertIn(
             'actual_output="$(git ls-remote --heads origin "${output_ref}")"',
             promote,

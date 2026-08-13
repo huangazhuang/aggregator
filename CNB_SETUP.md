@@ -77,7 +77,7 @@ workflow run 的失败 job 重跑仍可验证原 artifact，而跨 run 或跨提
 
 每个 source SHA 还会使用非订阅、非用户入口的 `clash-cn-gmgn-v2-processed/<source_sha>` 受控 ref 保存脱敏的 `queued/running/failed_infrastructure/rejected` 状态和 `retry_of`。该 ref 只允许一个 `state.json`，通过 CAS/force-with-lease 更新；accepted 的唯一权威仍是 V2 shadow bundle/history，避免双写。它不包含代理、出口 IP、原始错误、token 或 HMAC key，也不能作为 Clash 订阅链接。
 
-V2 Pipeline 还会在无密钥子容器中真实执行一次临时 network namespace 的 add/delete capability smoke，然后四个分片各自在独立 namespace 内运行。Runner 不支持 `NET_ADMIN`/`SYS_ADMIN`、Docker service、iptables 或 namespace 创建/清理时，任务必须直接失败；不得改用 `--privileged` 或 `seccomp=unconfined` 降级绕过。完成密钥引用和 capability smoke 后，才从 GitHub 手动同步页传入完整 64 位 candidate profile SHA 触发第一轮真实 shadow。
+V2 Pipeline 还会在无密钥子容器中真实执行一次临时 network namespace 的 add/delete capability smoke，然后四个分片各自在独立 namespace 内运行。Runner 不支持 `NET_ADMIN`/`SYS_ADMIN`、Docker service、iptables 或 namespace 创建/清理时，任务必须直接失败；不得改用 `--privileged` 或 `seccomp=unconfined` 降级绕过。完成密钥引用和 capability smoke 后，才从 GitHub 手动同步页同时传入完整 64 位 candidate profile SHA 和对应的精确 40 位 candidate output commit，触发第一轮真实 shadow。基础设施 retry 必须复用同一组 profile SHA 与 candidate commit，只更换显式 retry token。
 
 ## GMGN 影子报告与独立优先手测订阅
 

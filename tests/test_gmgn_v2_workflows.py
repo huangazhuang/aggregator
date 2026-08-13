@@ -55,6 +55,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         dispatch = self.sync[True]["workflow_dispatch"]["inputs"]
         self.assertFalse(dispatch["trigger_gmgn_v2_shadow"]["default"])
         self.assertEqual(dispatch["gmgn_v2_source_sha"]["default"], "")
+        self.assertEqual(dispatch["gmgn_v2_candidate_commit"]["default"], "")
 
         step = next(
             item
@@ -63,11 +64,33 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         )
         script = step["run"]
         self.assertIn("^[0-9a-f]{64}$", script)
-        self.assertIn('v2_tag="cnb-gmgn-v2-${source_sha}"', script)
-        self.assertIn("cnb-gmgn-v2-retry-${source_sha}-${retry_token}", script)
-        self.assertIn('primary_tag="cnb-gmgn-v2-${source_sha}"', script)
+        self.assertIn('[[ ! "${candidate_commit}" =~ ^[0-9a-f]{40}$ ]]', script)
+        self.assertIn('v2_tag="cnb-gmgn-v2-${source_sha}-${candidate_commit}"', script)
+        self.assertIn(
+            "cnb-gmgn-v2-retry-${source_sha}-${candidate_commit}-${retry_token}",
+            script,
+        )
+        self.assertIn(
+            'primary_tag="cnb-gmgn-v2-${source_sha}-${candidate_commit}"', script
+        )
+        self.assertIn('legacy_primary_tag="cnb-gmgn-v2-${source_sha}"', script)
+        self.assertIn('[ -z "${primary}" ] && [ -z "${legacy_primary}" ]', script)
+        self.assertIn("Unable to verify the primary GMGN V2 trigger", script)
         self.assertIn("requires an existing primary GMGN V2 trigger", script)
         self.assertIn("Unable to determine whether the GMGN V2 trigger already exists", script)
+        self.assertIn("clash-verge-candidate-v2-${candidate_commit}", script)
+        self.assertIn("clash-verge-candidate-v2-source-${source_sha}", script)
+        self.assertIn('if [ "${tip}" != "${candidate_commit}" ]', script)
+        calls = [
+            match.start()
+            for match in re.finditer(r"(?m)^\s*verify_candidate_ref\s+\\$", script)
+        ]
+        self.assertEqual(len(calls), 2)
+        retry_branch = script.index('if [ -n "${retry_token}" ]; then')
+        tag_creation = script.index('git tag "${v2_tag}" HEAD')
+        for call in calls:
+            self.assertLess(call, retry_branch)
+            self.assertLess(call, tag_creation)
         self.assertNotIn("cut -c", script)
 
     def test_v2_trigger_uses_guarded_anchor_and_cas_processed_registry(self) -> None:
@@ -85,6 +108,10 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("clash-cn-gmgn-v2-processed", self.processed_state_text)
         self.assertNotIn("--state accepted", serialized)
 
+        preflight_stage = pipeline["stages"][0]
+        preflight_script = preflight_stage["script"]
+        self.assertEqual(preflight_script.count('--candidate-commit "${candidate_commit}"'), 2)
+
         identity_stage = next(
             stage
             for stage in pipeline["stages"]
@@ -94,6 +121,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("--network none", identity_script)
         self.assertIn("--preflight /work/input/preflight.json", identity_script)
         self.assertIn("--trigger /work/input/trigger.json", identity_script)
+        self.assertIn("--expected-candidate-commit", identity_script)
         self.assertIn(
             "docker cp .cnb-runtime/gmgn-v2/preflight.json", identity_script
         )
@@ -103,6 +131,16 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--attempt-id", identity_script)
         self.assertNotIn("--retry-of", identity_script)
         self.assertNotIn("--retry-token", identity_script)
+
+        fetch_stage = next(
+            stage
+            for stage in pipeline["stages"]
+            if stage["name"] == "Fetch the fixed candidate triple without secrets"
+        )
+        fetch_script = fetch_stage["script"]
+        self.assertIn('candidate_base="${V2_SOURCE_RAW_BASE}/${candidate_commit}"', fetch_script)
+        self.assertIn('--expected-candidate-commit "${candidate_commit}"', fetch_script)
+        self.assertNotIn("/clash-verge-output/", fetch_script)
 
         finalize_stage = next(
             stage
@@ -306,6 +344,8 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("完全相同的 key 字节", self.setup_text)
         self.assertIn("`GMGN_IDENTITY_KEY_VERSION`、`GMGN_IDENTITY_EPOCH`", self.setup_text)
         self.assertIn("GitHub Secret 尚未配置", self.setup_text)
+        self.assertIn("40 位 candidate output commit", self.setup_text)
+        self.assertIn("retry 必须复用同一组", self.setup_text)
         self.assertIn("clash-cn-gmgn-v2-processed/<source_sha>", self.setup_text)
 
     def test_ci_builds_the_exact_v2_dockerfile_without_publish_permissions(self) -> None:
