@@ -592,18 +592,13 @@ main:
         V2_DOCKER_CLI_DIR: .cnb-runtime/gmgn-v2/docker-cli
         PATH: .cnb-runtime/gmgn-v2/docker-cli:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
       stages:
-        - name: Parse and deduplicate the manual V2 trigger
+        - name: Admit a capable managed runner before consuming the V2 trigger
           timeout: 20m
           script: |
             set -eu
             umask 077
-            python3 -m pip install --user --disable-pip-version-check \
-              PyYAML==6.0.3 \
-              pycryptodomex==3.23.0
-            test -n "${CNB_BRANCH:-}"
-            test -n "${CNB_REPO_SLUG:-}"
-            mkdir -p .cnb-runtime/gmgn-v2/preflight
-            mkdir -p "${V2_DOCKER_CLI_DIR}"
+            mkdir -p .cnb-runtime/gmgn-v2 "${V2_DOCKER_CLI_DIR}"
+            printf '%s\n' admission > .cnb-runtime/gmgn-v2/current-stage.txt
             docker_archive=".cnb-runtime/gmgn-v2/docker-${V2_DOCKER_CLI_VERSION}.tgz"
             python3 - "${V2_DOCKER_CLI_VERSION}" "${docker_archive}" <<'PY'
             import pathlib
@@ -620,6 +615,49 @@ main:
             chmod 0755 "${V2_DOCKER_CLI_DIR}/docker"
             command -v docker >/dev/null
             test "$(docker version --format '{{.Client.Version}}')" = "${V2_DOCKER_CLI_VERSION}"
+
+            main_sha="$(git rev-parse HEAD)"
+            child_image="${V2_CHILD_IMAGE}:${main_sha}"
+            docker build --file Dockerfile.gmgn-v2 --tag "${child_image}" .
+            run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
+            container="gmgn-v2-cap-${run_token}"
+            cleanup() {
+              docker rm -f "${container}" >/dev/null 2>&1 || true
+            }
+            trap cleanup EXIT
+            docker create \
+              --name "${container}" \
+              --cap-add NET_ADMIN \
+              --cap-add SYS_ADMIN \
+              "${child_image}" \
+              python -m scripts.probe_network_guard_linux preflight \
+                --exercise-netns "gmgnv2-cap-${run_token}" \
+                --output /work/.cnb-runtime/capabilities.json
+            test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
+            set +e
+            docker start --attach "${container}"
+            capability_status=$?
+            set -e
+            if [ "${capability_status}" -ne 0 ]; then
+              printf '%s\n' 'Managed runner lacks the required guarded-network capabilities; this lane is a no-op.'
+              printf '%s\n' admission-noop > .cnb-runtime/gmgn-v2/admission-noop
+              exit 0
+            fi
+            docker cp "${container}:/work/.cnb-runtime/capabilities.json" \
+              .cnb-runtime/gmgn-v2/capabilities.json
+
+        - name: Parse and deduplicate the manual V2 trigger
+          timeout: 20m
+          script: |
+            set -eu
+            umask 077
+            if test -f .cnb-runtime/gmgn-v2/admission-noop; then exit 0; fi
+            python3 -m pip install --user --disable-pip-version-check \
+              PyYAML==6.0.3 \
+              pycryptodomex==3.23.0
+            test -n "${CNB_BRANCH:-}"
+            test -n "${CNB_REPO_SLUG:-}"
+            mkdir -p .cnb-runtime/gmgn-v2/preflight
             printf '%s\n' preflight > .cnb-runtime/gmgn-v2/current-stage.txt
 
             python3 -m scripts.cnb_gmgn_v2 trigger \
@@ -686,34 +724,13 @@ main:
               GIT_ASKPASS="${askpass}" GIT_TERMINAL_PROMPT=0 \
               python3 -m scripts.cnb_gmgn_v2 processed "$@"
 
-            main_sha="$(git rev-parse HEAD)"
-            child_image="${V2_CHILD_IMAGE}:${main_sha}"
-            docker build --file Dockerfile.gmgn-v2 --tag "${child_image}" .
-            run_token="$(printf '%s' "${CNB_BUILD_ID:-${main_sha}}" | sha256sum | cut -c1-12)"
-            container="gmgn-v2-cap-${run_token}"
-            cleanup() {
-              docker rm -f "${container}" >/dev/null 2>&1 || true
-            }
-            trap cleanup EXIT
-            docker create \
-              --name "${container}" \
-              --cap-add NET_ADMIN \
-              --cap-add SYS_ADMIN \
-              "${child_image}" \
-              python -m scripts.probe_network_guard_linux preflight \
-                --exercise-netns "gmgnv2-cap-${run_token}" \
-                --output /work/.cnb-runtime/capabilities.json
-            test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
-            docker start --attach "${container}"
-            docker cp "${container}:/work/.cnb-runtime/capabilities.json" \
-              .cnb-runtime/gmgn-v2/capabilities.json
-
         - name: Fetch the fixed candidate triple without secrets
           timeout: 10m
           script: |
             set -eu
             umask 077
-            if test -f .cnb-runtime/gmgn-v2/noop; then
+            if test -f .cnb-runtime/gmgn-v2/admission-noop || \
+               test -f .cnb-runtime/gmgn-v2/noop; then
               exit 0
             fi
             printf '%s\n' fetch > .cnb-runtime/gmgn-v2/current-stage.txt
@@ -760,7 +777,8 @@ main:
           script: |
             set -eu
             umask 077
-            if test -f .cnb-runtime/gmgn-v2/noop; then
+            if test -f .cnb-runtime/gmgn-v2/admission-noop || \
+               test -f .cnb-runtime/gmgn-v2/noop; then
               exit 0
             fi
             printf '%s\n' identity-config > .cnb-runtime/gmgn-v2/current-stage.txt
@@ -827,7 +845,7 @@ main:
               script: |
                 set -eu
                 umask 077
-                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
                 printf '%s\n' probe-shard-0 > .cnb-runtime/gmgn-v2/current-stage.txt
                 main_sha="$(git rev-parse HEAD)"
                 child_image="${V2_CHILD_IMAGE}:${main_sha}"
@@ -859,7 +877,7 @@ main:
               script: |
                 set -eu
                 umask 077
-                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
                 printf '%s\n' probe-shard-1 > .cnb-runtime/gmgn-v2/current-stage.txt
                 main_sha="$(git rev-parse HEAD)"
                 child_image="${V2_CHILD_IMAGE}:${main_sha}"
@@ -891,7 +909,7 @@ main:
               script: |
                 set -eu
                 umask 077
-                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
                 printf '%s\n' probe-shard-2 > .cnb-runtime/gmgn-v2/current-stage.txt
                 main_sha="$(git rev-parse HEAD)"
                 child_image="${V2_CHILD_IMAGE}:${main_sha}"
@@ -923,7 +941,7 @@ main:
               script: |
                 set -eu
                 umask 077
-                if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+                if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
                 printf '%s\n' probe-shard-3 > .cnb-runtime/gmgn-v2/current-stage.txt
                 main_sha="$(git rev-parse HEAD)"
                 child_image="${V2_CHILD_IMAGE}:${main_sha}"
@@ -962,7 +980,7 @@ main:
           script: |
             set -eu
             umask 077
-            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
             printf '%s\n' redact > .cnb-runtime/gmgn-v2/current-stage.txt
             test -n "${GMGN_IDENTITY_HMAC_KEY:-}"
             test -n "${GMGN_IDENTITY_KEY_VERSION:-}"
@@ -998,7 +1016,7 @@ main:
           script: |
             set -eu
             umask 077
-            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
             printf '%s\n' finalize > .cnb-runtime/gmgn-v2/current-stage.txt
             test -n "${CNB_REPO_SLUG:-}"
             web_endpoint="${CNB_WEB_ENDPOINT:-https://cnb.cool}"
@@ -1037,7 +1055,7 @@ main:
           script: |
             set -eu
             umask 077
-            if test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
+            if test -f .cnb-runtime/gmgn-v2/admission-noop || test -f .cnb-runtime/gmgn-v2/noop; then exit 0; fi
             printf '%s\n' publish > .cnb-runtime/gmgn-v2/current-stage.txt
             test -n "${CNB_TOKEN:-}"
             test -n "${CNB_REPO_SLUG:-}"
@@ -1174,6 +1192,8 @@ main:
 
 "cnb-gmgn-v2-*":
   tag_push:
+    - *gmgn_v2_shadow
+    - *gmgn_v2_shadow
     - *gmgn_v2_shadow
 
 "cnb-runner-capability-*":

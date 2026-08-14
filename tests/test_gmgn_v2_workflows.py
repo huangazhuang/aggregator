@@ -95,7 +95,9 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
 
     def test_v2_trigger_uses_guarded_anchor_and_cas_processed_registry(self) -> None:
         pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
-        self.assertEqual(self.cnb["cnb-gmgn-v2-*"]["tag_push"][0], pipeline)
+        tag_lanes = self.cnb["cnb-gmgn-v2-*"]["tag_push"]
+        self.assertEqual(len(tag_lanes), 3)
+        self.assertTrue(all(lane == pipeline for lane in tag_lanes))
         serialized = json.dumps(pipeline, ensure_ascii=False)
         self.assertIn("clash-cn-gmgn-v2-shadow", serialized)
         self.assertNotIn("clash-cn-output", serialized)
@@ -108,7 +110,11 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("clash-cn-gmgn-v2-processed", self.processed_state_text)
         self.assertNotIn("--state accepted", serialized)
 
-        preflight_stage = pipeline["stages"][0]
+        preflight_stage = next(
+            stage
+            for stage in pipeline["stages"]
+            if stage["name"] == "Parse and deduplicate the manual V2 trigger"
+        )
         preflight_script = preflight_stage["script"]
         self.assertEqual(preflight_script.count('--candidate-commit "${candidate_commit}"'), 2)
 
@@ -176,6 +182,66 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(publish_stage["timeout"], "30m")
 
+    def test_v2_runner_admission_precedes_and_guards_state_consumption(self) -> None:
+        pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
+        stages = pipeline["stages"]
+        admission = stages[0]
+        self.assertEqual(
+            admission["name"],
+            "Admit a capable managed runner before consuming the V2 trigger",
+        )
+        self.assertNotIn("imports", admission)
+        admission_script = admission["script"]
+        self.assertNotIn(GMGN_SECRET_REPOSITORY, json.dumps(admission))
+        self.assertNotIn("GMGN_IDENTITY_HMAC_KEY", admission_script)
+        self.assertNotIn("scripts.cnb_gmgn_v2", admission_script)
+        self.assertIn("--cap-add NET_ADMIN", admission_script)
+        self.assertIn("--cap-add SYS_ADMIN", admission_script)
+        self.assertIn("--exercise-netns", admission_script)
+        self.assertIn("admission-noop", admission_script)
+
+        coordinator = next(
+            stage
+            for stage in stages
+            if stage["name"] == "Parse and deduplicate the manual V2 trigger"
+        )
+        self.assertLess(stages.index(admission), stages.index(coordinator))
+        coordinator_script = coordinator["script"]
+        admission_guard = coordinator_script.index("admission-noop")
+        self.assertLess(admission_guard, coordinator_script.index("pip install"))
+        self.assertLess(
+            admission_guard,
+            coordinator_script.index("python3 -m scripts.cnb_gmgn_v2 trigger"),
+        )
+        self.assertLess(
+            admission_guard,
+            coordinator_script.index("python3 -m scripts.cnb_gmgn_v2 preflight"),
+        )
+        self.assertLess(
+            admission_guard,
+            coordinator_script.index("python3 -m scripts.cnb_gmgn_v2 processed"),
+        )
+
+        guarded_scripts: list[tuple[str, str]] = []
+
+        def collect_scripts(label: str, value: object) -> None:
+            if isinstance(value, dict):
+                script = value.get("script")
+                if isinstance(script, str):
+                    guarded_scripts.append((label, script))
+                for key, nested in value.items():
+                    if key != "script":
+                        collect_scripts(f"{label}.{key}", nested)
+            elif isinstance(value, list):
+                for index, nested in enumerate(value):
+                    collect_scripts(f"{label}[{index}]", nested)
+
+        collect_scripts("post-admission", stages[1:])
+        self.assertEqual(len(guarded_scripts), 10)
+        for label, script in guarded_scripts:
+            with self.subTest(stage=label):
+                self.assertIn("admission-noop", script)
+
     def test_managed_runner_capability_diagnostic_is_secret_free(self) -> None:
         dispatch = self.sync[True]["workflow_dispatch"]["inputs"]
         self.assertFalse(dispatch["trigger_cnb_capability_probe"]["default"])
@@ -242,7 +308,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
                     collect(f"{label}[{index}]", nested)
 
         collect("v2", pipeline)
-        self.assertEqual(len(scripts), 11)
+        self.assertEqual(len(scripts), 12)
         bash_array = re.compile(
             r"(?m)(?:^|[; ])\w+\+?=\s*\(|\$\{\w+\[(?:@|\*)\]\}"
         )
@@ -325,28 +391,56 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
                     "main",
                     "web_trigger_gmgn_v2_shadow",
                     0,
-                    2,
+                    3,
                     "Prepare the offline identity-bound V2 manifest",
                 ),
                 (
                     "main",
                     "web_trigger_gmgn_v2_shadow",
                     0,
-                    4,
+                    5,
                     "Redact measurements and exit identity offline",
                 ),
                 (
                     "cnb-gmgn-v2-*",
                     "tag_push",
                     0,
-                    2,
+                    3,
                     "Prepare the offline identity-bound V2 manifest",
                 ),
                 (
                     "cnb-gmgn-v2-*",
                     "tag_push",
                     0,
-                    4,
+                    5,
+                    "Redact measurements and exit identity offline",
+                ),
+                (
+                    "cnb-gmgn-v2-*",
+                    "tag_push",
+                    1,
+                    3,
+                    "Prepare the offline identity-bound V2 manifest",
+                ),
+                (
+                    "cnb-gmgn-v2-*",
+                    "tag_push",
+                    1,
+                    5,
+                    "Redact measurements and exit identity offline",
+                ),
+                (
+                    "cnb-gmgn-v2-*",
+                    "tag_push",
+                    2,
+                    3,
+                    "Prepare the offline identity-bound V2 manifest",
+                ),
+                (
+                    "cnb-gmgn-v2-*",
+                    "tag_push",
+                    2,
+                    5,
                     "Redact measurements and exit identity offline",
                 ),
             ],
