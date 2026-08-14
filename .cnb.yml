@@ -811,7 +811,6 @@ main:
                 --trigger /work/input/trigger.json \
                 --expected-source-sha "${source_sha}" \
                 --expected-candidate-commit "${candidate_commit}" \
-                --expected-main-sha "${main_sha}" \
                 --mihomo /opt/aggregator/clash/clash-linux-amd \
                 --identity-fixture /opt/aggregator/tests/fixtures/gmgn_identity_v1.json \
                 --output-dir /work/.cnb-runtime/prepared \

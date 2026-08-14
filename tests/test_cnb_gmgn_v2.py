@@ -287,6 +287,84 @@ class TriggerAndPreflightTests(unittest.TestCase):
                     expected_candidate_commit=CANDIDATE_COMMIT,
                 )
 
+    def test_prepare_preserves_candidate_provenance_across_runtime_fixes(self) -> None:
+        candidate_main_sha = "9" * 40
+        snapshot = SimpleNamespace(
+            snapshot_id="candidate_" + "8" * 24,
+            main_sha=candidate_main_sha,
+            profile_sha256=SOURCE_SHA,
+            metadata_sha256="7" * 64,
+            identity_key_version="gmgn-key-v1",
+            identity_epoch="gmgn-epoch-v1",
+            status={"run_at": "2026-08-13T10:17:11Z"},
+            metadata={"sources": {}},
+            ordered_candidates=[
+                SimpleNamespace(
+                    candidate_id="c1_" + "6" * 24,
+                    proxy={"name": "candidate"},
+                    metadata={"source_ids": ["source"]},
+                )
+            ],
+        )
+        attempt = SimpleNamespace(attempt_id="5" * 24, retry_of="4" * 24)
+        with self.temporary_directory() as directory:
+            root = Path(directory)
+            profile = root / "clash.yaml"
+            status = root / "status.json"
+            metadata = root / "candidate-metadata.json"
+            mihomo = root / "mihomo"
+            profile.write_text("proxies: []\n", encoding="utf-8")
+            status.write_text(
+                json.dumps({"run_at": snapshot.status["run_at"]}),
+                encoding="utf-8",
+            )
+            metadata.write_text("{}", encoding="utf-8")
+            mihomo.write_bytes(b"fixed-binary")
+            args = Namespace(
+                profile=str(profile),
+                status=str(status),
+                metadata=str(metadata),
+                expected_source_sha=SOURCE_SHA,
+                expected_candidate_commit=CANDIDATE_COMMIT,
+                mihomo=str(mihomo),
+                identity_fixture=str(root / "identity-fixture.json"),
+                preflight=str(root / "preflight.json"),
+                trigger=str(root / "trigger.json"),
+                output_dir=str(root / "prepared"),
+                workers=16,
+            )
+            with (
+                patch.object(
+                    cnb_gmgn_v2.IdentitySettings,
+                    "from_environment",
+                    return_value=object(),
+                ),
+                patch.object(cnb_gmgn_v2, "verify_identity_test_vector"),
+                patch.object(
+                    cnb_gmgn_v2,
+                    "validate_candidate_snapshot",
+                    return_value=snapshot,
+                ),
+                patch.object(cnb_gmgn_v2, "_validate_runtime_capacity"),
+                patch.object(
+                    cnb_gmgn_v2,
+                    "_load_preflight_attempt",
+                    return_value=attempt,
+                ),
+                patch.object(
+                    cnb_gmgn_v2,
+                    "build_manifest_v3",
+                    return_value=({"kind": "test-manifest"}, [[], [], [], []]),
+                ),
+                patch.object(cnb_gmgn_v2, "_mihomo_version", return_value="1.0.0"),
+            ):
+                self.assertEqual(cnb_gmgn_v2._prepare(args), 0)
+
+            prepared = json.loads(
+                (Path(args.output_dir) / "snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(prepared["main_sha"], candidate_main_sha)
+
     def test_history_accepted_source_outside_last_five_is_still_noop(self) -> None:
         bundle = SimpleNamespace(
             source_sha256="2" * 64,

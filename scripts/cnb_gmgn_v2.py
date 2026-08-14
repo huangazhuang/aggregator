@@ -782,11 +782,6 @@ def _prepare(args: argparse.Namespace) -> int:
     expected = str(args.expected_source_sha).lower()
     if snapshot.profile_sha256 != expected:
         raise CoordinatorError("validated candidate SHA differs from the trigger")
-    expected_main_sha = str(args.expected_main_sha).lower()
-    if not re.fullmatch(r"[0-9a-f]{40}", expected_main_sha):
-        raise CoordinatorError("expected main SHA is malformed")
-    if snapshot.main_sha != expected_main_sha:
-        raise CoordinatorError("candidate main SHA differs from the trigger commit")
     _validate_runtime_capacity(
         len(snapshot.ordered_candidates), workers_per_shard=args.workers
     )
@@ -1880,7 +1875,6 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--metadata", required=True)
     prepare.add_argument("--expected-source-sha", required=True)
     prepare.add_argument("--expected-candidate-commit", required=True)
-    prepare.add_argument("--expected-main-sha", required=True)
     prepare.add_argument("--mihomo", required=True)
     prepare.add_argument("--identity-fixture", required=True)
     prepare.add_argument("--preflight", required=True)

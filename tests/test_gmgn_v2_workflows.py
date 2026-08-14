@@ -128,6 +128,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("--preflight /work/input/preflight.json", identity_script)
         self.assertIn("--trigger /work/input/trigger.json", identity_script)
         self.assertIn("--expected-candidate-commit", identity_script)
+        self.assertNotIn("--expected-main-sha", identity_script)
         self.assertIn(
             "docker cp .cnb-runtime/gmgn-v2/preflight.json", identity_script
         )
