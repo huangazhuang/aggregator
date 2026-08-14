@@ -487,12 +487,15 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
             serialized,
         )
         self.assertIn("--network none", serialized)
+        self.assertIn("from scripts.candidate_snapshot import _clash_module", serialized)
+        self.assertIn("_clash_module().verify", serialized)
         self.assertNotIn("GMGN_IDENTITY_HMAC_KEY", serialized)
         self.assertNotIn("CNB_TOKEN", serialized)
 
     def test_v2_child_image_includes_only_the_required_subscribe_runtime(self) -> None:
         self.assertIn("PyYAML==6.0.3", self.dockerfile_text)
         self.assertIn("pycryptodomex==3.23.0", self.dockerfile_text)
+        self.assertIn("tqdm==4.69.0", self.dockerfile_text)
         self.assertEqual(
             [
                 line
@@ -502,6 +505,11 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
             [
                 "COPY subscribe/__init__.py /opt/aggregator/subscribe/__init__.py",
                 "COPY subscribe/asia.py /opt/aggregator/subscribe/asia.py",
+                "COPY subscribe/clash.py /opt/aggregator/subscribe/clash.py",
+                "COPY subscribe/executable.py /opt/aggregator/subscribe/executable.py",
+                "COPY subscribe/logger.py /opt/aggregator/subscribe/logger.py",
+                "COPY subscribe/urlvalidator.py /opt/aggregator/subscribe/urlvalidator.py",
+                "COPY subscribe/utils.py /opt/aggregator/subscribe/utils.py",
             ],
         )
         self.assertEqual(
@@ -510,7 +518,16 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
                 for line in self.dockerignore_text.splitlines()
                 if line.startswith("!subscribe")
             ],
-            ["!subscribe/", "!subscribe/__init__.py", "!subscribe/asia.py"],
+            [
+                "!subscribe/",
+                "!subscribe/__init__.py",
+                "!subscribe/asia.py",
+                "!subscribe/clash.py",
+                "!subscribe/executable.py",
+                "!subscribe/logger.py",
+                "!subscribe/urlvalidator.py",
+                "!subscribe/utils.py",
+            ],
         )
 
 

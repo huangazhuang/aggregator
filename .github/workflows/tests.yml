@@ -58,3 +58,5 @@ jobs:
             python -m scripts.cnb_gmgn_v2 --help
           docker run --rm --network none aggregator-gmgn-v2:test \
             python -m scripts.validate_public_outputs --help
+          docker run --rm --network none aggregator-gmgn-v2:test \
+            python -c "from scripts.candidate_snapshot import _clash_module; assert _clash_module().verify({'name': 'smoke', 'type': 'ss', 'server': '1.1.1.1', 'port': 443, 'cipher': 'aes-128-gcm', 'password': 'smoke'}, mihomo=True)"

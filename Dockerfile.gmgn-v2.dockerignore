@@ -5,6 +5,11 @@
 !subscribe/
 !subscribe/__init__.py
 !subscribe/asia.py
+!subscribe/clash.py
+!subscribe/executable.py
+!subscribe/logger.py
+!subscribe/urlvalidator.py
+!subscribe/utils.py
 !tests/
 !tests/fixtures/
 !tests/fixtures/gmgn_identity_v1.json
