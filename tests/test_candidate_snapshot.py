@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -116,6 +117,7 @@ def staging(
         candidate_metadata_url="https://example.invalid/candidate-metadata.json",
         previous_state=previous_state,
         previous_profile=yaml.safe_load(previous.profile_bytes) if previous else None,
+        previous_profile_bytes=previous.profile_bytes if previous else None,
         previous_status=previous.status if previous else None,
         previous_metadata=previous.metadata if previous else None,
         resolver=public_resolver,
@@ -273,7 +275,7 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
             resolver=resolver,
         )
 
-        self.assertEqual(identity_input["schema_version"], 4)
+        self.assertEqual(identity_input["schema_version"], 5)
         self.assertEqual(len(identity_input["profile"]["proxies"]), 1)
         self.assertEqual(len(identity_input["records"]), 1)
         self.assertEqual(len(identity_input["quarantined_records"]), 2)
@@ -547,6 +549,7 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
             candidate_metadata_url="https://example.invalid/candidate-metadata.json",
             previous_state="present",
             previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_profile_bytes=initial.profile_bytes,
             previous_status=initial.status,
             previous_metadata=initial.metadata,
             resolver=lambda host, _port: (_ for _ in ()).throw(
@@ -604,6 +607,7 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
             candidate_metadata_url="https://example.invalid/candidate-metadata.json",
             previous_state="present",
             previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_profile_bytes=initial.profile_bytes,
             previous_status=previous_status,
             previous_metadata=previous_metadata,
             resolver=public_resolver,
@@ -677,6 +681,7 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
             candidate_metadata_url="https://example.invalid/candidate-metadata.json",
             previous_state="present",
             previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_profile_bytes=initial.profile_bytes,
             previous_status=initial.status,
             previous_metadata=initial.metadata,
             resolver=resolver,
@@ -818,6 +823,47 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_sorted_private_handoff_preserves_exact_previous_profile(self) -> None:
+        node = proxy("JP previous", "previous.example", "previous-secret")
+        source = task(
+            "community", "https://raw.githubusercontent.com/acme/community/main/sub.yaml"
+        )
+        initial = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        identity_input = staging(
+            [node],
+            [(source, [node], None)],
+            run_at="2026-08-02T00:00:00Z",
+            previous=initial,
+        )
+
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("AGGREGATOR_TEST_TMPDIR") or None
+        ) as directory:
+            path = Path(directory, "identity-input.json")
+            write_candidate_identity_input(path, identity_input)
+            restored = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertNotEqual(
+            list(restored["previous_profile"]),
+            list(yaml.safe_load(initial.profile_bytes)),
+        )
+        self.assertEqual(
+            base64.b64decode(restored["previous_profile_b64"], validate=True),
+            initial.profile_bytes,
+        )
+        current = build_candidate_snapshot(restored, settings=IDENTITY)
+        self.assertEqual(current.status["candidate_count"], 1)
+
+        tampered = copy.deepcopy(restored)
+        tampered["previous_profile_b64"] = base64.b64encode(
+            initial.profile_bytes + b"\n"
+        ).decode("ascii")
+        with self.assertRaisesRegex(CandidateSnapshotError, "profile hash mismatch"):
+            build_candidate_snapshot(tampered, settings=IDENTITY)
 
     def test_exact_duplicate_merges_all_sources_and_asia_evidence(self) -> None:
         ordinary = proxy("ordinary alias", "node.example", "fake-secret-alpha")
@@ -1014,6 +1060,7 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
                 candidate_metadata_url="https://example.invalid/candidate-metadata.json",
                 previous_state="present",
                 previous_profile=yaml.safe_load(initial.profile_bytes),
+                previous_profile_bytes=initial.profile_bytes,
                 previous_status=previous_status,
                 previous_metadata=previous_metadata,
                 resolver=public_resolver,
@@ -1516,6 +1563,7 @@ class CandidateLegacyBootstrapTests(unittest.TestCase):
             resolver=public_resolver,
         )
         self.assertIsNone(identity_input["previous_profile"])
+        self.assertIsNone(identity_input["previous_profile_b64"])
         self.assertIsNone(identity_input["previous_status"])
         self.assertIsNone(identity_input["previous_metadata"])
         self.assertEqual(identity_input["previous_baseline"], baseline)
@@ -1713,6 +1761,7 @@ class CandidateLegacyBootstrapTests(unittest.TestCase):
                 candidate_metadata_url="https://example.invalid/candidate-metadata.json",
                 previous_state="present",
                 previous_profile=yaml.safe_load(profile_bytes),
+                previous_profile_bytes=profile_bytes,
                 previous_status=status,
                 previous_metadata=None,
                 resolver=public_resolver,

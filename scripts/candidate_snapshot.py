@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
@@ -70,7 +71,7 @@ from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
 IDENTITY_INPUT_KIND = "github-candidate-identity-input"
-IDENTITY_INPUT_SCHEMA_VERSION = 4
+IDENTITY_INPUT_SCHEMA_VERSION = 5
 CANDIDATE_STATUS_KIND = "github-candidate-status"
 CANDIDATE_STATUS_SCHEMA_VERSION = 2
 CANDIDATE_METADATA_KIND = "github-candidate-metadata"
@@ -141,6 +142,7 @@ IDENTITY_INPUT_FIELDS = {
     "previous_state",
     "previous_baseline",
     "previous_profile",
+    "previous_profile_b64",
     "previous_status",
     "previous_metadata",
 }
@@ -324,6 +326,28 @@ def _json_bytes(value: Mapping[str, Any]) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
+
+
+def _encode_previous_profile_bytes(profile_bytes: bytes) -> str:
+    return base64.b64encode(profile_bytes).decode("ascii")
+
+
+def _decode_previous_profile_bytes(value: Any) -> tuple[bytes, dict[str, Any]]:
+    if not isinstance(value, str) or not value:
+        raise CandidateSnapshotError("previous candidate exact profile is missing")
+    try:
+        profile_bytes = base64.b64decode(value, validate=True)
+    except Exception:
+        raise CandidateSnapshotError("previous candidate exact profile is invalid") from None
+    if _encode_previous_profile_bytes(profile_bytes) != value:
+        raise CandidateSnapshotError("previous candidate exact profile is invalid")
+    try:
+        profile = yaml.safe_load(profile_bytes)
+    except Exception:
+        raise CandidateSnapshotError("previous candidate exact profile is unreadable") from None
+    if not isinstance(profile, dict):
+        raise CandidateSnapshotError("previous candidate exact profile must be a mapping")
+    return profile_bytes, profile
 
 
 def _load_json_file(path: str | Path | None) -> dict[str, Any] | None:
@@ -664,7 +688,12 @@ def prepare_candidate_identity_input(
     if previous_state == "confirmed_absent":
         if any(
             value is not None
-            for value in (previous_profile, previous_status, previous_metadata)
+            for value in (
+                previous_profile,
+                previous_status,
+                previous_metadata,
+                previous_profile_bytes,
+            )
         ):
             raise CandidateSnapshotError("confirmed-absent previous state contains artifacts")
     elif previous_state == "legacy_v1":
@@ -675,8 +704,41 @@ def prepare_candidate_identity_input(
             or previous_metadata is not None
         ):
             raise CandidateSnapshotError("legacy previous snapshot artifacts are inconsistent")
-    elif any(value is None for value in (previous_profile, previous_status, previous_metadata)):
+    elif any(
+        value is None
+        for value in (
+            previous_profile,
+            previous_status,
+            previous_metadata,
+            previous_profile_bytes,
+        )
+    ):
         raise CandidateSnapshotError("present previous snapshot is incomplete")
+
+    exact_previous_profile_b64: str | None = None
+    if previous_state == "present":
+        if (
+            not isinstance(previous_profile, Mapping)
+            or not isinstance(previous_status, Mapping)
+            or not isinstance(previous_metadata, Mapping)
+        ):
+            raise CandidateSnapshotError("present previous snapshot artifacts are malformed")
+        if not isinstance(previous_profile_bytes, bytes):
+            raise CandidateSnapshotError("present previous snapshot exact profile is invalid")
+        exact_previous_profile_b64 = _encode_previous_profile_bytes(previous_profile_bytes)
+        exact_previous_bytes, exact_previous_profile = _decode_previous_profile_bytes(
+            exact_previous_profile_b64
+        )
+        if exact_previous_profile != previous_profile:
+            raise CandidateSnapshotError(
+                "present previous snapshot profile representations disagree"
+            )
+        exact_previous_sha256 = hashlib.sha256(exact_previous_bytes).hexdigest()
+        if (
+            previous_status.get("profile_sha256") != exact_previous_sha256
+            or previous_metadata.get("profile_sha256") != exact_previous_sha256
+        ):
+            raise CandidateSnapshotError("previous candidate profile hash mismatch")
 
     records = provenance.get("records") if isinstance(provenance, Mapping) else None
     sources = provenance.get("sources") if isinstance(provenance, Mapping) else None
@@ -938,6 +1000,7 @@ def prepare_candidate_identity_input(
         "previous_state": previous_state,
         "previous_baseline": normalized_previous_baseline,
         "previous_profile": safe_previous_profile,
+        "previous_profile_b64": exact_previous_profile_b64,
         "previous_status": normalized_previous_status,
         "previous_metadata": copy.deepcopy(previous_metadata),
     }
@@ -1085,6 +1148,7 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
     previous_values = (
         payload["previous_baseline"],
         payload["previous_profile"],
+        payload["previous_profile_b64"],
         payload["previous_status"],
         payload["previous_metadata"],
     )
@@ -1095,6 +1159,7 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
     if payload["previous_state"] == "legacy_v1" and (
         not isinstance(payload["previous_baseline"], Mapping)
         or payload["previous_profile"] is not None
+        or payload["previous_profile_b64"] is not None
         or payload["previous_status"] is not None
         or payload["previous_metadata"] is not None
     ):
@@ -1111,8 +1176,25 @@ def validate_candidate_identity_input(payload: Mapping[str, Any]) -> dict[str, A
                 payload["previous_metadata"],
             )
         )
+        or not isinstance(payload["previous_profile_b64"], str)
     ):
         raise CandidateSnapshotError("present candidate input has incomplete previous artifacts")
+    if payload["previous_state"] == "present":
+        exact_previous_bytes, exact_previous_profile = _decode_previous_profile_bytes(
+            payload["previous_profile_b64"]
+        )
+        if exact_previous_profile != payload["previous_profile"]:
+            raise CandidateSnapshotError(
+                "present previous snapshot profile representations disagree"
+            )
+        exact_previous_sha256 = hashlib.sha256(exact_previous_bytes).hexdigest()
+        if (
+            payload["previous_status"].get("profile_sha256")
+            != exact_previous_sha256
+            or payload["previous_metadata"].get("profile_sha256")
+            != exact_previous_sha256
+        ):
+            raise CandidateSnapshotError("previous candidate profile hash mismatch")
     if previous_quarantined_fingerprints:
         if payload["previous_state"] != "present":
             raise CandidateSnapshotError(
@@ -1559,14 +1641,11 @@ def build_candidate_snapshot(
     previous: CandidateSnapshot | None = None
     previous_baseline: Mapping[str, Any] | None = None
     if payload["previous_state"] == "present":
-        previous_profile_text, rejected = _dump_candidate_profile(
-            payload["previous_profile"],
-            error_message="previous candidate profile serialization failed",
+        previous_profile_bytes, _ = _decode_previous_profile_bytes(
+            payload["previous_profile_b64"]
         )
-        if rejected:
-            raise CandidateSnapshotError("previous candidate profile contains invalid REALITY fields")
         previous = validate_candidate_snapshot(
-            previous_profile_text.encode("utf-8"),
+            previous_profile_bytes,
             dict(payload["previous_status"]),
             dict(payload["previous_metadata"]),
             settings=identity,
