@@ -176,6 +176,30 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(publish_stage["timeout"], "30m")
 
+    def test_managed_runner_capability_diagnostic_is_secret_free(self) -> None:
+        dispatch = self.sync[True]["workflow_dispatch"]["inputs"]
+        self.assertFalse(dispatch["trigger_cnb_capability_probe"]["default"])
+
+        step = next(
+            item
+            for item in self.sync["jobs"]["sync"]["steps"]
+            if item["name"] == "Trigger secret-free CNB capability diagnostic"
+        )
+        self.assertIn("cnb-runner-capability-${GITHUB_RUN_ID}", step["run"])
+        self.assertNotIn("cnb-gmgn-v2-", step["run"])
+
+        pipeline = self.cnb["main"]["web_trigger_cnb_runner_capabilities"][0]
+        self.assertEqual(
+            self.cnb["cnb-runner-capability-*"]["tag_push"][0], pipeline
+        )
+        serialized = json.dumps(pipeline, ensure_ascii=False)
+        self.assertIn("scripts.cnb_runner_capabilities outer", serialized)
+        self.assertNotIn("imports", pipeline)
+        self.assertNotIn(GMGN_SECRET_REPOSITORY, serialized)
+        self.assertNotIn("--privileged", serialized)
+        self.assertNotIn("seccomp=unconfined", serialized)
+        self.assertNotIn("cnb-gmgn-v2-", serialized)
+
     def test_v2_host_coordinator_installs_its_complete_import_closure(self) -> None:
         """The CNB host imports coordinator dependencies before child-image use."""
         pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]

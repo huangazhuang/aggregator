@@ -1102,6 +1102,56 @@ main:
                 printf '%s\n' 'WARNING: processed-state failure transition could not be recorded.' >&2
             fi
 
+  web_trigger_cnb_runner_capabilities:
+    - &cnb_runner_capabilities
+      name: Diagnose managed CNB Docker isolation primitives
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 2
+      docker:
+        image: python:3.12-bookworm
+      services: [docker]
+      env:
+        CAPABILITY_DOCKER_CLI_VERSION: "27.5.1"
+        CAPABILITY_DOCKER_CLI_SHA256: 4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640
+        CAPABILITY_DOCKER_CLI_DIR: .cnb-runtime/capability-diagnostic/docker-cli
+        PATH: .cnb-runtime/capability-diagnostic/docker-cli:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+      stages:
+        - name: Inspect effective child capabilities without repository secrets
+          timeout: 10m
+          script: |
+            set -eu
+            umask 077
+            mkdir -p "${CAPABILITY_DOCKER_CLI_DIR}"
+            docker_archive=".cnb-runtime/capability-diagnostic/docker-${CAPABILITY_DOCKER_CLI_VERSION}.tgz"
+            python3 - "${CAPABILITY_DOCKER_CLI_VERSION}" "${docker_archive}" <<'PY'
+            import pathlib
+            import sys
+            import urllib.request
+
+            version, destination = sys.argv[1:]
+            url = f"https://download.docker.com/linux/static/stable/x86_64/docker-{version}.tgz"
+            pathlib.Path(destination).write_bytes(urllib.request.urlopen(url, timeout=120).read())
+            PY
+            printf '%s  %s\n' "${CAPABILITY_DOCKER_CLI_SHA256}" "${docker_archive}" | sha256sum -c -
+            tar -xzf "${docker_archive}" --strip-components=1 \
+              -C "${CAPABILITY_DOCKER_CLI_DIR}" docker/docker
+            chmod 0755 "${CAPABILITY_DOCKER_CLI_DIR}/docker"
+            command -v docker >/dev/null
+            test "$(docker version --format '{{.Client.Version}}')" = "${CAPABILITY_DOCKER_CLI_VERSION}"
+
+            main_sha="$(git rev-parse HEAD)"
+            diagnostic_image="aggregator-cnb-capability:${main_sha}"
+            docker build --file Dockerfile.gmgn-v2 --tag "${diagnostic_image}" .
+            env -u CNB_TOKEN \
+              -u GITHUB_TOKEN \
+              -u GIT_ASKPASS \
+              -u GMGN_IDENTITY_HMAC_KEY \
+              -u GMGN_IDENTITY_KEY_VERSION \
+              -u GMGN_IDENTITY_EPOCH \
+              python3 -m scripts.cnb_runner_capabilities outer \
+                --image "${diagnostic_image}"
+
   web_trigger_china_probe:
     - *china_probe
 
@@ -1119,3 +1169,7 @@ main:
 "cnb-gmgn-v2-*":
   tag_push:
     - *gmgn_v2_shadow
+
+"cnb-runner-capability-*":
+  tag_push:
+    - *cnb_runner_capabilities

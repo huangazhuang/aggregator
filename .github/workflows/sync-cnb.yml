@@ -21,6 +21,11 @@ on:
         required: false
         default: false
         type: boolean
+      trigger_cnb_capability_probe:
+        description: Sync CNB main, then inspect managed Docker isolation primitives without repository secrets
+        required: false
+        default: false
+        type: boolean
       gmgn_v2_source_sha:
         description: Complete 64-character profile_sha256 from candidate status.json
         required: false
@@ -132,6 +137,20 @@ jobs:
             GIT_TERMINAL_PROMPT=0 \
             git push "${CNB_REPO_URL}" "refs/tags/${shadow_tag}:refs/tags/${shadow_tag}"
           echo "CNB GMGN probe trigger tag pushed: ${shadow_tag}"
+
+      - name: Trigger secret-free CNB capability diagnostic
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.trigger_cnb_capability_probe &&
+          steps.credentials.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          capability_tag="cnb-runner-capability-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git tag "${capability_tag}" HEAD
+          GIT_ASKPASS="${GITHUB_WORKSPACE}/scripts/cnb_git_askpass.sh" \
+            GIT_TERMINAL_PROMPT=0 \
+            git push "${CNB_REPO_URL}" "refs/tags/${capability_tag}:refs/tags/${capability_tag}"
+          echo "CNB capability diagnostic trigger tag pushed: ${capability_tag}"
 
       - name: Trigger guarded CNB GMGN V2 shadow
         if: >-
