@@ -192,6 +192,16 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         diagnostic_lanes = self.cnb["cnb-runner-capability-*"]["tag_push"]
         self.assertEqual(len(diagnostic_lanes), 3)
         self.assertTrue(all(lane == pipeline for lane in diagnostic_lanes))
+        self.assertEqual(
+            pipeline["lock"],
+            {
+                "key": "aggregator-cnb-capability-diagnostic",
+                "expires": 900,
+                "wait": True,
+                "timeout": 900,
+                "cancel-in-progress": False,
+            },
+        )
         serialized = json.dumps(pipeline, ensure_ascii=False)
         self.assertIn("scripts.cnb_runner_capabilities outer", serialized)
         self.assertNotIn("imports", pipeline)

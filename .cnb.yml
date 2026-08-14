@@ -1111,6 +1111,12 @@ main:
       docker:
         image: python:3.12-bookworm
       services: [docker]
+      lock:
+        key: aggregator-cnb-capability-diagnostic
+        expires: 900
+        wait: true
+        timeout: 900
+        cancel-in-progress: false
       env:
         CAPABILITY_DOCKER_CLI_VERSION: "27.5.1"
         CAPABILITY_DOCKER_CLI_SHA256: 4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640
