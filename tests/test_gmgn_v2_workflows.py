@@ -189,9 +189,9 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("cnb-gmgn-v2-", step["run"])
 
         pipeline = self.cnb["main"]["web_trigger_cnb_runner_capabilities"][0]
-        self.assertEqual(
-            self.cnb["cnb-runner-capability-*"]["tag_push"][0], pipeline
-        )
+        diagnostic_lanes = self.cnb["cnb-runner-capability-*"]["tag_push"]
+        self.assertEqual(len(diagnostic_lanes), 3)
+        self.assertTrue(all(lane == pipeline for lane in diagnostic_lanes))
         serialized = json.dumps(pipeline, ensure_ascii=False)
         self.assertIn("scripts.cnb_runner_capabilities outer", serialized)
         self.assertNotIn("imports", pipeline)

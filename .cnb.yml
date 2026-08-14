@@ -1173,3 +1173,5 @@ main:
 "cnb-runner-capability-*":
   tag_push:
     - *cnb_runner_capabilities
+    - *cnb_runner_capabilities
+    - *cnb_runner_capabilities
