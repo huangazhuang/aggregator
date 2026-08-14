@@ -180,7 +180,7 @@ def _inside(token: str) -> int:
     from scripts.probe_network_guard_linux import (
         LinuxGuardError,
         exercise_netns_mutation,
-        preflight_environment,
+        preflight_linux_backend,
     )
 
     try:
@@ -189,7 +189,7 @@ def _inside(token: str) -> int:
         status_text = ""
     preflight: dict[str, Any]
     try:
-        capabilities = preflight_environment()
+        capabilities = preflight_linux_backend()
         smoke = exercise_netns_mutation(f"gmgnv2-cap-{token}")
         preflight = {"ok": True, "capabilities": capabilities, **smoke}
     except LinuxGuardError as exc:
@@ -390,7 +390,9 @@ def _outer(image: str, seed: str) -> int:
             "storage_driver": _docker_value("{{.Driver}}"),
             "cgroup_version": _docker_value("{{.CgroupVersion}}"),
             "default_runtime": _docker_value("{{.DefaultRuntime}}"),
-            "runtimes": _docker_value("{{json .Runtimes}}"),
+            "available_runtimes": _docker_value(
+                "{{range $name, $runtime := .Runtimes}}{{$name}} {{end}}"
+            ),
             "kernel_version": _docker_value("{{.KernelVersion}}"),
         },
         "cases": cases,

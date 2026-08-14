@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+from io import StringIO
+import json
 import unittest
+from unittest.mock import patch
 
+from scripts import cnb_runner_capabilities
 from scripts.cnb_runner_capabilities import DIAGNOSTIC_CASES, parse_proc_status
+from scripts.probe_network_guard_linux import LinuxGuardError
 
 
 class CnbRunnerCapabilityDiagnosticTests(unittest.TestCase):
@@ -32,6 +38,32 @@ class CnbRunnerCapabilityDiagnosticTests(unittest.TestCase):
         self.assertNotIn("ALL", serialized)
         self.assertIn("NET_ADMIN", serialized)
         self.assertIn("SYS_ADMIN", serialized)
+
+    def test_inside_diagnostic_calls_the_linux_backend_entrypoint(self) -> None:
+        output = StringIO()
+        with (
+            patch(
+                "scripts.probe_network_guard_linux.preflight_linux_backend",
+                side_effect=LinuxGuardError("CAP_NET_ADMIN is required"),
+            ) as preflight,
+            patch.object(
+                cnb_runner_capabilities,
+                "_unprivileged_userns_probe",
+                return_value={"available": True, "ok": False},
+            ),
+            redirect_stdout(output),
+        ):
+            returncode = cnb_runner_capabilities.main(
+                ["inside", "--token", "0123456789ab"]
+            )
+
+        self.assertEqual(returncode, 0)
+        preflight.assert_called_once_with()
+        report = json.loads(output.getvalue())
+        self.assertEqual(
+            report["preflight"],
+            {"ok": False, "error": "CAP_NET_ADMIN is required"},
+        )
 
 
 if __name__ == "__main__":
