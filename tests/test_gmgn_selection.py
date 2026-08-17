@@ -198,7 +198,7 @@ def selection_input(records: list[dict], measurements: list[dict], regions: list
             "candidate_metadata_count": len(records),
             "identity_key_version": "test-k1",
             "identity_epoch": "identity-v1",
-            "validity_policy_version": "gmgn-validity-v1",
+            "validity_policy_version": "gmgn-validity-v2",
             "manifest_sha256": "e" * 64,
             "fragment_sha256": [f"{index:x}" * 64 for index in range(1, 5)],
             "results": measurements,

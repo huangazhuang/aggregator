@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 from scripts import cnb_gmgn_v2
-from scripts.gmgn_measurement import RESOLVER_POLICY_VERSION
+from scripts.gmgn_measurement import RESOLVER_POLICY_VERSION, normalize_outcome
 from scripts.gmgn_processed_state import build_attempt
 from scripts.publish_transaction import PreviousState
 
@@ -467,6 +467,87 @@ class TriggerAndPreflightTests(unittest.TestCase):
 
 
 class GuardedRuntimeTests(unittest.TestCase):
+    def test_mihomo_direct_probe_uses_the_same_delay_contract_as_candidates(self) -> None:
+        with patch.object(
+            cnb_gmgn_v2,
+            "_controller_request",
+            return_value={"delay": 87},
+        ) as request:
+            outcome = cnb_gmgn_v2._mihomo_delay_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                proxy_name="DIRECT",
+                target_url="https://www.gstatic.com/generate_204",
+                timeout_ms=5000,
+                expected_status=204,
+            )
+
+        self.assertEqual(outcome, {"delay_ms": 87, "controller_status": 200})
+        request.assert_called_once_with(
+            "127.0.0.1:19090",
+            "test-secret",
+            "GET",
+            "/proxies/DIRECT/delay?timeout=5000&url="
+            "https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&expected=204",
+            timeout=6.0,
+        )
+
+    def test_mihomo_direct_probe_preserves_safe_target_error_classification(self) -> None:
+        with patch.object(
+            cnb_gmgn_v2,
+            "_controller_request",
+            side_effect=cnb_gmgn_v2.CoordinatorError(
+                "unexpected target status code: 403 (controller status 400)"
+            ),
+        ):
+            outcome = cnb_gmgn_v2._mihomo_delay_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                proxy_name="DIRECT",
+                target_url="https://gmgn.ai/",
+                timeout_ms=5000,
+                expected_status=200,
+            )
+
+        self.assertEqual(normalize_outcome(outcome), (None, "target_403"))
+
+    def test_safe_direct_probe_diagnostics_expose_only_aggregate_categories(self) -> None:
+        control_samples = [
+            {
+                "round": round_number,
+                "delay_ms": 100 if round_number <= 17 else None,
+                "error_category": None if round_number <= 17 else "target_403",
+            }
+            for round_number in range(1, 21)
+        ]
+        canary_samples = [
+            {
+                "canary_id": canary_id,
+                "round": round_number,
+                "delay_ms": 50,
+                "error_category": None,
+            }
+            for canary_id in cnb_gmgn_v2.CANARY_IDS
+            for round_number in range(1, 21)
+        ]
+        scheduled = SimpleNamespace(
+            control_samples=tuple(control_samples),
+            canary_samples=tuple(canary_samples),
+        )
+        diagnostics = cnb_gmgn_v2._safe_direct_probe_diagnostics(
+            2,
+            scheduled,
+            {"controller": {"unhealthy_count": 0}},
+        )
+
+        self.assertEqual(diagnostics["client"], "mihomo-direct")
+        self.assertEqual(diagnostics["control"]["success_count"], 17)
+        self.assertEqual(diagnostics["control"]["max_consecutive_failures"], 3)
+        self.assertEqual(diagnostics["control"]["error_counts"], {"target_403": 3})
+        serialized = json.dumps(diagnostics)
+        for private_value in ("test-secret", "gmgn.ai", "1.1.1.1", '"server"'):
+            self.assertNotIn(private_value, serialized)
+
     def test_probe_resolution_strictly_binds_guarded_and_dns_failed_partition(self) -> None:
         guarded = "c1_" + "1" * 24
         dns_failed = "c1_" + "2" * 24

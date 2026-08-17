@@ -56,6 +56,7 @@ from scripts.candidate_snapshot import (
 )
 from scripts.gmgn_history import empty_history, reduce_history, validate_history
 from scripts.gmgn_measurement import (
+    ERROR_CATEGORIES,
     MINIMUM_OBSERVATION_WINDOW_SECONDS,
     NETWORK_GUARD_POLICY_VERSION,
     RESOLVER_POLICY_VERSION,
@@ -67,6 +68,8 @@ from scripts.gmgn_measurement import (
     candidate_ids_sha256,
     canonical_json_sha256,
     run_measurement_schedule,
+    summarize_canaries,
+    summarize_control,
     validate_manifest_v3,
     write_private_fragment,
 )
@@ -1207,16 +1210,6 @@ def _pinned_http(
         connection.close()
 
 
-def _direct_outcome(target: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        status, _body, delay = _pinned_http(target)
-    except Exception as exc:
-        return {"error": str(exc)}
-    if status != int(target["expected_status"]):
-        return {"target_status": status, "error": f"target status {status}"}
-    return {"delay_ms": delay}
-
-
 def _operational_target(
     name: str, auxiliary_targets: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -1310,17 +1303,21 @@ def _egress(target: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _delay_attempt(
+def _mihomo_delay_outcome(
     controller: str,
     secret: str,
-    candidate: Mapping[str, Any],
+    *,
+    proxy_name: str,
     target_url: str,
     timeout_ms: int,
+    expected_status: int,
 ) -> dict[str, Any]:
-    name = str(candidate["proxy"]["name"])
+    if timeout_ms <= 0 or not 100 <= expected_status <= 599:
+        raise CoordinatorError("Mihomo delay contract is invalid")
     path = (
-        f"/proxies/{urllib.parse.quote(name, safe='')}/delay"
-        f"?timeout={timeout_ms}&url={urllib.parse.quote(target_url, safe='')}&expected=200"
+        f"/proxies/{urllib.parse.quote(proxy_name, safe='')}/delay"
+        f"?timeout={timeout_ms}&url={urllib.parse.quote(target_url, safe='')}"
+        f"&expected={expected_status}"
     )
     try:
         payload = _controller_request(
@@ -1344,6 +1341,62 @@ def _delay_attempt(
             "controller_status": int(status_match.group(1)) if status_match else None,
             "error": text,
         }
+
+
+def _delay_attempt(
+    controller: str,
+    secret: str,
+    candidate: Mapping[str, Any],
+    target_url: str,
+    timeout_ms: int,
+) -> dict[str, Any]:
+    return _mihomo_delay_outcome(
+        controller,
+        secret,
+        proxy_name=str(candidate["proxy"]["name"]),
+        target_url=target_url,
+        timeout_ms=timeout_ms,
+        expected_status=200,
+    )
+
+
+def _safe_error_counts(samples: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {category: 0 for category in ERROR_CATEGORIES}
+    for sample in samples:
+        category = sample.get("error_category")
+        if category is not None:
+            counts[str(category)] += 1
+    return {category: counts[category] for category in ERROR_CATEGORIES if counts[category]}
+
+
+def _safe_direct_probe_diagnostics(
+    shard_index: int,
+    scheduled: Any,
+    private_fragment: Mapping[str, Any],
+) -> dict[str, Any]:
+    canaries: list[dict[str, Any]] = []
+    for summary in summarize_canaries(scheduled.canary_samples, CANARY_IDS):
+        canary_id = str(summary["canary_id"])
+        samples = [
+            sample
+            for sample in scheduled.canary_samples
+            if str(sample["canary_id"]) == canary_id
+        ]
+        canaries.append({**summary, "error_counts": _safe_error_counts(samples)})
+    return {
+        "kind": "cnb-gmgn-safe-direct-probe-diagnostics",
+        "schema_version": 1,
+        "shard_index": shard_index,
+        "client": "mihomo-direct",
+        "control": {
+            **summarize_control(scheduled.control_samples),
+            "error_counts": _safe_error_counts(scheduled.control_samples),
+        },
+        "canaries": canaries,
+        "controller_unhealthy_count": int(
+            private_fragment["controller"]["unhealthy_count"]
+        ),
+    }
 
 
 def _proxy_region(
@@ -1547,6 +1600,21 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 int(manifest["request_timeout_ms"]),
             )
 
+        def direct_probe(name: str) -> dict[str, Any]:
+            target = _operational_target(name, auxiliary)
+            port = int(target["port"])
+            authority = str(target["server"])
+            if port != 443:
+                authority = f"{authority}:{port}"
+            return _mihomo_delay_outcome(
+                controller,
+                secret,
+                proxy_name="DIRECT",
+                target_url=f"https://{authority}{target['path']}",
+                timeout_ms=int(DIRECT_PROBE_TIMEOUT_SECONDS * 1000),
+                expected_status=int(target["expected_status"]),
+            )
+
         scheduled = run_measurement_schedule(
             candidates,
             attempt,
@@ -1556,12 +1624,8 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 manifest["minimum_observation_window_seconds"]
             ),
             health_check=health,
-            control_probe=lambda _round: _direct_outcome(
-                _operational_target("control-gmgn-v1", auxiliary)
-            ),
-            canary_probe=lambda canary, _round: _direct_outcome(
-                _operational_target(canary, auxiliary)
-            ),
+            control_probe=lambda _round: direct_probe("control-gmgn-v1"),
+            canary_probe=lambda canary, _round: direct_probe(canary),
             canary_ids=CANARY_IDS,
             egress_probe=lambda _phase: _egress(
                 _operational_target("egress-provider-v1", auxiliary)
@@ -1573,6 +1637,16 @@ def _probe_inside(args: argparse.Namespace) -> int:
             shard_index=index,
             shard_candidates=candidates,
             scheduled=scheduled,
+        )
+        print(
+            "GMGN V2 safe direct-probe diagnostics: "
+            + json.dumps(
+                _safe_direct_probe_diagnostics(index, scheduled, private_fragment),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
         )
         write_private_fragment(
             context["private_fragment"],
@@ -1879,8 +1953,19 @@ def _finalize(args: argparse.Namespace) -> int:
     ]
     validity = validate_run(manifest, fragments)
     if validity["valid_run"] is not True:
+        controls = ",".join(
+            "shard{index}={success}/{attempts};streak={streak}".format(
+                index=int(fragment["shard_index"]),
+                success=int(fragment["control"]["success_count"]),
+                attempts=int(fragment["control"]["attempt_count"]),
+                streak=int(fragment["control"]["max_consecutive_failures"]),
+            )
+            for fragment in sorted(fragments, key=lambda item: int(item["shard_index"]))
+        )
         raise CoordinatorError(
-            "GMGN V2 run is invalid: " + ",".join(validity["reasons"])
+            "GMGN V2 run is invalid: "
+            + ",".join(validity["reasons"])
+            + f"; control summaries: {controls}"
         )
     accepted = accepted_measurement(manifest, fragments)
     work_dir = Path(args.work_dir).resolve()
