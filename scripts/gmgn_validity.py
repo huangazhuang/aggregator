@@ -498,7 +498,8 @@ def validate_run(
                 reasons.add("canary_latency_skew")
 
     total_attempts = len(all_results) * TOTAL_ROUNDS
-    global_target_errors = 0
+    global_target_403_429_errors = 0
+    global_target_status_errors = 0
     per_round_target_errors = [0] * TOTAL_ROUNDS
     per_round_attempts = [0] * TOTAL_ROUNDS
     shard_system_rates: list[float] = []
@@ -507,14 +508,24 @@ def validate_run(
         shard_attempts = int(fragment["candidate_count"]) * TOTAL_ROUNDS
         for index, trend in enumerate(fragment["round_trends"]):
             errors = trend["error_counts"]
-            count = int(errors["target_403"]) + int(errors["target_429"])
-            global_target_errors += count
-            shard_errors += count + int(errors["controller_request"]) + int(errors["controller_unhealthy"])
-            per_round_target_errors[index] += count
+            # Validity v3 keeps the legacy restricted-status metric for
+            # compatibility, while treating candidate-side 5xx as the same
+            # target incident class for publication safety.
+            restricted_count = int(errors["target_403"]) + int(errors["target_429"])
+            status_count = restricted_count + int(errors["target_5xx"])
+            global_target_403_429_errors += restricted_count
+            global_target_status_errors += status_count
+            shard_errors += status_count + int(errors["controller_request"]) + int(errors["controller_unhealthy"])
+            per_round_target_errors[index] += status_count
             per_round_attempts[index] += int(trend["attempt_count"])
         shard_system_rates.append(shard_errors / shard_attempts if shard_attempts else 0.0)
-    global_rate = global_target_errors / total_attempts if total_attempts else 1.0
-    if global_rate > 0.02 + 1e-12:
+    restricted_rate = (
+        global_target_403_429_errors / total_attempts if total_attempts else 1.0
+    )
+    status_error_rate = (
+        global_target_status_errors / total_attempts if total_attempts else 1.0
+    )
+    if status_error_rate > 0.02 + 1e-12:
         reasons.add("target_status_global_incident")
     if any(errors / attempts >= 0.10 - 1e-12 for errors, attempts in zip(per_round_target_errors, per_round_attempts) if attempts):
         reasons.add("target_status_round_incident")
@@ -524,7 +535,8 @@ def validate_run(
         {
             "candidate_count": len(all_results),
             "short_observation_count": short_spans,
-            "target_403_429_rate": round(global_rate, 6),
+            "target_403_429_rate": round(restricted_rate, 6),
+            "target_status_error_rate": round(status_error_rate, 6),
             "runner_region": next(iter(regions)) if len(regions) == 1 else "",
         }
     )

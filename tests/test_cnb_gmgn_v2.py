@@ -511,6 +511,68 @@ class GuardedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(normalize_outcome(outcome), (None, "target_403"))
 
+    def test_candidate_probe_remains_strict_http_200(self) -> None:
+        with patch.object(
+            cnb_gmgn_v2,
+            "_mihomo_delay_outcome",
+            return_value={"delay_ms": 75},
+        ) as probe:
+            outcome = cnb_gmgn_v2._delay_attempt(
+                "127.0.0.1:19090",
+                "test-secret",
+                {"proxy": {"name": "candidate-a"}},
+                "https://gmgn.ai/",
+                3000,
+            )
+
+        self.assertEqual(outcome, {"delay_ms": 75})
+        probe.assert_called_once_with(
+            "127.0.0.1:19090",
+            "test-secret",
+            proxy_name="candidate-a",
+            target_url="https://gmgn.ai/",
+            timeout_ms=3000,
+            expected_status=200,
+        )
+
+    def test_direct_http_control_accepts_complete_waf_responses_as_reachability(self) -> None:
+        target = {
+            **cnb_gmgn_v2.DIRECT_TARGETS["control-gmgn-v1"],
+            "addresses": ["1.1.1.1"],
+        }
+        for status in (200, 403, 429, 503):
+            with self.subTest(status=status), patch.object(
+                cnb_gmgn_v2,
+                "_pinned_http",
+                return_value=(status, b"ignored", 91),
+            ):
+                outcome = cnb_gmgn_v2._direct_http_reachability_outcome(target)
+                self.assertEqual(normalize_outcome(outcome), (91, None))
+                self.assertEqual(outcome["http_status_class"], f"{status // 100}xx")
+
+    def test_direct_probe_preflight_accepts_waf_control_but_fails_persistent_canary(self) -> None:
+        diagnostics = cnb_gmgn_v2._require_direct_probe_preflight(
+            control_probe=lambda _round: {
+                "delay_ms": 80,
+                "http_status_class": "5xx",
+            },
+            canary_probe=lambda _canary, _round: {"delay_ms": 50},
+            canary_ids=["canary-a"],
+        )
+        self.assertEqual(diagnostics["control"]["success_count"], 3)
+        self.assertEqual(diagnostics["control"]["http_status_classes"], {"5xx": 3})
+
+        with self.assertRaisesRegex(
+            cnb_gmgn_v2.CoordinatorError, "canary preflight"
+        ):
+            cnb_gmgn_v2._require_direct_probe_preflight(
+                control_probe=lambda _round: {"delay_ms": 80},
+                canary_probe=lambda _canary, _round: {
+                    "error_category": "connect"
+                },
+                canary_ids=["canary-a"],
+            )
+
     def test_safe_direct_probe_diagnostics_expose_only_aggregate_categories(self) -> None:
         control_samples = [
             {
@@ -558,7 +620,13 @@ class GuardedRuntimeTests(unittest.TestCase):
             private_fragment,
         )
 
-        self.assertEqual(diagnostics["client"], "mihomo-direct")
+        self.assertEqual(
+            diagnostics["clients"],
+            {
+                "control": "pinned-http-direct",
+                "canaries": "mihomo-direct",
+            },
+        )
         self.assertEqual(diagnostics["controller_unhealthy_count"], 0)
         self.assertEqual(diagnostics["control"]["success_count"], 17)
         self.assertEqual(diagnostics["control"]["max_consecutive_failures"], 3)

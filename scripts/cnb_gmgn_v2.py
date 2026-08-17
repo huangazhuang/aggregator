@@ -35,7 +35,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import yaml
 
@@ -67,6 +67,7 @@ from scripts.gmgn_measurement import (
     build_redacted_fragment,
     candidate_ids_sha256,
     canonical_json_sha256,
+    normalize_outcome,
     run_measurement_schedule,
     summarize_canaries,
     summarize_control,
@@ -179,19 +180,21 @@ RETRY_TAG_RE = re.compile(
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DIRECT_PREFLIGHT_ATTEMPTS = 3
 
 DIRECT_TARGETS: dict[str, dict[str, Any]] = {
     "control-gmgn-v1": {
         "server": "gmgn.ai",
         "port": 443,
         "path": "/",
-        "expected_status": 200,
+        "status_policy": "any_http",
         "purpose": "control",
     },
     "canary-gstatic-v1": {
         "server": "www.gstatic.com",
         "port": 443,
         "path": "/generate_204",
+        "status_policy": "exact",
         "expected_status": 204,
         "purpose": "canary",
     },
@@ -199,6 +202,7 @@ DIRECT_TARGETS: dict[str, dict[str, Any]] = {
         "server": "cp.cloudflare.com",
         "port": 443,
         "path": "/generate_204",
+        "status_policy": "exact",
         "expected_status": 204,
         "purpose": "canary",
     },
@@ -206,6 +210,7 @@ DIRECT_TARGETS: dict[str, dict[str, Any]] = {
         "server": "api.ip.sb",
         "port": 443,
         "path": "/geoip",
+        "status_policy": "exact",
         "expected_status": 200,
         "purpose": "egress",
     },
@@ -1210,6 +1215,31 @@ def _pinned_http(
         connection.close()
 
 
+def _direct_http_reachability_outcome(
+    target: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Treat a complete, certificate-validated HTTP response as reachability.
+
+    The runner's own GMGN request is a system control, not a candidate.  A
+    WAF-generated 4xx/5xx still proves that the pinned edge completed TCP,
+    TLS, and HTTP.  Candidate probes remain strict HTTP 200 checks through
+    ``_delay_attempt``.
+    """
+
+    if target.get("status_policy") != "any_http":
+        raise CoordinatorError("direct reachability target policy is invalid")
+    try:
+        status, _body, delay_ms = _pinned_http(target)
+    except Exception as exc:
+        return {"error": str(exc)}
+    if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
+        return {"error": "direct target returned an invalid HTTP status"}
+    return {
+        "delay_ms": delay_ms,
+        "http_status_class": f"{status // 100}xx",
+    }
+
+
 def _operational_target(
     name: str, auxiliary_targets: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -1369,6 +1399,91 @@ def _safe_error_counts(samples: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return {category: counts[category] for category in ERROR_CATEGORIES if counts[category]}
 
 
+def _require_direct_probe_preflight(
+    *,
+    control_probe: Callable[[int], Mapping[str, Any] | None],
+    canary_probe: Callable[[str, int], Mapping[str, Any] | None],
+    canary_ids: Sequence[str],
+    attempts: int = DIRECT_PREFLIGHT_ATTEMPTS,
+) -> dict[str, Any]:
+    """Reject a persistently broken direct path before the 15-minute run."""
+
+    if attempts < 1:
+        raise CoordinatorError("direct probe preflight attempt count is invalid")
+    normalized_canary_ids = [str(value).strip() for value in canary_ids]
+    if (
+        not normalized_canary_ids
+        or any(not value for value in normalized_canary_ids)
+        or len(normalized_canary_ids) != len(set(normalized_canary_ids))
+    ):
+        raise CoordinatorError("direct probe preflight canary set is invalid")
+    control_samples: list[dict[str, Any]] = []
+    control_status_classes: dict[str, int] = {}
+    canary_samples: dict[str, list[dict[str, Any]]] = {
+        canary_id: [] for canary_id in normalized_canary_ids
+    }
+    for round_number in range(1, attempts + 1):
+        try:
+            control_outcome = dict(control_probe(round_number) or {})
+        except Exception as exc:
+            control_outcome = {"error": str(exc)}
+        delay, category = normalize_outcome(control_outcome)
+        control_samples.append(
+            {
+                "round": round_number,
+                "delay_ms": delay,
+                "error_category": category,
+            }
+        )
+        status_class = control_outcome.get("http_status_class")
+        if delay is not None and status_class in {"1xx", "2xx", "3xx", "4xx", "5xx"}:
+            control_status_classes[str(status_class)] = (
+                control_status_classes.get(str(status_class), 0) + 1
+            )
+        for canary_id in canary_samples:
+            try:
+                canary_outcome = canary_probe(canary_id, round_number)
+            except Exception as exc:
+                canary_outcome = {"error": str(exc)}
+            canary_delay, canary_category = normalize_outcome(canary_outcome)
+            canary_samples[canary_id].append(
+                {
+                    "round": round_number,
+                    "delay_ms": canary_delay,
+                    "error_category": canary_category,
+                }
+            )
+
+    control_successes = sum(item["delay_ms"] is not None for item in control_samples)
+    canary_summaries = []
+    for canary_id, samples in canary_samples.items():
+        success_count = sum(item["delay_ms"] is not None for item in samples)
+        canary_summaries.append(
+            {
+                "canary_id": canary_id,
+                "attempt_count": attempts,
+                "success_count": success_count,
+                "error_counts": _safe_error_counts(samples),
+            }
+        )
+    diagnostics = {
+        "kind": "cnb-gmgn-safe-direct-probe-preflight",
+        "schema_version": 1,
+        "control": {
+            "attempt_count": attempts,
+            "success_count": control_successes,
+            "http_status_classes": control_status_classes,
+            "error_counts": _safe_error_counts(control_samples),
+        },
+        "canaries": canary_summaries,
+    }
+    if control_successes == 0:
+        raise CoordinatorError("direct GMGN reachability preflight failed")
+    if any(item["success_count"] == 0 for item in canary_summaries):
+        raise CoordinatorError("direct canary preflight failed")
+    return diagnostics
+
+
 def _safe_direct_probe_diagnostics(
     shard_index: int,
     scheduled: Any,
@@ -1392,9 +1507,12 @@ def _safe_direct_probe_diagnostics(
         canaries.append({**summary, "error_counts": _safe_error_counts(samples)})
     return {
         "kind": "cnb-gmgn-safe-direct-probe-diagnostics",
-        "schema_version": 1,
+        "schema_version": 2,
         "shard_index": shard_index,
-        "client": "mihomo-direct",
+        "clients": {
+            "control": "pinned-http-direct",
+            "canaries": "mihomo-direct",
+        },
         "control": {
             **summarize_control(scheduled.control_samples),
             "error_counts": _safe_error_counts(scheduled.control_samples),
@@ -1607,8 +1725,10 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 int(manifest["request_timeout_ms"]),
             )
 
-        def direct_probe(name: str) -> dict[str, Any]:
+        def exact_direct_probe(name: str) -> dict[str, Any]:
             target = _operational_target(name, auxiliary)
+            if target.get("status_policy") != "exact":
+                raise CoordinatorError("exact direct target policy is invalid")
             port = int(target["port"])
             authority = str(target["server"])
             if port != 443:
@@ -1622,6 +1742,27 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 expected_status=int(target["expected_status"]),
             )
 
+        def control_probe(_round: int) -> dict[str, Any]:
+            return _direct_http_reachability_outcome(
+                _operational_target("control-gmgn-v1", auxiliary)
+            )
+
+        preflight_diagnostics = _require_direct_probe_preflight(
+            control_probe=control_probe,
+            canary_probe=lambda canary, _round: exact_direct_probe(canary),
+            canary_ids=CANARY_IDS,
+        )
+        print(
+            "GMGN V2 safe direct-probe preflight: "
+            + json.dumps(
+                preflight_diagnostics,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
         scheduled = run_measurement_schedule(
             candidates,
             attempt,
@@ -1631,8 +1772,8 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 manifest["minimum_observation_window_seconds"]
             ),
             health_check=health,
-            control_probe=lambda _round: direct_probe("control-gmgn-v1"),
-            canary_probe=lambda canary, _round: direct_probe(canary),
+            control_probe=control_probe,
+            canary_probe=lambda canary, _round: exact_direct_probe(canary),
             canary_ids=CANARY_IDS,
             egress_probe=lambda _phase: _egress(
                 _operational_target("egress-provider-v1", auxiliary)

@@ -549,6 +549,32 @@ class ValidityTests(unittest.TestCase):
         fragments[1]["canaries"][0]["median_delay_ms"] = 401.0
         self.assertIn("canary_latency_skew", validate_run(manifest, fragments)["reasons"])
 
+    def test_candidate_target_5xx_is_a_system_incident_even_when_control_is_reachable(self):
+        manifest, shards = manifest_and_shards()
+        fragments = valid_fragments(manifest, shards)
+        for fragment in fragments:
+            result = fragment["results"][0]
+            result["response_count"] = 19
+            result["within_1000_count"] = 19
+            result["no_result_count"] = 1
+            result["first_half_within_1000_count"] = 9
+            result["five_round_within_1000_counts"][0] = 4
+            result["error_counts"]["target_5xx"] = 1
+            fragment["round_trends"][0]["within_1000_count"] = 0
+            fragment["round_trends"][0]["no_result_count"] = fragment[
+                "candidate_count"
+            ]
+            fragment["round_trends"][0]["error_counts"]["target_5xx"] = fragment[
+                "candidate_count"
+            ]
+
+        result = validate_run(manifest, fragments)
+        self.assertFalse(result["valid_run"])
+        self.assertIn("target_status_global_incident", result["reasons"])
+        self.assertIn("target_status_round_incident", result["reasons"])
+        self.assertEqual(result["metrics"]["target_403_429_rate"], 0.0)
+        self.assertEqual(result["metrics"]["target_status_error_rate"], 0.05)
+
 
 class FragmentPrivacyTests(unittest.TestCase):
     def test_private_fragment_is_0600_and_public_projection_contains_no_proxy_or_ip(self):
