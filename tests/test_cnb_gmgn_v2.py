@@ -488,6 +488,7 @@ class GuardedRuntimeTests(unittest.TestCase):
             0,
             pinned_candidate_ids=[guarded],
             dns_failed_candidate_ids=[dns_failed],
+            ipv6_unavailable_candidate_ids=[],
         )
         self.assertEqual(resolution["guarded_candidate_ids"], [guarded])
         self.assertEqual(resolution["dns_failed_candidate_ids"], [dns_failed])
@@ -505,6 +506,43 @@ class GuardedRuntimeTests(unittest.TestCase):
         ):
             cnb_gmgn_v2._validate_probe_resolution(
                 manifest, candidates, 0, tampered
+            )
+
+    def test_ipv4_probe_partition_filters_dual_stack_and_separates_ipv6_only(self) -> None:
+        dual_stack = "c1_" + "3" * 24
+        ipv6_only = "c1_" + "4" * 24
+        pinned = {
+            dual_stack: {
+                "server": "dual.example",
+                "port": 443,
+                "addresses": ["2001:4860:4860::8888", "8.8.8.8"],
+                "resolver_policy_version": RESOLVER_POLICY_VERSION,
+            },
+            ipv6_only: {
+                "server": "v6.example",
+                "port": 443,
+                "addresses": ["2606:4700:4700::1111"],
+                "resolver_policy_version": RESOLVER_POLICY_VERSION,
+            },
+        }
+
+        selected, unavailable = cnb_gmgn_v2._select_ipv4_pinned_candidates(
+            pinned
+        )
+
+        self.assertEqual(selected[dual_stack]["addresses"], ["8.8.8.8"])
+        self.assertEqual(unavailable, (ipv6_only,))
+        self.assertNotIn(ipv6_only, selected)
+
+    def test_auxiliary_resolution_uses_only_public_ipv4_answers(self) -> None:
+        with patch.object(
+            cnb_gmgn_v2,
+            "default_resolver",
+            return_value=["2001:4860:4860::8888", "8.8.8.8"],
+        ):
+            self.assertEqual(
+                cnb_gmgn_v2._public_addresses("example.test", 443),
+                ["8.8.8.8"],
             )
 
     def test_public_region_label_rejects_ip_disguised_as_region(self) -> None:

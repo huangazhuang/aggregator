@@ -132,7 +132,7 @@ PREPARED_SNAPSHOT_SCHEMA_VERSION = 1
 SHARD_INPUT_KIND = "cnb-gmgn-shard-input"
 SHARD_INPUT_SCHEMA_VERSION = 1
 PROBE_RESOLUTION_KIND = "cnb-gmgn-v2-probe-resolution"
-PROBE_RESOLUTION_SCHEMA_VERSION = 1
+PROBE_RESOLUTION_SCHEMA_VERSION = 2
 RAW_REGION_KIND = "cnb-gmgn-private-region-observations"
 RAW_REGION_SCHEMA_VERSION = 1
 OPAQUE_REGION_KIND = "cnb-gmgn-region-observations"
@@ -892,6 +892,8 @@ def _validate_probe_resolution(
         "guarded_candidate_ids_sha256",
         "dns_failed_candidate_ids",
         "dns_failed_candidate_ids_sha256",
+        "ipv6_unavailable_candidate_ids",
+        "ipv6_unavailable_candidate_ids_sha256",
     }
     if not isinstance(raw, Mapping) or set(raw) != fields:
         raise CoordinatorError("probe resolution fields are incomplete or unexpected")
@@ -910,7 +912,11 @@ def _validate_probe_resolution(
         raise CoordinatorError("probe resolution binding mismatch")
 
     partitions: dict[str, list[str]] = {}
-    for field in ("guarded_candidate_ids", "dns_failed_candidate_ids"):
+    for field in (
+        "guarded_candidate_ids",
+        "dns_failed_candidate_ids",
+        "ipv6_unavailable_candidate_ids",
+    ):
         raw_ids = value[field]
         if not isinstance(raw_ids, list):
             raise CoordinatorError("probe resolution candidate partition is malformed")
@@ -922,8 +928,15 @@ def _validate_probe_resolution(
             raise CoordinatorError("probe resolution candidate partition hash mismatch")
         partitions[field] = normalized
     guarded = set(partitions["guarded_candidate_ids"])
-    failed = set(partitions["dns_failed_candidate_ids"])
-    if not guarded or guarded & failed or guarded | failed != set(ids):
+    dns_failed = set(partitions["dns_failed_candidate_ids"])
+    ipv6_unavailable = set(partitions["ipv6_unavailable_candidate_ids"])
+    if (
+        not guarded
+        or guarded & dns_failed
+        or guarded & ipv6_unavailable
+        or dns_failed & ipv6_unavailable
+        or guarded | dns_failed | ipv6_unavailable != set(ids)
+    ):
         raise CoordinatorError("probe resolution candidate partition is incomplete")
     return value
 
@@ -935,9 +948,14 @@ def _build_probe_resolution(
     *,
     pinned_candidate_ids: Iterable[str],
     dns_failed_candidate_ids: Iterable[str],
+    ipv6_unavailable_candidate_ids: Iterable[str],
 ) -> dict[str, Any]:
     guarded = sorted(validate_public_id(item, "candidate") for item in pinned_candidate_ids)
     failed = sorted(validate_public_id(item, "candidate") for item in dns_failed_candidate_ids)
+    ipv6_unavailable = sorted(
+        validate_public_id(item, "candidate")
+        for item in ipv6_unavailable_candidate_ids
+    )
     expected = manifest["shards"][index]
     value = {
         "kind": PROBE_RESOLUTION_KIND,
@@ -951,8 +969,46 @@ def _build_probe_resolution(
         "guarded_candidate_ids_sha256": candidate_ids_sha256(guarded),
         "dns_failed_candidate_ids": failed,
         "dns_failed_candidate_ids_sha256": candidate_ids_sha256(failed),
+        "ipv6_unavailable_candidate_ids": ipv6_unavailable,
+        "ipv6_unavailable_candidate_ids_sha256": candidate_ids_sha256(
+            ipv6_unavailable
+        ),
     }
     return _validate_probe_resolution(manifest, candidates, index, value)
+
+
+def _select_ipv4_pinned_candidates(
+    pinned: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], tuple[str, ...]]:
+    """Select the address family supported by the managed CNB guard runtime."""
+
+    selected: dict[str, dict[str, Any]] = {}
+    ipv6_unavailable: list[str] = []
+    for raw_candidate_id, raw_record in pinned.items():
+        candidate_id = validate_public_id(raw_candidate_id, "candidate")
+        record = copy.deepcopy(dict(raw_record))
+        addresses = record.get("addresses")
+        if not isinstance(addresses, list) or not addresses:
+            raise CoordinatorError("pinned candidate address list is malformed")
+        try:
+            ipv4_addresses = sorted(
+                {
+                    ipaddress.ip_address(str(value)).compressed.lower()
+                    for value in addresses
+                    if ipaddress.ip_address(str(value)).version == 4
+                },
+                key=lambda value: int(ipaddress.ip_address(value)),
+            )
+        except ValueError:
+            raise CoordinatorError("pinned candidate address is malformed") from None
+        if not ipv4_addresses:
+            ipv6_unavailable.append(candidate_id)
+            continue
+        record["addresses"] = ipv4_addresses
+        selected[candidate_id] = record
+    if not selected:
+        raise CoordinatorError("probe candidate set has no IPv4-compatible endpoints")
+    return selected, tuple(sorted(ipv6_unavailable))
 
 
 def _public_addresses(host: str, port: int) -> list[str]:
@@ -977,9 +1033,10 @@ def _public_addresses(host: str, port: int) -> list[str]:
             )
         ):
             raise CoordinatorError("auxiliary resolver returned a forbidden address")
-        values.add(address.compressed.lower())
+        if address.version == 4:
+            values.add(address.compressed.lower())
     if not values:
-        raise CoordinatorError("auxiliary resolver returned no public address")
+        raise CoordinatorError("auxiliary resolver returned no public IPv4 address")
     return sorted(values, key=lambda value: (ipaddress.ip_address(value).version, int(ipaddress.ip_address(value))))
 
 
@@ -1001,8 +1058,11 @@ def _probe(args: argparse.Namespace) -> int:
     if index not in range(SHARD_COUNT):
         raise CoordinatorError("shard index is outside the fixed four-shard range")
     candidates = _load_shard(manifest, args.shard_input, index)
-    pinned, dns_failed_candidate_ids = resolve_and_pin_candidates_with_failures(
+    resolved, dns_failed_candidate_ids = resolve_and_pin_candidates_with_failures(
         candidates
+    )
+    pinned, ipv6_unavailable_candidate_ids = _select_ipv4_pinned_candidates(
+        resolved
     )
     auxiliary = _resolve_auxiliary_targets()
     output = Path(args.output_dir).resolve()
@@ -1013,6 +1073,7 @@ def _probe(args: argparse.Namespace) -> int:
         index,
         pinned_candidate_ids=pinned,
         dns_failed_candidate_ids=dns_failed_candidate_ids,
+        ipv6_unavailable_candidate_ids=ipv6_unavailable_candidate_ids,
     )
     _write_json(output / "probe-resolution.json", resolution)
     context = {
@@ -1021,6 +1082,9 @@ def _probe(args: argparse.Namespace) -> int:
         "candidates": candidates,
         "pinned_candidates": pinned,
         "dns_failed_candidate_ids": list(dns_failed_candidate_ids),
+        "ipv6_unavailable_candidate_ids": list(
+            ipv6_unavailable_candidate_ids
+        ),
         "auxiliary_targets": auxiliary,
         "controller_secret": Path(args.controller_secret).read_text(encoding="utf-8").strip(),
         "mihomo": str(Path(args.mihomo).resolve()),
@@ -1347,6 +1411,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
         "candidates",
         "pinned_candidates",
         "dns_failed_candidate_ids",
+        "ipv6_unavailable_candidate_ids",
         "auxiliary_targets",
         "controller_secret",
         "mihomo",
@@ -1377,15 +1442,29 @@ def _probe_inside(args: argparse.Namespace) -> int:
     ]
     if dns_failed_candidate_ids != sorted(set(dns_failed_candidate_ids)):
         raise CoordinatorError("probe context DNS failure partition is non-canonical")
+    raw_ipv6_unavailable = context["ipv6_unavailable_candidate_ids"]
+    if not isinstance(raw_ipv6_unavailable, list):
+        raise CoordinatorError("probe context IPv6 partition is malformed")
+    ipv6_unavailable_candidate_ids = [
+        validate_public_id(item, "candidate") for item in raw_ipv6_unavailable
+    ]
+    if ipv6_unavailable_candidate_ids != sorted(
+        set(ipv6_unavailable_candidate_ids)
+    ):
+        raise CoordinatorError("probe context IPv6 partition is non-canonical")
     resolution = _build_probe_resolution(
         manifest,
         candidates,
         index,
         pinned_candidate_ids=pinned,
         dns_failed_candidate_ids=dns_failed_candidate_ids,
+        ipv6_unavailable_candidate_ids=ipv6_unavailable_candidate_ids,
     )
     guarded_ids = set(resolution["guarded_candidate_ids"])
     dns_failed_ids = set(resolution["dns_failed_candidate_ids"])
+    ipv6_unavailable_ids = set(
+        resolution["ipv6_unavailable_candidate_ids"]
+    )
     guarded_candidates = [
         item for item in candidates if item["candidate_id"] in guarded_ids
     ]
@@ -1454,19 +1533,23 @@ def _probe_inside(args: argparse.Namespace) -> int:
             except Exception:
                 return {"healthy": False, "version": controller_version}
 
+        def attempt(candidate: Mapping[str, Any], _round: int) -> dict[str, Any]:
+            candidate_id = str(candidate["candidate_id"])
+            if candidate_id in dns_failed_ids:
+                return {"error_category": "dns"}
+            if candidate_id in ipv6_unavailable_ids:
+                return {"error_category": "connect"}
+            return _delay_attempt(
+                controller,
+                secret,
+                candidate,
+                str(manifest["target_url"]),
+                int(manifest["request_timeout_ms"]),
+            )
+
         scheduled = run_measurement_schedule(
             candidates,
-            lambda candidate, _round: (
-                {"error": "DNS resolution unavailable"}
-                if candidate["candidate_id"] in dns_failed_ids
-                else _delay_attempt(
-                    controller,
-                    secret,
-                    candidate,
-                    str(manifest["target_url"]),
-                    int(manifest["request_timeout_ms"]),
-                )
-            ),
+            attempt,
             workers=int(manifest["workers_per_shard"]),
             total_rounds=int(manifest["total_rounds"]),
             minimum_observation_window_seconds=float(
