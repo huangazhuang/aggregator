@@ -703,17 +703,38 @@ def build_guard_plan(
         ["ip", "link", "set", ns_veth, "netns", namespace],
         ["ip", "addr", "add", f"{host_ipv4}/30", "dev", host_veth],
         ["ip", "link", "set", host_veth, "up"],
-        ["ip", "-n", namespace, "addr", "add", f"{ns_ipv4}/30", "dev", ns_veth],
-        ["ip", "-n", namespace, "link", "set", "lo", "up"],
-        ["ip", "-n", namespace, "link", "set", ns_veth, "up"],
-        ["ip", "-n", namespace, "route", "add", "default", "via", host_ipv4, "dev", ns_veth],
+        _namespace_exec(
+            namespace, ("ip", "addr", "add", f"{ns_ipv4}/30", "dev", ns_veth)
+        ),
+        _namespace_exec(namespace, ("ip", "link", "set", "lo", "up")),
+        _namespace_exec(namespace, ("ip", "link", "set", ns_veth, "up")),
+        _namespace_exec(
+            namespace,
+            ("ip", "route", "add", "default", "via", host_ipv4, "dev", ns_veth),
+        ),
     ]
     if has_ipv6_targets:
         setup.extend(
             [
                 ["ip", "-6", "addr", "add", f"{host_ipv6}/64", "dev", host_veth],
-                ["ip", "-n", namespace, "-6", "addr", "add", f"{ns_ipv6}/64", "dev", ns_veth],
-                ["ip", "-n", namespace, "-6", "route", "add", "default", "via", host_ipv6, "dev", ns_veth],
+                _namespace_exec(
+                    namespace,
+                    ("ip", "-6", "addr", "add", f"{ns_ipv6}/64", "dev", ns_veth),
+                ),
+                _namespace_exec(
+                    namespace,
+                    (
+                        "ip",
+                        "-6",
+                        "route",
+                        "add",
+                        "default",
+                        "via",
+                        host_ipv6,
+                        "dev",
+                        ns_veth,
+                    ),
+                ),
             ]
         )
 

@@ -273,6 +273,9 @@ class PinningAndPlanTests(unittest.TestCase):
         combined = "\n".join(commands)
         namespace = plan["names"]["namespace"]
         self.assertIn(f"ip netns add {namespace}", combined)
+        self.assertFalse(
+            any(command[:2] == ["ip", "-n"] for command in plan["setup_commands"])
+        )
         self.assertIn("type veth peer name", combined)
         self.assertIn("iptables -w 5 -t nat -A POSTROUTING", combined)
         self.assertIn("ip6tables -w 5 -t nat -A POSTROUTING", combined)
