@@ -530,17 +530,36 @@ class GuardedRuntimeTests(unittest.TestCase):
             for canary_id in cnb_gmgn_v2.CANARY_IDS
             for round_number in range(1, 21)
         ]
+        controller_checks = [
+            {
+                "phase": phase,
+                "round": round_number,
+                "healthy": True,
+                "version": "test-mihomo",
+            }
+            for round_number in range(1, 21)
+            for phase in ("before", "after")
+        ]
         scheduled = SimpleNamespace(
             control_samples=tuple(control_samples),
             canary_samples=tuple(canary_samples),
+            controller_checks=tuple(controller_checks),
         )
+        # This is the actual private-fragment shape.  The public/redacted
+        # projection has ``controller`` instead, and must not be used here.
+        private_fragment = {
+            "kind": "cnb-gmgn-private-fragment",
+            "schema_version": 2,
+            "controller_checks": controller_checks,
+        }
         diagnostics = cnb_gmgn_v2._safe_direct_probe_diagnostics(
             2,
             scheduled,
-            {"controller": {"unhealthy_count": 0}},
+            private_fragment,
         )
 
         self.assertEqual(diagnostics["client"], "mihomo-direct")
+        self.assertEqual(diagnostics["controller_unhealthy_count"], 0)
         self.assertEqual(diagnostics["control"]["success_count"], 17)
         self.assertEqual(diagnostics["control"]["max_consecutive_failures"], 3)
         self.assertEqual(diagnostics["control"]["error_counts"], {"target_403": 3})

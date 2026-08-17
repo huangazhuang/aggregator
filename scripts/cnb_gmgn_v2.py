@@ -1374,6 +1374,13 @@ def _safe_direct_probe_diagnostics(
     scheduled: Any,
     private_fragment: Mapping[str, Any],
 ) -> dict[str, Any]:
+    # ``private_fragment`` is the credential-bearing input assembled for the
+    # same run, but its public projection uses a different ``controller``
+    # summary shape.  The scheduler is the authoritative source at this
+    # point: its raw health observations live under ``controller_checks``.
+    # Reading ``private_fragment["controller"]`` here would only work for the
+    # later redacted fragment and fails after a full 20-round probe.
+    controller_checks = tuple(scheduled.controller_checks)
     canaries: list[dict[str, Any]] = []
     for summary in summarize_canaries(scheduled.canary_samples, CANARY_IDS):
         canary_id = str(summary["canary_id"])
@@ -1394,7 +1401,7 @@ def _safe_direct_probe_diagnostics(
         },
         "canaries": canaries,
         "controller_unhealthy_count": int(
-            private_fragment["controller"]["unhealthy_count"]
+            sum(not bool(item.get("healthy")) for item in controller_checks)
         ),
     }
 
