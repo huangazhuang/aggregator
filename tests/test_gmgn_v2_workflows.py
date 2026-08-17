@@ -497,6 +497,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
         self.assertIn("PyYAML==6.0.3", self.dockerfile_text)
         self.assertIn("pycryptodomex==3.23.0", self.dockerfile_text)
         self.assertIn("tqdm==4.69.0", self.dockerfile_text)
+        self.assertIn("util-linux", self.dockerfile_text)
         self.assertEqual(
             [
                 line

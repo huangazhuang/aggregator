@@ -88,6 +88,7 @@ def capabilities(*, ipv6: bool = True) -> dict:
         "ip_netns": True,
         "iptables": True,
         "ip6tables": True,
+        "nsenter": True,
         "ipv4_forwarding": True,
         "ipv6_forwarding": ipv6,
     }
@@ -190,6 +191,15 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn(("iptables", "-w", "5", "-t", "nat", "-L"), runner.commands)
         self.assertIn(("ip6tables", "-w", "5", "-L"), runner.commands)
 
+        with self.assertRaisesRegex(LinuxGuardError, "tools are unavailable"):
+            preflight_linux_backend(
+                runner=FakeRunner(),
+                system=lambda: "Linux",
+                geteuid=lambda: 0,
+                which=lambda name: None if name == "nsenter" else f"/usr/sbin/{name}",
+                read_text=read_text,
+            )
+
     def test_capability_smoke_really_adds_and_deletes_a_unique_namespace(self):
         runner = FakeRunner()
         evidence = exercise_netns_mutation(
@@ -200,6 +210,16 @@ class CapabilityTests(unittest.TestCase):
             runner.commands,
             [
                 ("ip", "netns", "add", "gmgnv2-cap-0123456789ab"),
+                (
+                    "nsenter",
+                    "--net=/var/run/netns/gmgnv2-cap-0123456789ab",
+                    "--",
+                    "ip",
+                    "link",
+                    "show",
+                    "dev",
+                    "lo",
+                ),
                 ("ip", "netns", "delete", "gmgnv2-cap-0123456789ab"),
             ],
         )
@@ -384,8 +404,15 @@ class ProvisionAndLeaseTests(unittest.TestCase):
                 )["auxiliary_targets_sha256"],
             )
             wrapped = lease.wrap_command(["python3", "-m", "scripts.fake_probe"])
-            self.assertEqual(wrapped[:4], ["ip", "netns", "exec", lease.state["names"]["namespace"]])
-            self.assertEqual(wrapped[4:], ["python3", "-m", "scripts.fake_probe"])
+            self.assertEqual(
+                wrapped[:3],
+                [
+                    "nsenter",
+                    f"--net=/var/run/netns/{lease.state['names']['namespace']}",
+                    "--",
+                ],
+            )
+            self.assertEqual(wrapped[3:], ["python3", "-m", "scripts.fake_probe"])
 
             reloaded = load_guard_lease(state_path, runner=runner)
             self.assertEqual(reloaded.c2_evidence, lease.c2_evidence)

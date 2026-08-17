@@ -1,7 +1,7 @@
 FROM python:3.12-bookworm
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates iproute2 iptables \
+    && apt-get install -y --no-install-recommends ca-certificates iproute2 iptables util-linux \
     && python -m pip install --no-cache-dir --disable-pip-version-check \
         PyYAML==6.0.3 \
         pycryptodomex==3.23.0 \

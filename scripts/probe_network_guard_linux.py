@@ -40,11 +40,11 @@ from scripts.probe_network_guard import (
 
 
 BACKEND = "netns-deny-v1"
-BACKEND_VERSION = "gmgn-linux-netns-v1"
+BACKEND_VERSION = "gmgn-linux-netns-v2"
 EVIDENCE_KIND = "gmgn-linux-network-guard-evidence"
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 2
 STATE_KIND = "gmgn-linux-network-guard-state"
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 CAP_NET_ADMIN = 12
 CAP_SYS_ADMIN = 21
 
@@ -228,7 +228,7 @@ def preflight_linux_backend(
     if not effective_cap_sys_admin(status):
         raise LinuxGuardError("CAP_SYS_ADMIN is required for network namespaces")
 
-    required = ("ip", "iptables", "ip6tables")
+    required = ("ip", "iptables", "ip6tables", "nsenter")
     missing = [name for name in required if not _command_available(name, which)]
     if missing:
         raise LinuxGuardError("required Linux network-guard tools are unavailable")
@@ -258,6 +258,7 @@ def preflight_linux_backend(
         "ip_netns": True,
         "iptables": True,
         "ip6tables": True,
+        "nsenter": True,
         "ipv4_forwarding": True,
         "ipv6_forwarding": ipv6_forwarding,
     }
@@ -276,6 +277,7 @@ def exercise_netns_mutation(
     try:
         _run(runner, ("ip", "netns", "add", namespace))
         created = True
+        _run(runner, _namespace_exec(namespace, ("ip", "link", "show", "dev", "lo")))
     finally:
         if created:
             _run(runner, ("ip", "netns", "delete", namespace))
@@ -602,7 +604,18 @@ def _ipt(family: int, namespace: str | None = None) -> list[str]:
     command = ["iptables" if family == 4 else "ip6tables", "-w", "5"]
     if namespace is None:
         return command
-    return ["ip", "netns", "exec", namespace, *command]
+    return _namespace_exec(namespace, command)
+
+
+def _namespace_exec(namespace: str, command: Sequence[str]) -> list[str]:
+    if not isinstance(namespace, str) or not (
+        _SAFE_NAMESPACE_RE.fullmatch(namespace)
+        or _SAFE_SMOKE_NAMESPACE_RE.fullmatch(namespace)
+    ):
+        raise LinuxGuardError("network namespace name is unsafe")
+    if not command or any(not isinstance(item, str) or not item for item in command):
+        raise LinuxGuardError("network namespace command is invalid")
+    return ["nsenter", f"--net=/var/run/netns/{namespace}", "--", *command]
 
 
 def _append_rule(
@@ -940,13 +953,13 @@ def build_guard_plan(
             self_test.append(check_command)
     self_test.extend(
         [
-            ["ip", "netns", "exec", namespace, "ip", "link", "show", "up", "dev", "lo"],
-            ["ip", "netns", "exec", namespace, "ip", "route", "show", "default"],
+            _namespace_exec(namespace, ("ip", "link", "show", "up", "dev", "lo")),
+            _namespace_exec(namespace, ("ip", "route", "show", "default")),
         ]
     )
     if has_ipv6_targets:
         self_test.append(
-            ["ip", "netns", "exec", namespace, "ip", "-6", "route", "show", "default"]
+            _namespace_exec(namespace, ("ip", "-6", "route", "show", "default"))
         )
 
     cleanup: list[list[str]] = []
@@ -1171,6 +1184,7 @@ def validate_linux_guard_evidence(
             "ip_netns",
             "iptables",
             "ip6tables",
+            "nsenter",
             "ipv4_forwarding",
         )
     ):
@@ -1306,11 +1320,16 @@ class LinuxGuardLease:
         validate_linux_guard_evidence(self.evidence, candidate_ids=candidate_ids)
         if not command or any(not isinstance(item, str) or not item for item in command):
             raise LinuxGuardError("guarded launch command is invalid")
-        for self_test in self.state.get("self_test_commands", []):
+        for index, self_test in enumerate(self.state.get("self_test_commands", [])):
             if not isinstance(self_test, list):
                 raise LinuxGuardError("network guard self-test plan is malformed")
-            _run(self.runner, self_test)
-        return ["ip", "netns", "exec", self.state["names"]["namespace"], *command]
+            try:
+                _run(self.runner, self_test)
+            except LinuxGuardError as exc:
+                raise LinuxGuardError(
+                    f"network-guard launch self-test step {index} failed: {exc}"
+                ) from None
+        return _namespace_exec(self.state["names"]["namespace"], command)
 
     def launch(self, command: Sequence[str]) -> int:
         wrapped = self.wrap_command(command)
@@ -1366,10 +1385,20 @@ def provision_guard(
         _write_json_atomic(destination, plan)
 
     try:
-        for command in plan["setup_commands"]:
-            _run(runner, command)
-        for command in plan["self_test_commands"]:
-            _run(runner, command)
+        for index, command in enumerate(plan["setup_commands"]):
+            try:
+                _run(runner, command)
+            except LinuxGuardError as exc:
+                raise LinuxGuardError(
+                    f"network-guard setup step {index} failed: {exc}"
+                ) from None
+        for index, command in enumerate(plan["self_test_commands"]):
+            try:
+                _run(runner, command)
+            except LinuxGuardError as exc:
+                raise LinuxGuardError(
+                    f"network-guard self-test step {index} failed: {exc}"
+                ) from None
         observed_outputs: list[str] = []
         namespace = plan["names"]["namespace"]
         for family in (4, 6):
@@ -1377,8 +1406,14 @@ def provision_guard(
             for command in (
                 [tool, "-w", "5", "-S", plan["names"]["forward_chain"]],
                 [tool, "-w", "5", "-S", plan["names"]["return_chain"]],
-                ["ip", "netns", "exec", namespace, tool, "-w", "5", "-S", plan["names"]["output_chain"]],
-                ["ip", "netns", "exec", namespace, tool, "-w", "5", "-S", plan["names"]["input_chain"]],
+                _namespace_exec(
+                    namespace,
+                    (tool, "-w", "5", "-S", plan["names"]["output_chain"]),
+                ),
+                _namespace_exec(
+                    namespace,
+                    (tool, "-w", "5", "-S", plan["names"]["input_chain"]),
+                ),
             ):
                 result = _run(runner, command)
                 observed_outputs.append(str(getattr(result, "stdout", "")))
