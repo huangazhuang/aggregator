@@ -632,6 +632,39 @@ class NetworkGuardTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "candidate DNS resolution failed")
         self.assertNotIn("sensitive", str(caught.exception))
 
+    def test_repeated_hostname_is_resolved_once_for_one_runtime_host_mapping(self):
+        first_proxy = proxy(0)
+        second_proxy = proxy(1)
+        second_proxy["server"] = first_proxy["server"]
+        candidates = [
+            {
+                "candidate_id": candidate_id(
+                    value,
+                    key=TEST_KEY,
+                    identity_key_version=KEY_VERSION,
+                    identity_epoch=EPOCH,
+                ),
+                "proxy": value,
+            }
+            for value in (first_proxy, second_proxy)
+        ]
+        calls: list[tuple[str, int]] = []
+
+        def resolver(host: str, port: int):
+            calls.append((host, port))
+            return ["8.8.8.8"] if len(calls) == 1 else ["1.1.1.1"]
+
+        pinned, failed = resolve_and_pin_candidates_with_failures(
+            candidates, resolver=resolver
+        )
+
+        self.assertEqual(failed, ())
+        self.assertEqual(calls, [(first_proxy["server"], first_proxy["port"])])
+        self.assertEqual(
+            {tuple(record["addresses"]) for record in pinned.values()},
+            {("8.8.8.8",)},
+        )
+
     def test_default_resolver_retries_only_transient_dns_failures(self):
         calls = 0
         delays = []

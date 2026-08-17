@@ -117,6 +117,8 @@ def _resolve_candidate_set(
 
     pinned: dict[str, dict[str, Any]] = {}
     unresolved: list[str] = []
+    resolved_hosts: dict[str, tuple[str, ...]] = {}
+    unresolved_hosts: set[str] = set()
     for candidate in normalized:
         proxy = candidate["proxy"]
         if "server" not in proxy or "port" not in proxy:
@@ -126,31 +128,44 @@ def _resolve_candidate_set(
         try:
             literal = ipaddress.ip_address(host)
         except ValueError:
-            try:
-                raw_addresses = resolver(host, port)
-            except socket.gaierror as exc:
-                code = int(exc.errno or 0)
-                if allow_definitive_failures and code in _DEFINITIVE_DNS_ERRORS:
-                    unresolved.append(candidate["candidate_id"])
-                    continue
-                label = (
-                    "candidate DNS resolution failed"
-                    if code in _DEFINITIVE_DNS_ERRORS
-                    else "candidate DNS infrastructure failed"
-                )
-                raise MeasurementError(label) from None
-            except MeasurementError:
-                raise
-            except Exception:
-                raise MeasurementError("candidate DNS infrastructure failed") from None
-        else:
-            raw_addresses = [literal.compressed]
-        addresses = sorted({_public_address(value) for value in raw_addresses})
-        if not addresses:
-            if allow_definitive_failures:
+            if host in unresolved_hosts:
                 unresolved.append(candidate["candidate_id"])
                 continue
-            raise MeasurementError("resolver returned no public addresses")
+            cached_addresses = resolved_hosts.get(host)
+            if cached_addresses is None:
+                try:
+                    raw_addresses = resolver(host, port)
+                except socket.gaierror as exc:
+                    code = int(exc.errno or 0)
+                    if allow_definitive_failures and code in _DEFINITIVE_DNS_ERRORS:
+                        unresolved_hosts.add(host)
+                        unresolved.append(candidate["candidate_id"])
+                        continue
+                    label = (
+                        "candidate DNS resolution failed"
+                        if code in _DEFINITIVE_DNS_ERRORS
+                        else "candidate DNS infrastructure failed"
+                    )
+                    raise MeasurementError(label) from None
+                except MeasurementError:
+                    raise
+                except Exception:
+                    raise MeasurementError("candidate DNS infrastructure failed") from None
+                addresses = sorted({_public_address(value) for value in raw_addresses})
+                if not addresses:
+                    if allow_definitive_failures:
+                        unresolved_hosts.add(host)
+                        unresolved.append(candidate["candidate_id"])
+                        continue
+                    raise MeasurementError("resolver returned no public addresses")
+                # Mihomo's guarded runtime maps DNS names without a port.  Resolve
+                # each canonical hostname once so repeated candidates cannot bind
+                # the same runtime host to different rotating DNS answer subsets.
+                resolved_hosts[host] = tuple(addresses)
+            else:
+                addresses = list(cached_addresses)
+        else:
+            addresses = [_public_address(literal.compressed)]
         pinned[candidate["candidate_id"]] = {
             "server": host,
             "port": port,
