@@ -135,7 +135,7 @@ from scripts.validate_public_outputs import fetch_no_cache, minimal_mihomo_env
 PREPARED_SNAPSHOT_KIND = "cnb-gmgn-prepared-snapshot"
 PREPARED_SNAPSHOT_SCHEMA_VERSION = 1
 SHARD_INPUT_KIND = "cnb-gmgn-shard-input"
-SHARD_INPUT_SCHEMA_VERSION = 1
+SHARD_INPUT_SCHEMA_VERSION = 2
 PROBE_RESOLUTION_KIND = "cnb-gmgn-v2-probe-resolution"
 PROBE_RESOLUTION_SCHEMA_VERSION = 2
 RAW_REGION_KIND = "cnb-gmgn-private-region-observations"
@@ -182,16 +182,20 @@ RETRY_TAG_RE = re.compile(
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIRECT_PREFLIGHT_ATTEMPTS = 3
-CONTROL_PANEL_SIZE = 32
-CONTROL_PANEL_WORKERS = 16
+CONTROL_DISCOVERY_SIZE = 128
+CONTROL_DISCOVERY_BATCH_SIZE = 32
+CONTROL_DISCOVERY_WORKERS = 16
+CONTROL_PANEL_SIZE = 8
+CONTROL_PANEL_WORKERS = 8
+CONTROL_PROBE_TIMEOUT_MS = 5_000
+CONTROL_EXPECTED_STATUS = "100-599"
 
 DIRECT_TARGETS: dict[str, dict[str, Any]] = {
     "control-gmgn-v1": {
         "server": "gmgn.ai",
         "port": 443,
         "path": "/",
-        "status_policy": "exact",
-        "expected_status": 200,
+        "status_policy": "any_http",
         "purpose": "control",
     },
     "canary-gstatic-v1": {
@@ -780,6 +784,39 @@ def _prepared_projection(snapshot: Any) -> dict[str, Any]:
     }
 
 
+def _bind_shard_control_states(
+    shards: Sequence[Sequence[Mapping[str, Any]]],
+    snapshot_candidates: Sequence[Any],
+) -> list[list[dict[str, Any]]]:
+    entries: dict[str, Any] = {}
+    for entry in snapshot_candidates:
+        candidate_id = validate_public_id(
+            entry.get("candidate_id") if isinstance(entry, Mapping) else getattr(entry, "candidate_id", None),
+            "candidate",
+        )
+        if candidate_id in entries:
+            raise CoordinatorError("snapshot contains duplicate control-state candidates")
+        entries[candidate_id] = entry
+
+    bound = [[copy.deepcopy(dict(candidate)) for candidate in shard] for shard in shards]
+    for shard in bound:
+        for candidate in shard:
+            candidate_id = validate_public_id(candidate.get("candidate_id"), "candidate")
+            entry = entries.get(candidate_id)
+            if entry is None:
+                raise CoordinatorError("shard control-state binding is incomplete")
+            metadata = (
+                entry.get("metadata")
+                if isinstance(entry, Mapping)
+                else getattr(entry, "metadata", None)
+            )
+            state = metadata.get("github_check_state") if isinstance(metadata, Mapping) else None
+            if state not in {"passed", "bypassed_asia"}:
+                raise CoordinatorError("shard control-state binding is invalid")
+            candidate["github_check_state"] = state
+    return bound
+
+
 def _prepare(args: argparse.Namespace) -> int:
     profile = Path(args.profile).read_bytes()
     status = _load_json(args.status)
@@ -812,7 +849,7 @@ def _prepare(args: argparse.Namespace) -> int:
         expected_source_sha256=expected,
         expected_candidate_commit=str(args.expected_candidate_commit),
     )
-    manifest, shards = build_manifest_v3(
+    manifest, raw_shards = build_manifest_v3(
         snapshot,
         run_id=run_id,
         created_at=created_at,
@@ -834,6 +871,7 @@ def _prepare(args: argparse.Namespace) -> int:
         controller_secret_sha256s=secret_hashes,
         workers_per_shard=args.workers,
     )
+    shards = _bind_shard_control_states(raw_shards, snapshot.ordered_candidates)
     root = Path(args.output_dir).resolve()
     _write_json(root / "manifest.json", manifest)
     _write_json(root / "snapshot.json", _prepared_projection(snapshot))
@@ -879,6 +917,14 @@ def _load_shard(manifest: Mapping[str, Any], path: str | Path, index: int) -> li
     candidates = value["candidates"]
     if not isinstance(candidates, list) or not candidates:
         raise CoordinatorError("shard input contains no candidates")
+    for item in candidates:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"candidate_id", "proxy", "github_check_state"}
+            or not isinstance(item.get("proxy"), Mapping)
+            or item.get("github_check_state") not in {"passed", "bypassed_asia"}
+        ):
+            raise CoordinatorError("shard candidate fields are incomplete or unexpected")
     expected = manifest["shards"][index]
     ids = [validate_public_id(item.get("candidate_id"), "candidate") for item in candidates]
     if len(ids) != expected["candidate_count"] or candidate_ids_sha256(ids) != expected["candidate_ids_sha256"]:
@@ -1420,6 +1466,8 @@ def _delay_attempt(
     candidate: Mapping[str, Any],
     target_url: str,
     timeout_ms: int,
+    *,
+    expected_status: int | str = 200,
 ) -> dict[str, Any]:
     return _mihomo_delay_outcome(
         controller,
@@ -1427,33 +1475,135 @@ def _delay_attempt(
         proxy_name=str(candidate["proxy"]["name"]),
         target_url=target_url,
         timeout_ms=timeout_ms,
-        expected_status=200,
+        expected_status=expected_status,
     )
 
 
-def _select_control_panel(
-    candidates: Sequence[Mapping[str, Any]], *, limit: int = CONTROL_PANEL_SIZE
+def _spread_candidates(
+    candidates: Sequence[Mapping[str, Any]], count: int
+) -> list[dict[str, Any]]:
+    if count <= 0:
+        return []
+    normalized = [copy.deepcopy(dict(candidate)) for candidate in candidates]
+    if len(normalized) <= count:
+        return normalized
+    return [normalized[index * len(normalized) // count] for index in range(count)]
+
+
+def _select_control_candidates(
+    candidates: Sequence[Mapping[str, Any]], *, limit: int = CONTROL_DISCOVERY_SIZE
 ) -> tuple[dict[str, Any], ...]:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
-        raise CoordinatorError("GMGN control panel size is invalid")
-    normalized = [dict(candidate) for candidate in candidates]
+        raise CoordinatorError("GMGN control discovery size is invalid")
+    normalized = [copy.deepcopy(dict(candidate)) for candidate in candidates]
     if not normalized:
-        raise CoordinatorError("GMGN control panel has no guarded candidates")
+        raise CoordinatorError("GMGN control discovery has no guarded candidates")
     ids = [str(candidate.get("candidate_id") or "") for candidate in normalized]
-    if any(not value for value in ids) or len(ids) != len(set(ids)):
-        raise CoordinatorError("GMGN control panel candidates are invalid")
+    states = [candidate.get("github_check_state") for candidate in normalized]
+    if (
+        any(not value for value in ids)
+        or len(ids) != len(set(ids))
+        or any(state not in {"passed", "bypassed_asia"} for state in states)
+    ):
+        raise CoordinatorError("GMGN control discovery candidates are invalid")
 
-    def preferred(candidate: Mapping[str, Any]) -> int:
-        metadata = candidate.get("metadata")
-        return (
-            0
-            if isinstance(metadata, Mapping)
-            and metadata.get("github_check_state") == "passed"
-            else 1
+    passed = sorted(
+        (candidate for candidate in normalized if candidate["github_check_state"] == "passed"),
+        key=lambda candidate: str(candidate["candidate_id"]),
+    )
+    bypassed = sorted(
+        (
+            candidate
+            for candidate in normalized
+            if candidate["github_check_state"] == "bypassed_asia"
+        ),
+        key=lambda candidate: str(candidate["candidate_id"]),
+    )
+    target_count = min(limit, len(normalized))
+    passed_count = min(len(passed), (target_count + 1) // 2)
+    bypassed_count = min(len(bypassed), target_count - passed_count)
+    remaining = target_count - passed_count - bypassed_count
+    if remaining:
+        passed_count += min(remaining, len(passed) - passed_count)
+        remaining = target_count - passed_count - bypassed_count
+    if remaining:
+        bypassed_count += min(remaining, len(bypassed) - bypassed_count)
+    selected = _spread_candidates(passed, passed_count) + _spread_candidates(
+        bypassed, bypassed_count
+    )
+    selected.sort(key=lambda candidate: str(candidate["candidate_id"]))
+    return tuple(selected)
+
+
+def _dominant_error_category(counts: Mapping[str, int]) -> str:
+    category_order = {category: index for index, category in enumerate(ERROR_CATEGORIES)}
+    return min(
+        ERROR_CATEGORIES,
+        key=lambda category: (-int(counts.get(category, 0)), category_order[category]),
+    )
+
+
+def _discover_control_panel(
+    candidates: Sequence[Mapping[str, Any]],
+    probe: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+    *,
+    panel_size: int = CONTROL_PANEL_SIZE,
+    batch_size: int = CONTROL_DISCOVERY_BATCH_SIZE,
+    workers: int = CONTROL_DISCOVERY_WORKERS,
+) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
+    selected = [copy.deepcopy(dict(candidate)) for candidate in candidates]
+    if (
+        not selected
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in (panel_size, batch_size, workers)
         )
+    ):
+        raise CoordinatorError("GMGN control discovery contract is invalid")
+    successes: list[tuple[int, str, dict[str, Any]]] = []
+    counts = {category: 0 for category in ERROR_CATEGORIES}
+    attempted = 0
+    for offset in range(0, len(selected), batch_size):
+        batch = selected[offset : offset + batch_size]
+        with ThreadPoolExecutor(max_workers=min(workers, len(batch))) as executor:
+            futures = {
+                executor.submit(probe, candidate): candidate for candidate in batch
+            }
+            for future in as_completed(futures):
+                candidate = futures[future]
+                attempted += 1
+                try:
+                    delay, category = normalize_outcome(future.result())
+                except Exception:
+                    delay, category = None, "other"
+                if delay is not None:
+                    successes.append(
+                        (int(delay), str(candidate["candidate_id"]), candidate)
+                    )
+                else:
+                    counts[str(category or "other")] += 1
+        if len(successes) >= panel_size:
+            break
 
-    normalized.sort(key=lambda candidate: (preferred(candidate), str(candidate["candidate_id"])))
-    return tuple(normalized[:limit])
+    diagnostics = {
+        "candidate_count": len(selected),
+        "attempt_count": attempted,
+        "success_count": len(successes),
+        "error_counts": {
+            category: counts[category]
+            for category in ERROR_CATEGORIES
+            if counts[category]
+        },
+    }
+    if not successes:
+        raise CoordinatorError(
+            "GMGN proxy control discovery failed; safe diagnostics="
+            + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+        )
+    successes.sort(key=lambda item: (item[0], item[1]))
+    panel = tuple(item[2] for item in successes[:panel_size])
+    diagnostics["panel_size"] = len(panel)
+    return panel, diagnostics
 
 
 def _control_panel_outcome(
@@ -1485,12 +1635,7 @@ def _control_panel_outcome(
     counts = {category: 0 for category in ERROR_CATEGORIES}
     for _delay, category in results:
         counts[str(category or "other")] += 1
-    category_order = {category: index for index, category in enumerate(ERROR_CATEGORIES)}
-    selected = min(
-        ERROR_CATEGORIES,
-        key=lambda category: (-counts[category], category_order[category]),
-    )
-    return {"error_category": selected}
+    return {"error_category": _dominant_error_category(counts)}
 
 
 def _safe_error_counts(samples: Sequence[Mapping[str, Any]]) -> dict[str, int]:
@@ -1612,7 +1757,7 @@ def _safe_direct_probe_diagnostics(
         "schema_version": 3,
         "shard_index": shard_index,
         "clients": {
-            "control": "mihomo-proxy-panel-exact",
+            "control": "mihomo-proxy-panel-any-http",
             "canaries": "mihomo-direct-exact-state",
         },
         "control": {
@@ -1827,6 +1972,34 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 int(manifest["request_timeout_ms"]),
             )
 
+        control_target = _operational_target("control-gmgn-v1", auxiliary)
+        control_authority = str(control_target["server"])
+        if int(control_target["port"]) != 443:
+            control_authority = f"{control_authority}:{control_target['port']}"
+        control_url = f"https://{control_authority}{control_target['path']}"
+        if (
+            control_target.get("status_policy") != "any_http"
+            or control_url != str(manifest["target_url"])
+        ):
+            raise CoordinatorError("GMGN control reachability target is invalid")
+
+        def control_attempt(
+            candidate: Mapping[str, Any], _round: int
+        ) -> dict[str, Any]:
+            candidate_id = str(candidate["candidate_id"])
+            if candidate_id in dns_failed_ids:
+                return {"error_category": "dns"}
+            if candidate_id in ipv6_unavailable_ids:
+                return {"error_category": "connect"}
+            return _delay_attempt(
+                controller,
+                secret,
+                candidate,
+                control_url,
+                min(int(manifest["request_timeout_ms"]), CONTROL_PROBE_TIMEOUT_MS),
+                expected_status=CONTROL_EXPECTED_STATUS,
+            )
+
         def mihomo_direct_probe(name: str) -> dict[str, Any]:
             target = _operational_target(name, auxiliary)
             if target.get("status_policy") != "exact":
@@ -1844,12 +2017,16 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 expected_status=int(target["expected_status"]),
             )
 
-        control_panel = _select_control_panel(guarded_candidates)
+        control_candidates = _select_control_candidates(guarded_candidates)
+        control_panel, control_discovery = _discover_control_panel(
+            control_candidates,
+            lambda candidate: control_attempt(candidate, 0),
+        )
 
         def control_probe(round_number: int) -> dict[str, Any]:
             return _control_panel_outcome(
                 control_panel,
-                lambda candidate: attempt(candidate, round_number),
+                lambda candidate: control_attempt(candidate, round_number),
             )
 
         preflight_diagnostics = _require_direct_probe_preflight(
@@ -1857,6 +2034,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
             canary_probe=lambda canary, _round: mihomo_direct_probe(canary),
             canary_ids=CANARY_IDS,
         )
+        preflight_diagnostics["control_discovery"] = control_discovery
         print(
             "GMGN V2 safe probe preflight: "
             + json.dumps(

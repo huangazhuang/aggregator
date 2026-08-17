@@ -546,6 +546,95 @@ class GuardedRuntimeTests(unittest.TestCase):
             expected_status=200,
         )
 
+    def test_control_probe_can_request_any_complete_http_response(self) -> None:
+        with patch.object(
+            cnb_gmgn_v2,
+            "_mihomo_delay_outcome",
+            return_value={"delay_ms": 1},
+        ) as probe:
+            outcome = cnb_gmgn_v2._delay_attempt(
+                "127.0.0.1:19090",
+                "test-secret",
+                {"proxy": {"name": "candidate-a"}},
+                "https://gmgn.ai/",
+                5000,
+                expected_status="100-599",
+            )
+
+        self.assertEqual(outcome, {"delay_ms": 1})
+        probe.assert_called_once_with(
+            "127.0.0.1:19090",
+            "test-secret",
+            proxy_name="candidate-a",
+            target_url="https://gmgn.ai/",
+            timeout_ms=5000,
+            expected_status="100-599",
+        )
+
+    def test_shard_inputs_bind_only_the_public_github_check_state(self) -> None:
+        passed_id = "c1_" + "1" * 24
+        bypassed_id = "c1_" + "2" * 24
+        shards = [
+            [{"candidate_id": passed_id, "proxy": {"name": "passed"}}],
+            [{"candidate_id": bypassed_id, "proxy": {"name": "bypassed"}}],
+        ]
+        snapshot_candidates = [
+            SimpleNamespace(
+                candidate_id=passed_id,
+                metadata={"github_check_state": "passed", "source_ids": ["private"]},
+            ),
+            SimpleNamespace(
+                candidate_id=bypassed_id,
+                metadata={
+                    "github_check_state": "bypassed_asia",
+                    "source_ids": ["private"],
+                },
+            ),
+        ]
+
+        bound = cnb_gmgn_v2._bind_shard_control_states(
+            shards, snapshot_candidates
+        )
+
+        self.assertEqual(bound[0][0]["github_check_state"], "passed")
+        self.assertEqual(bound[1][0]["github_check_state"], "bypassed_asia")
+        self.assertNotIn("metadata", bound[0][0])
+        self.assertNotIn("source_ids", bound[1][0])
+
+    def test_shard_input_v2_round_trips_the_control_state(self) -> None:
+        candidate_id = "c1_" + "3" * 24
+        candidate = {
+            "candidate_id": candidate_id,
+            "proxy": {"name": "candidate-a"},
+            "github_check_state": "passed",
+        }
+        manifest = {
+            "run_id": "gmgnv2_test_shard_state",
+            "shards": [
+                {
+                    "candidate_count": 1,
+                    "candidate_ids_sha256": cnb_gmgn_v2.candidate_ids_sha256(
+                        [candidate_id]
+                    ),
+                }
+            ],
+        }
+        payload = {
+            "kind": cnb_gmgn_v2.SHARD_INPUT_KIND,
+            "schema_version": cnb_gmgn_v2.SHARD_INPUT_SCHEMA_VERSION,
+            "manifest_sha256": cnb_gmgn_v2.canonical_json_sha256(manifest),
+            "run_id": manifest["run_id"],
+            "shard_index": 0,
+            "candidates": [candidate],
+        }
+        preferred = os.environ.get("AGGREGATOR_TEST_TMPDIR")
+        with tempfile.TemporaryDirectory(dir=preferred or None) as directory:
+            path = Path(directory) / "shard.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = cnb_gmgn_v2._load_shard(manifest, path, 0)
+
+        self.assertEqual(loaded, [candidate])
+
     def test_mihomo_url_test_uses_alive_state_to_accept_the_complete_http_range(self) -> None:
         target_url = "https://gmgn.ai/"
         with patch.object(
@@ -605,36 +694,53 @@ class GuardedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(normalize_outcome(outcome), (None, "other"))
 
-    def test_control_panel_prefers_prechecked_candidates_and_accepts_one_success(self) -> None:
+    def test_control_discovery_balances_candidate_states_and_keeps_live_panel(self) -> None:
         candidates = [
             {
-                "candidate_id": "candidate-b",
-                "metadata": {"github_check_state": "bypassed_asia"},
-            },
-            {
-                "candidate_id": "candidate-c",
-                "metadata": {"github_check_state": "passed"},
-            },
-            {
-                "candidate_id": "candidate-a",
-                "metadata": {"github_check_state": "passed"},
-            },
+                "candidate_id": f"candidate-{state}-{index}",
+                "github_check_state": state,
+            }
+            for state in ("passed", "bypassed_asia")
+            for index in range(6)
         ]
-        panel = cnb_gmgn_v2._select_control_panel(candidates, limit=2)
+        selected = cnb_gmgn_v2._select_control_candidates(candidates, limit=4)
         self.assertEqual(
-            [candidate["candidate_id"] for candidate in panel],
-            ["candidate-a", "candidate-c"],
+            [candidate["github_check_state"] for candidate in selected].count("passed"),
+            2,
         )
-        outcome = cnb_gmgn_v2._control_panel_outcome(
-            panel,
+        self.assertEqual(
+            [candidate["github_check_state"] for candidate in selected].count(
+                "bypassed_asia"
+            ),
+            2,
+        )
+        live_ids = {
+            selected[1]["candidate_id"]: 73,
+            selected[3]["candidate_id"]: 51,
+        }
+        panel, diagnostics = cnb_gmgn_v2._discover_control_panel(
+            selected,
             lambda candidate: (
-                {"delay_ms": 73}
-                if candidate["candidate_id"] == "candidate-c"
+                {"delay_ms": live_ids[candidate["candidate_id"]]}
+                if candidate["candidate_id"] in live_ids
                 else {"error_category": "connect"}
             ),
+            panel_size=2,
+            batch_size=4,
             workers=2,
         )
-        self.assertEqual(normalize_outcome(outcome), (73, None))
+        self.assertEqual(
+            [candidate["candidate_id"] for candidate in panel],
+            [selected[3]["candidate_id"], selected[1]["candidate_id"]],
+        )
+        self.assertEqual(diagnostics["success_count"], 2)
+        self.assertEqual(diagnostics["panel_size"], 2)
+        outcome = cnb_gmgn_v2._control_panel_outcome(
+            panel,
+            lambda candidate: {"delay_ms": live_ids[candidate["candidate_id"]]},
+            workers=2,
+        )
+        self.assertEqual(normalize_outcome(outcome), (51, None))
 
     def test_direct_probe_preflight_accepts_waf_control_but_fails_persistent_canary(self) -> None:
         diagnostics = cnb_gmgn_v2._require_direct_probe_preflight(
@@ -705,7 +811,7 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertEqual(
             diagnostics["clients"],
             {
-                "control": "mihomo-proxy-panel-exact",
+                "control": "mihomo-proxy-panel-any-http",
                 "canaries": "mihomo-direct-exact-state",
             },
         )
