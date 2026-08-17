@@ -1850,6 +1850,47 @@ class CandidateSourceHealthTests(unittest.TestCase):
         self.assertEqual(missing["confirmations"], 3)
         self.assertTrue(missing["confirmed_missing"])
 
+    def test_source_missing_last_seen_does_not_follow_other_source_observations(self) -> None:
+        source_a = task("source-a", "https://raw.githubusercontent.com/acme/a/main/sub.yaml")
+        source_b = task("source-b", "https://raw.githubusercontent.com/acme/b/main/sub.yaml")
+        shared = proxy("shared", "shared.example", "secret")
+        previous = build_candidate_snapshot(
+            staging(
+                [shared],
+                [(source_a, [shared], None), (source_b, [shared], None)],
+                run_at=RUN0,
+            ),
+            settings=IDENTITY,
+        )
+
+        for run_at in (
+            "2026-08-02T00:00:00Z",
+            "2026-08-02T06:00:00Z",
+            "2026-08-02T12:00:00Z",
+        ):
+            previous = build_candidate_snapshot(
+                staging(
+                    [shared],
+                    [(source_a, [], "success"), (source_b, [shared], None)],
+                    run_at=run_at,
+                    previous=previous,
+                ),
+                settings=IDENTITY,
+            )
+
+        source_a_id = safe_source_descriptor(
+            source_a.sub,
+            task_name=source_a.name,
+            publish_derivatives=True,
+        )["source_id"]
+        missing = next(
+            iter(previous.metadata["sources"][source_a_id]["missing_candidates"].values())
+        )
+        self.assertEqual(missing["last_seen_at"], RUN0)
+        self.assertEqual(missing["first_missing_at"], "2026-08-02T00:00:00Z")
+        self.assertEqual(missing["last_missing_at"], "2026-08-02T12:00:00Z")
+        self.assertEqual(missing["confirmations"], 3)
+
 
 class CandidatePublishGateTests(unittest.TestCase):
     def _previous(self) -> dict:

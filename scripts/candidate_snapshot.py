@@ -1422,6 +1422,11 @@ def _missing_record(
     run_at: str,
 ) -> dict[str, Any]:
     prior = dict(previous or {})
+    # A candidate can remain globally present through another source while it
+    # is continuously missing from this source.  Once a source-specific miss
+    # has started, keep the last observation from that source instead of
+    # advancing it with the candidate's global last-seen timestamp.
+    last_seen_at = str(prior.get("last_seen_at", "")) or last_seen_at
     confirmations = int(prior.get("confirmations", 0))
     last_missing_at = str(prior.get("last_missing_at", ""))
     if not last_missing_at or _seconds_between(run_at, last_missing_at) >= MISSING_CONFIRMATION_SPACING_SECONDS:
