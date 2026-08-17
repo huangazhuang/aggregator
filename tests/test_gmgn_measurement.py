@@ -433,6 +433,20 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(classify_error("proxy auth failed"), "proxy_auth")
         self.assertEqual(classify_error(target_status=403), "target_403")
         self.assertEqual(classify_error(controller_healthy=False), "controller_unhealthy")
+        self.assertEqual(
+            classify_error(
+                "An error occurred in the delay test (controller status 503)",
+                controller_status=503,
+            ),
+            "controller_request",
+        )
+        self.assertEqual(
+            classify_error(
+                "unexpected target status code: 503 (controller status 400)",
+                controller_status=400,
+            ),
+            "target_5xx",
+        )
         self.assertEqual(normalize_outcome({"delay_ms": 80, "target_status": 429}), (None, "target_429"))
         self.assertEqual(normalize_outcome({"delay_ms": 1000.01}), (1001, None))
 

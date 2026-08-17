@@ -468,28 +468,39 @@ class TriggerAndPreflightTests(unittest.TestCase):
 
 class GuardedRuntimeTests(unittest.TestCase):
     def test_mihomo_direct_probe_uses_the_same_delay_contract_as_candidates(self) -> None:
+        target_url = "https://www.gstatic.com/generate_204"
         with patch.object(
             cnb_gmgn_v2,
             "_controller_request",
-            return_value={"delay": 87},
+            side_effect=[
+                {"delay": 87},
+                {
+                    "extra": {
+                        target_url: {
+                            "alive": True,
+                            "history": [{"delay": 87}],
+                        }
+                    }
+                },
+            ],
         ) as request:
             outcome = cnb_gmgn_v2._mihomo_delay_outcome(
                 "127.0.0.1:19090",
                 "test-secret",
                 proxy_name="DIRECT",
-                target_url="https://www.gstatic.com/generate_204",
+                target_url=target_url,
                 timeout_ms=5000,
                 expected_status=204,
             )
 
         self.assertEqual(outcome, {"delay_ms": 87, "controller_status": 200})
-        request.assert_called_once_with(
+        self.assertEqual(request.call_count, 2)
+        request.assert_any_call(
             "127.0.0.1:19090",
             "test-secret",
             "GET",
-            "/proxies/DIRECT/delay?timeout=5000&url="
-            "https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&expected=204",
-            timeout=6.0,
+            "/proxies/DIRECT",
+            timeout=cnb_gmgn_v2.CONTROLLER_HEALTH_TIMEOUT_SECONDS,
         )
 
     def test_mihomo_direct_probe_preserves_safe_target_error_classification(self) -> None:
@@ -535,32 +546,103 @@ class GuardedRuntimeTests(unittest.TestCase):
             expected_status=200,
         )
 
-    def test_direct_http_control_accepts_complete_waf_responses_as_reachability(self) -> None:
-        target = {
-            **cnb_gmgn_v2.DIRECT_TARGETS["control-gmgn-v1"],
-            "addresses": ["1.1.1.1"],
-        }
-        for status in (200, 403, 429, 503):
-            with self.subTest(status=status), patch.object(
-                cnb_gmgn_v2,
-                "_pinned_http",
-                return_value=(status, b"ignored", 91),
-            ):
-                outcome = cnb_gmgn_v2._direct_http_reachability_outcome(target)
-                self.assertEqual(normalize_outcome(outcome), (91, None))
-                self.assertEqual(outcome["http_status_class"], f"{status // 100}xx")
+    def test_mihomo_url_test_uses_alive_state_to_accept_the_complete_http_range(self) -> None:
+        target_url = "https://gmgn.ai/"
+        with patch.object(
+            cnb_gmgn_v2,
+            "_controller_request",
+            side_effect=[
+                cnb_gmgn_v2.CoordinatorError(
+                    "An error occurred in the delay test (controller status 503)"
+                ),
+                {
+                    "extra": {
+                        target_url: {
+                            "alive": True,
+                            "history": [{"delay": 0}],
+                        }
+                    }
+                },
+            ],
+        ) as request:
+            outcome = cnb_gmgn_v2._mihomo_delay_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                proxy_name="DIRECT",
+                target_url=target_url,
+                timeout_ms=5000,
+                expected_status="100-599",
+            )
+
+        self.assertEqual(normalize_outcome(outcome), (1, None))
+        self.assertEqual(request.call_count, 2)
+
+    def test_mihomo_url_test_rejects_a_delay_when_expected_status_did_not_match(self) -> None:
+        target_url = "https://gmgn.ai/"
+        with patch.object(
+            cnb_gmgn_v2,
+            "_controller_request",
+            side_effect=[
+                {"delay": 91},
+                {
+                    "extra": {
+                        target_url: {
+                            "alive": False,
+                            "history": [{"delay": 0}],
+                        }
+                    }
+                },
+            ],
+        ):
+            outcome = cnb_gmgn_v2._mihomo_delay_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                proxy_name="candidate-a",
+                target_url=target_url,
+                timeout_ms=5000,
+                expected_status=200,
+            )
+
+        self.assertEqual(normalize_outcome(outcome), (None, "other"))
+
+    def test_control_panel_prefers_prechecked_candidates_and_accepts_one_success(self) -> None:
+        candidates = [
+            {
+                "candidate_id": "candidate-b",
+                "metadata": {"github_check_state": "bypassed_asia"},
+            },
+            {
+                "candidate_id": "candidate-c",
+                "metadata": {"github_check_state": "passed"},
+            },
+            {
+                "candidate_id": "candidate-a",
+                "metadata": {"github_check_state": "passed"},
+            },
+        ]
+        panel = cnb_gmgn_v2._select_control_panel(candidates, limit=2)
+        self.assertEqual(
+            [candidate["candidate_id"] for candidate in panel],
+            ["candidate-a", "candidate-c"],
+        )
+        outcome = cnb_gmgn_v2._control_panel_outcome(
+            panel,
+            lambda candidate: (
+                {"delay_ms": 73}
+                if candidate["candidate_id"] == "candidate-c"
+                else {"error_category": "connect"}
+            ),
+            workers=2,
+        )
+        self.assertEqual(normalize_outcome(outcome), (73, None))
 
     def test_direct_probe_preflight_accepts_waf_control_but_fails_persistent_canary(self) -> None:
         diagnostics = cnb_gmgn_v2._require_direct_probe_preflight(
-            control_probe=lambda _round: {
-                "delay_ms": 80,
-                "http_status_class": "5xx",
-            },
+            control_probe=lambda _round: {"delay_ms": 80},
             canary_probe=lambda _canary, _round: {"delay_ms": 50},
             canary_ids=["canary-a"],
         )
         self.assertEqual(diagnostics["control"]["success_count"], 3)
-        self.assertEqual(diagnostics["control"]["http_status_classes"], {"5xx": 3})
 
         with self.assertRaisesRegex(
             cnb_gmgn_v2.CoordinatorError, "canary preflight"
@@ -623,8 +705,8 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertEqual(
             diagnostics["clients"],
             {
-                "control": "pinned-http-direct",
-                "canaries": "mihomo-direct",
+                "control": "mihomo-proxy-panel-exact",
+                "canaries": "mihomo-direct-exact-state",
             },
         )
         self.assertEqual(diagnostics["controller_unhealthy_count"], 0)

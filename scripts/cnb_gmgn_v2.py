@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,13 +182,16 @@ RETRY_TAG_RE = re.compile(
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIRECT_PREFLIGHT_ATTEMPTS = 3
+CONTROL_PANEL_SIZE = 32
+CONTROL_PANEL_WORKERS = 16
 
 DIRECT_TARGETS: dict[str, dict[str, Any]] = {
     "control-gmgn-v1": {
         "server": "gmgn.ai",
         "port": 443,
         "path": "/",
-        "status_policy": "any_http",
+        "status_policy": "exact",
+        "expected_status": 200,
         "purpose": "control",
     },
     "canary-gstatic-v1": {
@@ -1215,31 +1219,6 @@ def _pinned_http(
         connection.close()
 
 
-def _direct_http_reachability_outcome(
-    target: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Treat a complete, certificate-validated HTTP response as reachability.
-
-    The runner's own GMGN request is a system control, not a candidate.  A
-    WAF-generated 4xx/5xx still proves that the pinned edge completed TCP,
-    TLS, and HTTP.  Candidate probes remain strict HTTP 200 checks through
-    ``_delay_attempt``.
-    """
-
-    if target.get("status_policy") != "any_http":
-        raise CoordinatorError("direct reachability target policy is invalid")
-    try:
-        status, _body, delay_ms = _pinned_http(target)
-    except Exception as exc:
-        return {"error": str(exc)}
-    if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
-        return {"error": "direct target returned an invalid HTTP status"}
-    return {
-        "delay_ms": delay_ms,
-        "http_status_class": f"{status // 100}xx",
-    }
-
-
 def _operational_target(
     name: str, auxiliary_targets: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -1340,37 +1319,99 @@ def _mihomo_delay_outcome(
     proxy_name: str,
     target_url: str,
     timeout_ms: int,
-    expected_status: int,
+    expected_status: int | str,
 ) -> dict[str, Any]:
-    if timeout_ms <= 0 or not 100 <= expected_status <= 599:
+    if isinstance(expected_status, bool):
+        raise CoordinatorError("Mihomo delay contract is invalid")
+    if isinstance(expected_status, int):
+        if not 100 <= expected_status <= 599:
+            raise CoordinatorError("Mihomo delay contract is invalid")
+        expected = str(expected_status)
+    elif expected_status == "100-599":
+        # Mihomo's delay API parses status ranges; keep this narrow escape
+        # hatch for reachability diagnostics that accept any HTTP response.
+        expected = expected_status
+    else:
+        raise CoordinatorError("Mihomo delay contract is invalid")
+    if timeout_ms <= 0:
         raise CoordinatorError("Mihomo delay contract is invalid")
     path = (
         f"/proxies/{urllib.parse.quote(proxy_name, safe='')}/delay"
         f"?timeout={timeout_ms}&url={urllib.parse.quote(target_url, safe='')}"
-        f"&expected={expected_status}"
+        f"&expected={expected}"
     )
+    delay_payload: dict[str, Any] | None = None
+    delay_error: str | None = None
+    delay_controller_status: int | None = None
     try:
-        payload = _controller_request(
+        delay_payload = _controller_request(
             controller,
             secret,
             "GET",
             path,
             timeout=timeout_ms / 1000 + DELAY_REQUEST_OVERHEAD_SECONDS,
         )
-        delay = payload.get("delay")
-        if isinstance(delay, int) and delay > 0:
-            return {"delay_ms": delay, "controller_status": 200}
-        return {
-            "controller_status": 200,
-            "error": str(payload.get("message") or "no positive delay"),
-        }
     except Exception as exc:
-        text = str(exc)
-        status_match = re.search(r"controller status (\d{3})", text)
+        delay_error = str(exc)
+        status_match = re.search(r"controller status (\d{3})", delay_error)
+        delay_controller_status = (
+            int(status_match.group(1)) if status_match else None
+        )
+
+    # Mihomo's delay route returns the elapsed time even when ``expected`` did
+    # not match the HTTP response.  The URL-specific ``extra`` state is the
+    # authoritative status-policy result.  Reading it after the delay call
+    # keeps candidate checks strict HTTP 200 and canaries strict HTTP 204.
+    try:
+        proxy_state = _controller_request(
+            controller,
+            secret,
+            "GET",
+            f"/proxies/{urllib.parse.quote(proxy_name, safe='')}",
+            timeout=CONTROLLER_HEALTH_TIMEOUT_SECONDS,
+        )
+        extra = proxy_state.get("extra")
+        url_state = extra.get(target_url) if isinstance(extra, Mapping) else None
+        if not isinstance(url_state, Mapping) or not isinstance(
+            url_state.get("alive"), bool
+        ):
+            raise CoordinatorError("controller URL-test state is unavailable")
+        alive = bool(url_state["alive"])
+        history = url_state.get("history")
+        history_delay: int | None = None
+        if isinstance(history, list) and history and isinstance(history[-1], Mapping):
+            raw_history_delay = history[-1].get("delay")
+            if (
+                isinstance(raw_history_delay, int)
+                and not isinstance(raw_history_delay, bool)
+                and raw_history_delay > 0
+            ):
+                history_delay = raw_history_delay
+    except Exception as exc:
+        if delay_error is not None:
+            return {
+                "controller_status": delay_controller_status,
+                "error": delay_error,
+            }
+        return {"error": str(exc)}
+
+    if alive:
+        raw_delay = delay_payload.get("delay") if delay_payload is not None else None
+        if isinstance(raw_delay, int) and not isinstance(raw_delay, bool) and raw_delay > 0:
+            delay = raw_delay
+        elif history_delay is not None:
+            delay = history_delay
+        else:
+            # Sub-millisecond local URL tests are rounded to zero by Mihomo,
+            # even though the expected-status state is satisfied.
+            delay = 1
+        return {"delay_ms": delay, "controller_status": 200}
+    if delay_error is not None:
         return {
-            "controller_status": int(status_match.group(1)) if status_match else None,
-            "error": text,
+            "controller_status": delay_controller_status,
+            "error": delay_error,
         }
+    return {"controller_status": 200, "error_category": "other"}
 
 
 def _delay_attempt(
@@ -1390,6 +1431,68 @@ def _delay_attempt(
     )
 
 
+def _select_control_panel(
+    candidates: Sequence[Mapping[str, Any]], *, limit: int = CONTROL_PANEL_SIZE
+) -> tuple[dict[str, Any], ...]:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise CoordinatorError("GMGN control panel size is invalid")
+    normalized = [dict(candidate) for candidate in candidates]
+    if not normalized:
+        raise CoordinatorError("GMGN control panel has no guarded candidates")
+    ids = [str(candidate.get("candidate_id") or "") for candidate in normalized]
+    if any(not value for value in ids) or len(ids) != len(set(ids)):
+        raise CoordinatorError("GMGN control panel candidates are invalid")
+
+    def preferred(candidate: Mapping[str, Any]) -> int:
+        metadata = candidate.get("metadata")
+        return (
+            0
+            if isinstance(metadata, Mapping)
+            and metadata.get("github_check_state") == "passed"
+            else 1
+        )
+
+    normalized.sort(key=lambda candidate: (preferred(candidate), str(candidate["candidate_id"])))
+    return tuple(normalized[:limit])
+
+
+def _control_panel_outcome(
+    candidates: Sequence[Mapping[str, Any]],
+    probe: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+    *,
+    workers: int = CONTROL_PANEL_WORKERS,
+) -> dict[str, Any]:
+    panel = [dict(candidate) for candidate in candidates]
+    if (
+        not panel
+        or isinstance(workers, bool)
+        or not isinstance(workers, int)
+        or workers < 1
+    ):
+        raise CoordinatorError("GMGN control panel contract is invalid")
+    results: list[tuple[int | None, str | None]] = []
+    with ThreadPoolExecutor(max_workers=min(workers, len(panel))) as executor:
+        futures = [executor.submit(probe, candidate) for candidate in panel]
+        for future in as_completed(futures):
+            try:
+                outcome = future.result()
+                results.append(normalize_outcome(outcome))
+            except Exception:
+                results.append((None, "other"))
+    delays = [delay for delay, _category in results if delay is not None]
+    if delays:
+        return {"delay_ms": min(delays)}
+    counts = {category: 0 for category in ERROR_CATEGORIES}
+    for _delay, category in results:
+        counts[str(category or "other")] += 1
+    category_order = {category: index for index, category in enumerate(ERROR_CATEGORIES)}
+    selected = min(
+        ERROR_CATEGORIES,
+        key=lambda category: (-counts[category], category_order[category]),
+    )
+    return {"error_category": selected}
+
+
 def _safe_error_counts(samples: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     counts = {category: 0 for category in ERROR_CATEGORIES}
     for sample in samples:
@@ -1406,7 +1509,7 @@ def _require_direct_probe_preflight(
     canary_ids: Sequence[str],
     attempts: int = DIRECT_PREFLIGHT_ATTEMPTS,
 ) -> dict[str, Any]:
-    """Reject a persistently broken direct path before the 15-minute run."""
+    """Reject a broken proxy control panel or direct canary path early."""
 
     if attempts < 1:
         raise CoordinatorError("direct probe preflight attempt count is invalid")
@@ -1418,7 +1521,6 @@ def _require_direct_probe_preflight(
     ):
         raise CoordinatorError("direct probe preflight canary set is invalid")
     control_samples: list[dict[str, Any]] = []
-    control_status_classes: dict[str, int] = {}
     canary_samples: dict[str, list[dict[str, Any]]] = {
         canary_id: [] for canary_id in normalized_canary_ids
     }
@@ -1435,11 +1537,6 @@ def _require_direct_probe_preflight(
                 "error_category": category,
             }
         )
-        status_class = control_outcome.get("http_status_class")
-        if delay is not None and status_class in {"1xx", "2xx", "3xx", "4xx", "5xx"}:
-            control_status_classes[str(status_class)] = (
-                control_status_classes.get(str(status_class), 0) + 1
-            )
         for canary_id in canary_samples:
             try:
                 canary_outcome = canary_probe(canary_id, round_number)
@@ -1472,15 +1569,20 @@ def _require_direct_probe_preflight(
         "control": {
             "attempt_count": attempts,
             "success_count": control_successes,
-            "http_status_classes": control_status_classes,
             "error_counts": _safe_error_counts(control_samples),
         },
         "canaries": canary_summaries,
     }
     if control_successes == 0:
-        raise CoordinatorError("direct GMGN reachability preflight failed")
+        raise CoordinatorError(
+            "GMGN proxy control preflight failed; safe diagnostics="
+            + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+        )
     if any(item["success_count"] == 0 for item in canary_summaries):
-        raise CoordinatorError("direct canary preflight failed")
+        raise CoordinatorError(
+            "direct canary preflight failed; safe diagnostics="
+            + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+        )
     return diagnostics
 
 
@@ -1506,12 +1608,12 @@ def _safe_direct_probe_diagnostics(
         ]
         canaries.append({**summary, "error_counts": _safe_error_counts(samples)})
     return {
-        "kind": "cnb-gmgn-safe-direct-probe-diagnostics",
-        "schema_version": 2,
+        "kind": "cnb-gmgn-safe-probe-diagnostics",
+        "schema_version": 3,
         "shard_index": shard_index,
         "clients": {
-            "control": "pinned-http-direct",
-            "canaries": "mihomo-direct",
+            "control": "mihomo-proxy-panel-exact",
+            "canaries": "mihomo-direct-exact-state",
         },
         "control": {
             **summarize_control(scheduled.control_samples),
@@ -1725,10 +1827,10 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 int(manifest["request_timeout_ms"]),
             )
 
-        def exact_direct_probe(name: str) -> dict[str, Any]:
+        def mihomo_direct_probe(name: str) -> dict[str, Any]:
             target = _operational_target(name, auxiliary)
             if target.get("status_policy") != "exact":
-                raise CoordinatorError("exact direct target policy is invalid")
+                raise CoordinatorError("Mihomo direct target policy is invalid")
             port = int(target["port"])
             authority = str(target["server"])
             if port != 443:
@@ -1742,18 +1844,21 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 expected_status=int(target["expected_status"]),
             )
 
-        def control_probe(_round: int) -> dict[str, Any]:
-            return _direct_http_reachability_outcome(
-                _operational_target("control-gmgn-v1", auxiliary)
+        control_panel = _select_control_panel(guarded_candidates)
+
+        def control_probe(round_number: int) -> dict[str, Any]:
+            return _control_panel_outcome(
+                control_panel,
+                lambda candidate: attempt(candidate, round_number),
             )
 
         preflight_diagnostics = _require_direct_probe_preflight(
             control_probe=control_probe,
-            canary_probe=lambda canary, _round: exact_direct_probe(canary),
+            canary_probe=lambda canary, _round: mihomo_direct_probe(canary),
             canary_ids=CANARY_IDS,
         )
         print(
-            "GMGN V2 safe direct-probe preflight: "
+            "GMGN V2 safe probe preflight: "
             + json.dumps(
                 preflight_diagnostics,
                 ensure_ascii=False,
@@ -1773,7 +1878,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
             ),
             health_check=health,
             control_probe=control_probe,
-            canary_probe=lambda canary, _round: exact_direct_probe(canary),
+            canary_probe=lambda canary, _round: mihomo_direct_probe(canary),
             canary_ids=CANARY_IDS,
             egress_probe=lambda _phase: _egress(
                 _operational_target("egress-provider-v1", auxiliary)
@@ -1787,7 +1892,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
             scheduled=scheduled,
         )
         print(
-            "GMGN V2 safe direct-probe diagnostics: "
+            "GMGN V2 safe probe diagnostics: "
             + json.dumps(
                 _safe_direct_probe_diagnostics(index, scheduled, private_fragment),
                 ensure_ascii=False,

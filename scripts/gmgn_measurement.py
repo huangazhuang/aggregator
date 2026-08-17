@@ -47,8 +47,8 @@ SHARD_STAGGER_SECONDS = (0, 15, 30, 45)
 SHARD_CONTROLLER_PORTS = (19090, 19091, 19092, 19093)
 SHARD_MIXED_PORTS = (17890, 17891, 17892, 17893)
 SCHEDULER_POLICY_VERSION = "gmgn-scheduler-v1"
-VALIDITY_POLICY_VERSION = "gmgn-validity-v3"
-CANARY_POLICY_VERSION = "gmgn-canary-v2"
+VALIDITY_POLICY_VERSION = "gmgn-validity-v4"
+CANARY_POLICY_VERSION = "gmgn-canary-v3"
 RESOLVER_POLICY_VERSION = "gmgn-resolver-v4"
 NETWORK_GUARD_POLICY_VERSION = "gmgn-network-guard-v2"
 SOURCE_MAX_AGE_SECONDS = 36_000
@@ -604,11 +604,11 @@ def classify_error(
     if target_status is not None and 500 <= target_status <= 599:
         return "target_5xx"
     text = str(error or "").lower()
-    if "403" in text and ("target" in text or "status" in text):
+    if "403" in text and "target" in text:
         return "target_403"
-    if "429" in text and ("target" in text or "status" in text):
+    if "429" in text and "target" in text:
         return "target_429"
-    if re.search(r"(?:target|status)[^0-9]{0,16}5\d\d", text):
+    if re.search(r"target[^0-9]{0,24}5\d\d", text):
         return "target_5xx"
     if "dns" in text or "name resolution" in text or "no such host" in text:
         return "dns"
