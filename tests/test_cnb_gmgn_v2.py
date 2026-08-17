@@ -467,6 +467,46 @@ class TriggerAndPreflightTests(unittest.TestCase):
 
 
 class GuardedRuntimeTests(unittest.TestCase):
+    def test_probe_resolution_strictly_binds_guarded_and_dns_failed_partition(self) -> None:
+        guarded = "c1_" + "1" * 24
+        dns_failed = "c1_" + "2" * 24
+        candidates = [{"candidate_id": guarded}, {"candidate_id": dns_failed}]
+        manifest = {
+            "run_id": "gmgnv2_test_partition",
+            "shards": [
+                {
+                    "candidate_count": 2,
+                    "candidate_ids_sha256": cnb_gmgn_v2.candidate_ids_sha256(
+                        [guarded, dns_failed]
+                    ),
+                }
+            ],
+        }
+        resolution = cnb_gmgn_v2._build_probe_resolution(
+            manifest,
+            candidates,
+            0,
+            pinned_candidate_ids=[guarded],
+            dns_failed_candidate_ids=[dns_failed],
+        )
+        self.assertEqual(resolution["guarded_candidate_ids"], [guarded])
+        self.assertEqual(resolution["dns_failed_candidate_ids"], [dns_failed])
+        self.assertEqual(
+            cnb_gmgn_v2._validate_probe_resolution(
+                manifest, candidates, 0, resolution
+            ),
+            resolution,
+        )
+
+        tampered = dict(resolution)
+        tampered["dns_failed_candidate_ids"] = [guarded]
+        with self.assertRaisesRegex(
+            cnb_gmgn_v2.CoordinatorError, "partition"
+        ):
+            cnb_gmgn_v2._validate_probe_resolution(
+                manifest, candidates, 0, tampered
+            )
+
     def test_public_region_label_rejects_ip_disguised_as_region(self) -> None:
         self.assertEqual(cnb_gmgn_v2._public_region_label(" Guangdong "), "Guangdong")
         for leaked_region in ("runner-8.8.8.8", "2001:db8::1"):

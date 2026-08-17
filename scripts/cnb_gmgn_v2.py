@@ -99,7 +99,7 @@ from scripts.gmgn_validity import (
 from scripts.pipeline_utils import dump_clash_yaml
 from scripts.probe_network_guard import (
     default_resolver,
-    resolve_and_pin_candidates,
+    resolve_and_pin_candidates_with_failures,
 )
 from scripts.probe_network_guard_linux import (
     normalize_auxiliary_targets,
@@ -131,6 +131,8 @@ PREPARED_SNAPSHOT_KIND = "cnb-gmgn-prepared-snapshot"
 PREPARED_SNAPSHOT_SCHEMA_VERSION = 1
 SHARD_INPUT_KIND = "cnb-gmgn-shard-input"
 SHARD_INPUT_SCHEMA_VERSION = 1
+PROBE_RESOLUTION_KIND = "cnb-gmgn-v2-probe-resolution"
+PROBE_RESOLUTION_SCHEMA_VERSION = 1
 RAW_REGION_KIND = "cnb-gmgn-private-region-observations"
 RAW_REGION_SCHEMA_VERSION = 1
 OPAQUE_REGION_KIND = "cnb-gmgn-region-observations"
@@ -872,9 +874,94 @@ def _load_shard(manifest: Mapping[str, Any], path: str | Path, index: int) -> li
     return copy.deepcopy(candidates)
 
 
+def _validate_probe_resolution(
+    manifest: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+    index: int,
+    raw: Mapping[str, Any],
+) -> dict[str, Any]:
+    fields = {
+        "kind",
+        "schema_version",
+        "manifest_sha256",
+        "run_id",
+        "shard_index",
+        "candidate_count",
+        "candidate_ids_sha256",
+        "guarded_candidate_ids",
+        "guarded_candidate_ids_sha256",
+        "dns_failed_candidate_ids",
+        "dns_failed_candidate_ids_sha256",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != fields:
+        raise CoordinatorError("probe resolution fields are incomplete or unexpected")
+    value = dict(raw)
+    ids = [validate_public_id(item.get("candidate_id"), "candidate") for item in candidates]
+    expected = manifest["shards"][index]
+    if (
+        value["kind"] != PROBE_RESOLUTION_KIND
+        or value["schema_version"] != PROBE_RESOLUTION_SCHEMA_VERSION
+        or value["manifest_sha256"] != canonical_json_sha256(dict(manifest))
+        or value["run_id"] != manifest["run_id"]
+        or value["shard_index"] != index
+        or value["candidate_count"] != expected["candidate_count"]
+        or value["candidate_ids_sha256"] != expected["candidate_ids_sha256"]
+    ):
+        raise CoordinatorError("probe resolution binding mismatch")
+
+    partitions: dict[str, list[str]] = {}
+    for field in ("guarded_candidate_ids", "dns_failed_candidate_ids"):
+        raw_ids = value[field]
+        if not isinstance(raw_ids, list):
+            raise CoordinatorError("probe resolution candidate partition is malformed")
+        normalized = [validate_public_id(item, "candidate") for item in raw_ids]
+        if normalized != sorted(set(normalized)):
+            raise CoordinatorError("probe resolution candidate partition is non-canonical")
+        hash_field = field.removesuffix("_ids") + "_ids_sha256"
+        if value[hash_field] != candidate_ids_sha256(normalized):
+            raise CoordinatorError("probe resolution candidate partition hash mismatch")
+        partitions[field] = normalized
+    guarded = set(partitions["guarded_candidate_ids"])
+    failed = set(partitions["dns_failed_candidate_ids"])
+    if not guarded or guarded & failed or guarded | failed != set(ids):
+        raise CoordinatorError("probe resolution candidate partition is incomplete")
+    return value
+
+
+def _build_probe_resolution(
+    manifest: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+    index: int,
+    *,
+    pinned_candidate_ids: Iterable[str],
+    dns_failed_candidate_ids: Iterable[str],
+) -> dict[str, Any]:
+    guarded = sorted(validate_public_id(item, "candidate") for item in pinned_candidate_ids)
+    failed = sorted(validate_public_id(item, "candidate") for item in dns_failed_candidate_ids)
+    expected = manifest["shards"][index]
+    value = {
+        "kind": PROBE_RESOLUTION_KIND,
+        "schema_version": PROBE_RESOLUTION_SCHEMA_VERSION,
+        "manifest_sha256": canonical_json_sha256(dict(manifest)),
+        "run_id": manifest["run_id"],
+        "shard_index": index,
+        "candidate_count": expected["candidate_count"],
+        "candidate_ids_sha256": expected["candidate_ids_sha256"],
+        "guarded_candidate_ids": guarded,
+        "guarded_candidate_ids_sha256": candidate_ids_sha256(guarded),
+        "dns_failed_candidate_ids": failed,
+        "dns_failed_candidate_ids_sha256": candidate_ids_sha256(failed),
+    }
+    return _validate_probe_resolution(manifest, candidates, index, value)
+
+
 def _public_addresses(host: str, port: int) -> list[str]:
     values: set[str] = set()
-    for raw in default_resolver(host, port):
+    try:
+        resolved = default_resolver(host, port)
+    except Exception:
+        raise CoordinatorError("auxiliary DNS resolution failed") from None
+    for raw in resolved:
         try:
             address = ipaddress.ip_address(str(raw))
         except ValueError as exc:
@@ -914,15 +1001,26 @@ def _probe(args: argparse.Namespace) -> int:
     if index not in range(SHARD_COUNT):
         raise CoordinatorError("shard index is outside the fixed four-shard range")
     candidates = _load_shard(manifest, args.shard_input, index)
-    pinned = resolve_and_pin_candidates(candidates)
+    pinned, dns_failed_candidate_ids = resolve_and_pin_candidates_with_failures(
+        candidates
+    )
     auxiliary = _resolve_auxiliary_targets()
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    resolution = _build_probe_resolution(
+        manifest,
+        candidates,
+        index,
+        pinned_candidate_ids=pinned,
+        dns_failed_candidate_ids=dns_failed_candidate_ids,
+    )
+    _write_json(output / "probe-resolution.json", resolution)
     context = {
         "manifest": manifest,
         "shard_index": index,
         "candidates": candidates,
         "pinned_candidates": pinned,
+        "dns_failed_candidate_ids": list(dns_failed_candidate_ids),
         "auxiliary_targets": auxiliary,
         "controller_secret": Path(args.controller_secret).read_text(encoding="utf-8").strip(),
         "mihomo": str(Path(args.mihomo).resolve()),
@@ -1248,6 +1346,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
         "shard_index",
         "candidates",
         "pinned_candidates",
+        "dns_failed_candidate_ids",
         "auxiliary_targets",
         "controller_secret",
         "mihomo",
@@ -1270,8 +1369,26 @@ def _probe_inside(args: argparse.Namespace) -> int:
     auxiliary = {
         key: dict(value) for key, value in context["auxiliary_targets"].items()
     }
-    if set(pinned) != {item["candidate_id"] for item in candidates}:
-        raise CoordinatorError("probe context pinned candidates do not match the shard")
+    raw_dns_failed = context["dns_failed_candidate_ids"]
+    if not isinstance(raw_dns_failed, list):
+        raise CoordinatorError("probe context DNS failure partition is malformed")
+    dns_failed_candidate_ids = [
+        validate_public_id(item, "candidate") for item in raw_dns_failed
+    ]
+    if dns_failed_candidate_ids != sorted(set(dns_failed_candidate_ids)):
+        raise CoordinatorError("probe context DNS failure partition is non-canonical")
+    resolution = _build_probe_resolution(
+        manifest,
+        candidates,
+        index,
+        pinned_candidate_ids=pinned,
+        dns_failed_candidate_ids=dns_failed_candidate_ids,
+    )
+    guarded_ids = set(resolution["guarded_candidate_ids"])
+    dns_failed_ids = set(resolution["dns_failed_candidate_ids"])
+    guarded_candidates = [
+        item for item in candidates if item["candidate_id"] in guarded_ids
+    ]
     secret = str(context["controller_secret"])
     shard = manifest["shards"][index]
     controller = f"127.0.0.1:{shard['controller_port']}"
@@ -1280,6 +1397,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
     names = [str(item["proxy"]["name"]) for item in candidates]
     if len(names) != len(set(names)) or INTERNAL_GROUP in names:
         raise CoordinatorError("shard proxy names are missing, duplicated, or reserved")
+    guarded_names = [str(item["proxy"]["name"]) for item in guarded_candidates]
     hosts = _runtime_hosts(
         pinned,
         auxiliary,
@@ -1293,9 +1411,13 @@ def _probe_inside(args: argparse.Namespace) -> int:
         "mode": "global",
         "log-level": "warning",
         "hosts": hosts,
-        "proxies": [copy.deepcopy(item["proxy"]) for item in candidates],
+        "proxies": [copy.deepcopy(item["proxy"]) for item in guarded_candidates],
         "proxy-groups": [
-            {"name": INTERNAL_GROUP, "type": "select", "proxies": names + ["DIRECT"]}
+            {
+                "name": INTERNAL_GROUP,
+                "type": "select",
+                "proxies": guarded_names + ["DIRECT"],
+            }
         ],
         "rules": [f"MATCH,{INTERNAL_GROUP}"],
     }
@@ -1334,12 +1456,16 @@ def _probe_inside(args: argparse.Namespace) -> int:
 
         scheduled = run_measurement_schedule(
             candidates,
-            lambda candidate, _round: _delay_attempt(
-                controller,
-                secret,
-                candidate,
-                str(manifest["target_url"]),
-                int(manifest["request_timeout_ms"]),
+            lambda candidate, _round: (
+                {"error": "DNS resolution unavailable"}
+                if candidate["candidate_id"] in dns_failed_ids
+                else _delay_attempt(
+                    controller,
+                    secret,
+                    candidate,
+                    str(manifest["target_url"]),
+                    int(manifest["request_timeout_ms"]),
+                )
             ),
             workers=int(manifest["workers_per_shard"]),
             total_rounds=int(manifest["total_rounds"]),
@@ -1743,9 +1869,19 @@ def _finalize(args: argparse.Namespace) -> int:
         evidence = _load_json(
             Path(args.private_shard_root) / f"shard-{index}" / "guard-evidence.json"
         )
+        resolution = _validate_probe_resolution(
+            manifest,
+            candidates,
+            index,
+            _load_json(
+                Path(args.private_shard_root)
+                / f"shard-{index}"
+                / "probe-resolution.json"
+            ),
+        )
         validate_linux_guard_evidence(
             evidence,
-            candidate_ids=[item["candidate_id"] for item in candidates],
+            candidate_ids=resolution["guarded_candidate_ids"],
         )
         guard_summaries.append(
             {

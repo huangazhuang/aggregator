@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import socket
 import stat
 import tempfile
 import threading
@@ -37,8 +38,10 @@ from scripts.probe_network_guard import (
     NETWORK_GUARD_POLICY_VERSION,
     RESOLVER_POLICY_VERSION,
     build_guarded_launch,
+    default_resolver,
     guard_preflight,
     resolve_and_pin_candidates,
+    resolve_and_pin_candidates_with_failures,
 )
 from scripts.proxy_identity import candidate_id, exit_id
 
@@ -129,7 +132,7 @@ def manifest_and_shards(count: int = 4):
         pyyaml_version="6.0.3",
         mihomo_version="test-mihomo",
         mihomo_sha256="e" * 64,
-        resolver_policy_version="gmgn-resolver-v1",
+        resolver_policy_version=RESOLVER_POLICY_VERSION,
         network_guard_policy_version=NETWORK_GUARD_POLICY_VERSION,
         controller_secret_sha256s=[f"{index + 1:064x}" for index in range(4)],
     )
@@ -609,6 +612,48 @@ class FragmentPrivacyTests(unittest.TestCase):
 
 
 class NetworkGuardTests(unittest.TestCase):
+    def test_definitive_dns_failure_is_partitioned_without_weakening_pins(self):
+        missing = candidate(0)
+        healthy = candidate(1)
+
+        def resolver(host: str, _port: int):
+            if host == missing["proxy"]["server"]:
+                raise socket.gaierror(socket.EAI_NONAME, "sensitive resolver detail")
+            return ["8.8.8.8"]
+
+        pinned, failed = resolve_and_pin_candidates_with_failures(
+            [missing, healthy], resolver=resolver
+        )
+        self.assertEqual(failed, (missing["candidate_id"],))
+        self.assertEqual(set(pinned), {healthy["candidate_id"]})
+
+        with self.assertRaises(MeasurementError) as caught:
+            resolve_and_pin_candidates([missing, healthy], resolver=resolver)
+        self.assertEqual(str(caught.exception), "candidate DNS resolution failed")
+        self.assertNotIn("sensitive", str(caught.exception))
+
+    def test_default_resolver_retries_only_transient_dns_failures(self):
+        calls = 0
+        delays = []
+
+        def getaddrinfo(_host: str, port: int, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise socket.gaierror(socket.EAI_AGAIN, "temporary private detail")
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port))]
+
+        self.assertEqual(
+            default_resolver(
+                "node.example",
+                443,
+                getaddrinfo=getaddrinfo,
+                sleeper=delays.append,
+            ),
+            ["8.8.8.8"],
+        )
+        self.assertEqual(delays, [0.25, 1.0])
+
     def test_private_metadata_and_rebinding_addresses_are_rejected(self):
         item = candidate(0)
         with self.assertRaises(MeasurementError):
