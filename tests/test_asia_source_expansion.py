@@ -492,7 +492,7 @@ class SourceGateTests(unittest.TestCase):
         self.assertEqual(below["runtime_budget_seconds"], 15000)
         self.assertTrue(below["within_runtime_budget"])
 
-    def test_candidate_snapshot_rejects_a_pool_over_the_versioned_budget(self) -> None:
+    def test_collection_stage_defers_capacity_until_last_good_is_merged(self) -> None:
         item = proxy("JP", 1)
         profile_bytes = yaml.safe_dump({"proxies": [item]}, allow_unicode=True).encode()
         task = SimpleNamespace(
@@ -511,18 +511,18 @@ class SourceGateTests(unittest.TestCase):
             "scripts.candidate_snapshot.estimate_gmgn_capacity",
             return_value={"below_candidate_hard_limit": False, "within_runtime_budget": True},
         ):
-            with self.assertRaisesRegex(CandidateSnapshotError, "capacity budget"):
-                prepare_candidate_identity_input(
-                    profile_bytes,
-                    {"sources": sources, "records": records},
-                    run_at="2026-08-11T00:00:00Z",
-                    mode="collect",
-                    main_sha="a" * 40,
-                    profile_url="https://example.invalid/clash.yaml",
-                    candidate_metadata_url="https://example.invalid/candidate-metadata.json",
-                    previous_state="confirmed_absent",
-                    resolver=lambda host, port: ["8.8.8.8"],
-                )
+            prepared = prepare_candidate_identity_input(
+                profile_bytes,
+                {"sources": sources, "records": records},
+                run_at="2026-08-11T00:00:00Z",
+                mode="collect",
+                main_sha="a" * 40,
+                profile_url="https://example.invalid/clash.yaml",
+                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+                previous_state="confirmed_absent",
+                resolver=lambda host, port: ["8.8.8.8"],
+            )
+        self.assertEqual(len(prepared["profile"]["proxies"]), 1)
 
     def test_final_snapshot_rechecks_capacity_after_last_good_merge(self) -> None:
         item = proxy("JP", 1)
@@ -569,33 +569,29 @@ class SourceGateTests(unittest.TestCase):
             [current_item],
             observed_at="2026-08-11T01:00:00Z",
         )
-        with patch(
-            "scripts.candidate_snapshot.estimate_gmgn_capacity",
-            side_effect=[
-                {"below_candidate_hard_limit": True, "within_runtime_budget": True},
-                {"below_candidate_hard_limit": False, "within_runtime_budget": True},
-            ],
-        ):
-            retry_input = prepare_candidate_identity_input(
-                yaml.safe_dump({"proxies": [current_item]}, allow_unicode=True).encode(),
-                {
-                    "sources": failed_sources + current_sources,
-                    "records": failed_records + current_records,
-                },
-                run_at="2026-08-11T01:00:00Z",
-                mode="collect",
-                main_sha="b" * 40,
-                profile_url="https://example.invalid/clash.yaml",
-                candidate_metadata_url="https://example.invalid/candidate-metadata.json",
-                previous_state="present",
-                previous_profile=yaml.safe_load(initial.profile_bytes),
-                previous_profile_bytes=initial.profile_bytes,
-                previous_status=initial.status,
-                previous_metadata=initial.metadata,
-                resolver=lambda host, port: ["8.8.8.8"],
-            )
-            with self.assertRaisesRegex(CandidateSnapshotError, "capacity budget"):
-                build_candidate_snapshot(retry_input, settings=IDENTITY)
+        retry_input = prepare_candidate_identity_input(
+            yaml.safe_dump({"proxies": [current_item]}, allow_unicode=True).encode(),
+            {
+                "sources": failed_sources + current_sources,
+                "records": failed_records + current_records,
+            },
+            run_at="2026-08-11T01:00:00Z",
+            mode="collect",
+            main_sha="b" * 40,
+            profile_url="https://example.invalid/clash.yaml",
+            candidate_metadata_url="https://example.invalid/candidate-metadata.json",
+            previous_state="present",
+            previous_profile=yaml.safe_load(initial.profile_bytes),
+            previous_profile_bytes=initial.profile_bytes,
+            previous_status=initial.status,
+            previous_metadata=initial.metadata,
+            resolver=lambda host, port: ["8.8.8.8"],
+        )
+        with patch("scripts.candidate_snapshot._candidate_capacity_limit", return_value=1):
+            snapshot = build_candidate_snapshot(retry_input, settings=IDENTITY)
+        self.assertEqual(snapshot.status["candidate_count"], 1)
+        self.assertEqual(snapshot.status["region_hint_counts"]["JP"], 1)
+        self.assertEqual(snapshot.status["region_hint_counts"]["KR"], 0)
 
 
 class EvaluatorContractTests(unittest.TestCase):

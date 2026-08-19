@@ -48,7 +48,10 @@ from scripts.sanitize_candidate_endpoints import (
     CandidateEndpointSanitizationError,
     validate_endpoint_safety_evidence,
 )
-from scripts.asia_source_registry import estimate_gmgn_capacity
+from scripts.asia_source_registry import (
+    TOTAL_CANDIDATE_HARD_LIMIT,
+    estimate_gmgn_capacity,
+)
 from scripts.pipeline_utils import BUILTIN_PROXY_NAMES, dump_clash_yaml
 from scripts.proxy_identity import (
     IdentityError,
@@ -76,7 +79,10 @@ CANDIDATE_STATUS_KIND = "github-candidate-status"
 CANDIDATE_STATUS_SCHEMA_VERSION = 2
 CANDIDATE_METADATA_KIND = "github-candidate-metadata"
 IDENTITY_FIXTURE_VERSION = "identity-fixture-v1"
-CANDIDATE_PUBLISH_POLICY_VERSION = "candidate-publish-v2"
+CANDIDATE_PUBLISH_POLICY_VERSION = "candidate-publish-v3"
+READABLE_CANDIDATE_PUBLISH_POLICY_VERSIONS = frozenset(
+    {"candidate-publish-v2", CANDIDATE_PUBLISH_POLICY_VERSION}
+)
 
 LAST_GOOD_MAX_AGE_SECONDS = 48 * 3600
 MISSING_CONFIRMATION_COUNT = 3
@@ -850,10 +856,6 @@ def prepare_candidate_identity_input(
     if not current_by_fingerprint:
         raise CandidateSnapshotError("candidate profile contains no safe proxies")
 
-    capacity = estimate_gmgn_capacity(len(current_by_fingerprint))
-    if not capacity["below_candidate_hard_limit"] or not capacity["within_runtime_budget"]:
-        raise CandidateSnapshotError("candidate pool exceeds the versioned GMGN capacity budget")
-
     raw_count = len(records)
     valid_records: list[dict[str, Any]] = []
     observed_records: list[dict[str, Any]] = []
@@ -1297,6 +1299,163 @@ def _candidate_primary_region(metadata: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+def _candidate_capacity_limit() -> int:
+    """Return the largest count accepted by both versioned C2 capacity guards."""
+
+    low = 0
+    high = TOTAL_CANDIDATE_HARD_LIMIT - 1
+    while low < high:
+        middle = (low + high + 1) // 2
+        capacity = estimate_gmgn_capacity(middle)
+        if capacity["below_candidate_hard_limit"] and capacity["within_runtime_budget"]:
+            low = middle
+        else:
+            high = middle - 1
+    if low < 1:
+        raise CandidateSnapshotError("candidate pool exceeds the versioned GMGN capacity budget")
+    return low
+
+
+def _capacity_quality_key(
+    candidate_id_value: str,
+    entry: Mapping[str, Any],
+    *,
+    current_ids: set[str],
+    previous_ids: set[str],
+    sources: Mapping[str, Mapping[str, Any]],
+    endpoint_sizes: Mapping[str, int],
+    server_sizes: Mapping[str, int],
+) -> tuple[Any, ...]:
+    """Rank already-safe candidates without depending on collection order."""
+
+    metadata = entry["metadata"]
+    source_ids = [str(value) for value in metadata.get("source_ids", [])]
+    related_sources = [
+        sources[source_id] for source_id in source_ids if source_id in sources
+    ]
+    in_current = candidate_id_value in current_ids
+    in_previous = candidate_id_value in previous_ids
+    lifecycle_rank = 0 if in_current and in_previous else 1 if in_current else 2
+    fixed_rank = (
+        0
+        if any(item.get("source_kind") == "fixed" for item in related_sources)
+        else 1
+    )
+    health_rank = (
+        0
+        if any(
+            item.get("health_state") in {"healthy", "recovered"}
+            for item in related_sources
+        )
+        else 1
+        if any(
+            item.get("health_state") == "using_last_good"
+            for item in related_sources
+        )
+        else 2
+    )
+    endpoint_id = str(metadata.get("endpoint_id", ""))
+    server_id = str(metadata.get("server_id", ""))
+    source_success = _parse_timestamp(metadata["source_last_success_at"]).timestamp()
+    return (
+        lifecycle_rank,
+        fixed_rank,
+        health_rank,
+        int(endpoint_sizes.get(endpoint_id, 0)),
+        int(server_sizes.get(server_id, 0)),
+        -len(source_ids),
+        -source_success,
+        candidate_id_value,
+    )
+
+
+def _trim_entries_to_capacity(
+    entries: Mapping[str, dict[str, Any]],
+    *,
+    current_ids: set[str],
+    previous_ids: set[str],
+    sources: Mapping[str, Mapping[str, Any]],
+    limit: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Deterministically keep Asia/history/quality evidence within the C2 budget."""
+
+    capacity_limit = _candidate_capacity_limit() if limit is None else int(limit)
+    if capacity_limit < 1:
+        raise CandidateSnapshotError("candidate pool exceeds the versioned GMGN capacity budget")
+    if len(entries) <= capacity_limit:
+        return {
+            candidate_id_value: entries[candidate_id_value]
+            for candidate_id_value in sorted(entries)
+        }
+
+    endpoint_sizes = Counter(
+        str(entry["metadata"].get("endpoint_id", ""))
+        for entry in entries.values()
+    )
+    server_sizes = Counter(
+        str(entry["metadata"].get("server_id", ""))
+        for entry in entries.values()
+    )
+
+    def quality_key(candidate_id_value: str) -> tuple[Any, ...]:
+        return _capacity_quality_key(
+            candidate_id_value,
+            entries[candidate_id_value],
+            current_ids=current_ids,
+            previous_ids=previous_ids,
+            sources=sources,
+            endpoint_sizes=endpoint_sizes,
+            server_sizes=server_sizes,
+        )
+
+    protected_groups: dict[str, list[str]] = {
+        **{region: [] for region in REGION_ORDER},
+        "ASIA": [],
+    }
+    ordinary: list[str] = []
+    for candidate_id_value, entry in entries.items():
+        metadata = entry["metadata"]
+        if metadata.get("protected_asia") is True:
+            region = _candidate_primary_region(metadata)
+            protected_groups[
+                region if region in REGION_ORDER else "ASIA"
+            ].append(candidate_id_value)
+        else:
+            ordinary.append(candidate_id_value)
+    for values in protected_groups.values():
+        values.sort(key=quality_key)
+    ordinary.sort(key=quality_key)
+
+    protected_count = sum(len(values) for values in protected_groups.values())
+    selected: list[str] = []
+    if protected_count <= capacity_limit:
+        for region in (*REGION_ORDER, "ASIA"):
+            selected.extend(protected_groups[region])
+    else:
+        positions = {region: 0 for region in (*REGION_ORDER, "ASIA")}
+        while len(selected) < capacity_limit:
+            progressed = False
+            for region in (*REGION_ORDER, "ASIA"):
+                position = positions[region]
+                values = protected_groups[region]
+                if position >= len(values):
+                    continue
+                selected.append(values[position])
+                positions[region] = position + 1
+                progressed = True
+                if len(selected) >= capacity_limit:
+                    break
+            if not progressed:
+                break
+
+    if len(selected) < capacity_limit:
+        selected.extend(ordinary[: capacity_limit - len(selected)])
+    return {
+        candidate_id_value: entries[candidate_id_value]
+        for candidate_id_value in sorted(selected)
+    }
+
+
 def _previous_counts(status: Mapping[str, Any] | None, previous_state: str) -> dict[str, Any]:
     empty = {
         "state": previous_state,
@@ -1341,6 +1500,7 @@ def _evaluate_publish_gate(
     region_counts: Mapping[str, int],
     sources: Mapping[str, Mapping[str, Any]],
     previous: Mapping[str, Any],
+    policy_version: str = CANDIDATE_PUBLISH_POLICY_VERSION,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     reasons: list[str] = []
     previous_total = int(previous["candidate_count"])
@@ -1391,7 +1551,7 @@ def _evaluate_publish_gate(
     gate = {
         "passed": not reasons,
         "reasons": reasons,
-        "policy_version": CANDIDATE_PUBLISH_POLICY_VERSION,
+        "policy_version": policy_version,
     }
     return retain_ratios, source_quorum, gate
 
@@ -1412,6 +1572,7 @@ def evaluate_candidate_publish_gate(
         region_counts=region_counts,
         sources=sources,
         previous=previous,
+        policy_version=CANDIDATE_PUBLISH_POLICY_VERSION,
     )
 
 
@@ -1658,6 +1819,7 @@ def build_candidate_snapshot(
             allowed_endpoint_safety_policy_versions=frozenset(
                 {"endpoint-safety-v1", ENDPOINT_SAFETY_POLICY_VERSION}
             ),
+            allowed_publish_policy_versions=READABLE_CANDIDATE_PUBLISH_POLICY_VERSIONS,
         )
     elif payload["previous_state"] == "legacy_v1":
         previous_baseline = _validate_legacy_candidate_baseline_summary(
@@ -1676,6 +1838,11 @@ def build_candidate_snapshot(
     current_candidate_regions: dict[str, dict[str, str]] = defaultdict(dict)
     collision_bindings: list[tuple[str, str]] = []
     run_at = str(payload["run_at"])
+    previous_ids = (
+        set(previous.metadata["candidates"])
+        if previous is not None
+        else set()
+    )
 
     # Source health follows what collection actually observed, not what the
     # downstream GitHub reachability filter chose to publish. Otherwise a
@@ -1794,6 +1961,8 @@ def build_candidate_snapshot(
             )
         )
 
+    current_ids = set(entries)
+
     sources = _source_state(
         payload,
         current_candidate_sources,
@@ -1860,6 +2029,12 @@ def build_candidate_snapshot(
     assert_unique_public_id_bindings(collision_bindings)
     if not entries:
         raise CandidateSnapshotError("candidate snapshot contains no publishable candidates")
+    entries = _trim_entries_to_capacity(
+        entries,
+        current_ids=current_ids,
+        previous_ids=previous_ids,
+        sources=sources,
+    )
     final_capacity = estimate_gmgn_capacity(len(entries))
     if not final_capacity["below_candidate_hard_limit"] or not final_capacity["within_runtime_budget"]:
         raise CandidateSnapshotError("candidate pool exceeds the versioned GMGN capacity budget")
@@ -2093,6 +2268,7 @@ def validate_candidate_snapshot(
     settings: IdentitySettings | None = None,
     fixture_path: str | Path = Path("tests/fixtures/gmgn_identity_v1.json"),
     allowed_endpoint_safety_policy_versions: frozenset[str] | None = None,
+    allowed_publish_policy_versions: frozenset[str] | None = None,
 ) -> CandidateSnapshot:
     """Strict C1/C2 boundary validator with production-key identity preflight."""
 
@@ -2106,6 +2282,18 @@ def validate_candidate_snapshot(
         {"endpoint-safety-v1", ENDPOINT_SAFETY_POLICY_VERSION}
     ):
         raise CandidateSnapshotError("candidate endpoint safety policy allowance is invalid")
+    allowed_publish_policies = (
+        allowed_publish_policy_versions
+        if allowed_publish_policy_versions is not None
+        else frozenset({CANDIDATE_PUBLISH_POLICY_VERSION})
+    )
+    if (
+        not allowed_publish_policies
+        or not allowed_publish_policies.issubset(
+            READABLE_CANDIDATE_PUBLISH_POLICY_VERSIONS
+        )
+    ):
+        raise CandidateSnapshotError("candidate publish policy allowance is invalid")
     status_value = _strict_mapping(status, STATUS_FIELDS, "candidate status")
     metadata_value = _strict_mapping(metadata, METADATA_FIELDS, "candidate metadata")
     if status_value["kind"] != CANDIDATE_STATUS_KIND or status_value["schema_version"] != CANDIDATE_STATUS_SCHEMA_VERSION:
@@ -2221,11 +2409,13 @@ def validate_candidate_snapshot(
     ):
         raise CandidateSnapshotError("candidate source quorum is invalid")
     publish_gate = _strict_mapping(status_value["publish_gate"], PUBLISH_GATE_FIELDS, "candidate publish gate")
+    publish_policy_version = str(status_value["policy_version"])
     if (
         not isinstance(publish_gate["passed"], bool)
         or not isinstance(publish_gate["reasons"], list)
         or any(not isinstance(reason, str) for reason in publish_gate["reasons"])
-        or publish_gate["policy_version"] != CANDIDATE_PUBLISH_POLICY_VERSION
+        or publish_policy_version not in allowed_publish_policies
+        or publish_gate["policy_version"] != publish_policy_version
     ):
         raise CandidateSnapshotError("candidate publish gate is malformed")
 
@@ -2401,6 +2591,7 @@ def validate_candidate_snapshot(
             **previous_counts,
             "region_hint_counts": previous_region_counts,
         },
+        policy_version=publish_policy_version,
     )
     if retain_ratios != expected_retain:
         raise CandidateSnapshotError("candidate retain ratios do not match the publish policy")
@@ -2408,8 +2599,6 @@ def validate_candidate_snapshot(
         raise CandidateSnapshotError("candidate source quorum does not match source metadata")
     if publish_gate != expected_gate or publish_gate["passed"] is not True:
         raise CandidateSnapshotError("candidate publish gate did not pass")
-    if status_value["policy_version"] != CANDIDATE_PUBLISH_POLICY_VERSION:
-        raise CandidateSnapshotError("candidate publish policy is unsupported")
     return CandidateSnapshot(
         profile_bytes=profile_bytes,
         status=status_value,

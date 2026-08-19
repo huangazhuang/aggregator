@@ -699,6 +699,118 @@ class CandidateEndpointSafetyTests(unittest.TestCase):
 
 
 class CandidateProvenanceSnapshotTests(unittest.TestCase):
+    def test_oversized_pool_is_trimmed_deterministically_with_asia_and_history(self) -> None:
+        source_id = "public_" + "1" * 24
+        sources = {
+            source_id: {
+                "source_kind": "fixed",
+                "health_state": "healthy",
+            }
+        }
+
+        def entry(index: int, *, region: str = "", protected: bool = False) -> tuple[str, dict]:
+            candidate_id = f"c1_{index:024x}"
+            metadata = {
+                "source_ids": [source_id],
+                "source_last_success_at": RUN0,
+                "region_hints": [region] if region else [],
+                "protected_asia": protected,
+                "endpoint_id": f"e1_{index:024x}",
+                "server_id": f"s1_{index:024x}",
+            }
+            return candidate_id, {"proxy": {}, "metadata": metadata}
+
+        entries = dict(entry(index) for index in range(4996))
+        protected_ids: set[str] = set()
+        for offset, region in enumerate(("HK", "JP", "KR", "SG", "TW"), start=4996):
+            candidate_id, value = entry(offset, region=region, protected=True)
+            entries[candidate_id] = value
+            protected_ids.add(candidate_id)
+        low_quality_old = {f"c1_{index:024x}" for index in (4994, 4995)}
+        current_ids = set(entries) - low_quality_old - {f"c1_{5000:024x}"}
+        previous_ids = low_quality_old | {f"c1_{5000:024x}"}
+
+        selected = candidate_snapshot._trim_entries_to_capacity(
+            entries,
+            current_ids=current_ids,
+            previous_ids=previous_ids,
+            sources=sources,
+        )
+        reversed_selected = candidate_snapshot._trim_entries_to_capacity(
+            dict(reversed(list(entries.items()))),
+            current_ids=current_ids,
+            previous_ids=previous_ids,
+            sources=sources,
+        )
+
+        self.assertEqual(len(selected), 4999)
+        self.assertEqual(set(selected), set(reversed_selected))
+        self.assertTrue(protected_ids.issubset(selected))
+        self.assertTrue(low_quality_old.isdisjoint(selected))
+
+    def test_build_trims_before_rendering_and_records_policy_v3(self) -> None:
+        nodes = [
+            proxy(f"JP node {index}", f"node-{index}.example", f"secret-{index}")
+            for index in range(6)
+        ]
+        source = task(
+            "asia",
+            "https://raw.githubusercontent.com/acme/asia/main/sub.yaml",
+        )
+        identity_input = staging(nodes, [(source, nodes, None)], run_at=RUN0)
+
+        with patch("scripts.candidate_snapshot._candidate_capacity_limit", return_value=4):
+            snapshot = build_candidate_snapshot(identity_input, settings=IDENTITY)
+
+        self.assertEqual(snapshot.status["candidate_count"], 4)
+        self.assertEqual(snapshot.metadata["candidate_count"], 4)
+        self.assertEqual(snapshot.status["policy_version"], "candidate-publish-v3")
+        self.assertEqual(
+            snapshot.status["publish_gate"]["policy_version"],
+            "candidate-publish-v3",
+        )
+
+    def test_previous_publish_policy_v2_is_read_only_and_migrates_to_v3(self) -> None:
+        node = proxy("JP stable", "stable.example", "stable-secret")
+        source = task(
+            "asia",
+            "https://raw.githubusercontent.com/acme/asia/main/sub.yaml",
+        )
+        initial = build_candidate_snapshot(
+            staging([node], [(source, [node], None)], run_at=RUN0),
+            settings=IDENTITY,
+        )
+        previous_status = copy.deepcopy(initial.status)
+        previous_status["policy_version"] = "candidate-publish-v2"
+        previous_status["publish_gate"]["policy_version"] = "candidate-publish-v2"
+        with self.assertRaisesRegex(CandidateSnapshotError, "publish gate"):
+            validate_candidate_snapshot(
+                initial.profile_bytes,
+                previous_status,
+                initial.metadata,
+                settings=IDENTITY,
+            )
+
+        prepared = staging(
+            [node],
+            [(source, [node], None)],
+            run_at="2026-08-02T00:00:00Z",
+            previous=CandidateSnapshot(
+                profile_bytes=initial.profile_bytes,
+                status=previous_status,
+                metadata=initial.metadata,
+                ordered_candidates=initial.ordered_candidates,
+                snapshot_id=initial.snapshot_id,
+                main_sha=initial.main_sha,
+                profile_sha256=initial.profile_sha256,
+                metadata_sha256=initial.metadata_sha256,
+                identity_key_version=initial.identity_key_version,
+                identity_epoch=initial.identity_epoch,
+            ),
+        )
+        migrated = build_candidate_snapshot(prepared, settings=IDENTITY)
+        self.assertEqual(migrated.status["policy_version"], "candidate-publish-v3")
+
     def test_numeric_authentication_and_reality_survive_snapshot_serialization(self) -> None:
         numeric_auth = {
             "name": "JP numeric auth",
