@@ -20,6 +20,7 @@ import ipaddress
 import json
 import os
 import platform
+import queue
 import re
 import secrets
 import shutil
@@ -127,6 +128,8 @@ from scripts.publish_transaction import (
     build_publish_bundle,
     classify_previous_ref,
     read_bundle_from_commit,
+    published_count_from_bundle,
+    validate_selection_publication,
     write_publish_bundle,
 )
 from scripts.validate_public_outputs import fetch_no_cache, minimal_mihomo_env
@@ -174,6 +177,19 @@ PREFLIGHT_FIELDS = frozenset(
     }
 )
 INTERNAL_GROUP = "__gmgn_v2_probe__"
+HTTP_PROBE_GROUP_PREFIX = "__gmgn_v2_http_slot_"
+HTTP_PROBE_LISTENER_PREFIX = "gmgn-v2-http-slot-"
+HTTP_PROBE_PORT_BASE = 20_000
+HTTP_PROBE_PORT_STRIDE = 64
+GMGN_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/140.0.0.0 Safari/537.36"
+)
+GMGN_BROWSER_ACCEPT = (
+    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+    "image/avif,image/webp,*/*;q=0.8"
+)
 
 NORMAL_TAG_RE = re.compile(r"^cnb-gmgn-v2-([0-9a-f]{64})-([0-9a-f]{40})$")
 RETRY_TAG_RE = re.compile(
@@ -188,14 +204,17 @@ CONTROL_DISCOVERY_WORKERS = 16
 CONTROL_PANEL_SIZE = 8
 CONTROL_PANEL_WORKERS = 8
 CONTROL_PROBE_TIMEOUT_MS = 5_000
-CONTROL_EXPECTED_STATUS = "100-599"
+CONTROL_EXPECTED_STATUS = 200
+HTTP_PROBE_STARTUP_GRACE_SECONDS = 1.0
+HTTP_PROBE_PORTS_PER_SHARD = 32
 
 DIRECT_TARGETS: dict[str, dict[str, Any]] = {
     "control-gmgn-v1": {
         "server": "gmgn.ai",
         "port": 443,
         "path": "/",
-        "status_policy": "any_http",
+        "status_policy": "exact",
+        "expected_status": 200,
         "purpose": "control",
     },
     "canary-gstatic-v1": {
@@ -1155,12 +1174,19 @@ def _probe(args: argparse.Namespace) -> int:
     context_path = output / "probe-context.json"
     _write_json(context_path, context)
     state_path = output / "guard-state.json"
+    http_probe_ports = tuple(
+        HTTP_PROBE_PORT_BASE + index * HTTP_PROBE_PORT_STRIDE + offset
+        for offset in range(HTTP_PROBE_PORTS_PER_SHARD)
+    )
     lease = provision_guard(
         pinned,
         auxiliary_targets=auxiliary,
         shard_index=index,
         controller_port=int(manifest["shards"][index]["controller_port"]),
-        local_ports=(int(manifest["shards"][index]["mixed_port"]),),
+        local_ports=(
+            int(manifest["shards"][index]["mixed_port"]),
+            *http_probe_ports,
+        ),
         state_path=state_path,
     )
     try:
@@ -1329,6 +1355,209 @@ def _runtime_hosts(
             if parsed.hostname not in hosts:
                 raise CoordinatorError("guarded runtime URL lacks a fixed host mapping")
     return hosts
+
+
+@dataclass(frozen=True)
+class _HttpProbeSlot:
+    group_name: str
+    listener_name: str
+    port: int
+
+
+def _http_probe_slots(shard_index: int, workers: int) -> tuple[_HttpProbeSlot, ...]:
+    """Return deterministic, non-overlapping loopback listeners for one shard."""
+
+    if (
+        isinstance(shard_index, bool)
+        or not isinstance(shard_index, int)
+        or shard_index not in range(SHARD_COUNT)
+        or isinstance(workers, bool)
+        or not isinstance(workers, int)
+        or workers < 1
+        or workers > HTTP_PROBE_PORTS_PER_SHARD
+    ):
+        raise CoordinatorError("HTTP probe slot contract is invalid")
+    start = HTTP_PROBE_PORT_BASE + shard_index * HTTP_PROBE_PORT_STRIDE
+    return tuple(
+        _HttpProbeSlot(
+            group_name=f"{HTTP_PROBE_GROUP_PREFIX}{slot}__",
+            listener_name=f"{HTTP_PROBE_LISTENER_PREFIX}{slot}",
+            port=start + slot,
+        )
+        for slot in range(workers)
+    )
+
+
+def _http_probe_runtime(
+    candidate_names: Sequence[str], *, shard_index: int, workers: int
+) -> tuple[tuple[_HttpProbeSlot, ...], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build isolated selector/listener pairs used by concurrent HTTP probes."""
+
+    names = [str(name) for name in candidate_names]
+    if any(not name for name in names) or len(names) != len(set(names)):
+        raise CoordinatorError("HTTP probe candidate names are invalid")
+    slots = _http_probe_slots(shard_index, workers)
+    reserved = {INTERNAL_GROUP, *(slot.group_name for slot in slots)}
+    if reserved.intersection(names):
+        raise CoordinatorError("candidate name collides with an internal probe group")
+    members = names or ["DIRECT"]
+    groups = [
+        {
+            "name": slot.group_name,
+            "type": "select",
+            "proxies": list(members),
+        }
+        for slot in slots
+    ]
+    listeners = [
+        {
+            "name": slot.listener_name,
+            "type": "mixed",
+            "port": slot.port,
+            "listen": "127.0.0.1",
+            "proxy": slot.group_name,
+        }
+        for slot in slots
+    ]
+    return slots, groups, listeners
+
+
+def _browser_http_outcome(
+    controller: str,
+    secret: str,
+    *,
+    slot: _HttpProbeSlot,
+    proxy_name: str,
+    target_url: str,
+    timeout_ms: int,
+    expected_status: int = 200,
+) -> dict[str, Any]:
+    """Send one browser-shaped request through an exclusively held slot."""
+
+    parsed = urllib.parse.urlsplit(target_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+        or timeout_ms <= 0
+        or isinstance(expected_status, bool)
+        or not isinstance(expected_status, int)
+        or not 100 <= expected_status <= 599
+    ):
+        raise CoordinatorError("browser HTTP probe contract is invalid")
+    try:
+        _controller_request(
+            controller,
+            secret,
+            "PUT",
+            f"/proxies/{urllib.parse.quote(slot.group_name, safe='')}",
+            body={"name": proxy_name},
+            timeout=CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        return {"error": f"controller selection failed: {exc}"}
+
+    target_port = parsed.port or 443
+    if not 1 <= target_port <= 65_535:
+        raise CoordinatorError("browser HTTP probe target port is invalid")
+    request = urllib.request.Request(
+        target_url,
+        headers={
+            "User-Agent": GMGN_BROWSER_USER_AGENT,
+            "Accept": GMGN_BROWSER_ACCEPT,
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+        },
+    )
+    proxy_url = f"http://127.0.0.1:{slot.port}"
+    opener = urllib.request.build_opener(
+        _ForcedLoopbackProxyHandler({"http": proxy_url, "https": proxy_url})
+    )
+    started = time.monotonic()
+    try:
+        with opener.open(request, timeout=timeout_ms / 1000) as response:
+            status = int(response.status)
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+    except Exception as exc:
+        return {"error": f"browser target request failed: {exc}"}
+    delay_ms = max(1, int(round((time.monotonic() - started) * 1000)))
+    if not 100 <= status <= 599:
+        return {"error": "browser target returned an invalid HTTP status"}
+    if status != expected_status:
+        return {"target_status": status}
+    return {"delay_ms": delay_ms, "target_status": status}
+
+
+class _BrowserProbePool:
+    """Lease one selector/listener pair per concurrent target request."""
+
+    def __init__(
+        self,
+        controller: str,
+        secret: str,
+        slots: Sequence[_HttpProbeSlot],
+    ) -> None:
+        normalized = tuple(slots)
+        if (
+            not normalized
+            or len({slot.group_name for slot in normalized}) != len(normalized)
+            or len({slot.port for slot in normalized}) != len(normalized)
+        ):
+            raise CoordinatorError("browser HTTP probe slots are invalid")
+        self.controller = controller
+        self.secret = secret
+        self._available: queue.Queue[_HttpProbeSlot] = queue.Queue()
+        for slot in normalized:
+            self._available.put(slot)
+
+    def probe(
+        self,
+        candidate: Mapping[str, Any],
+        target_url: str,
+        timeout_ms: int,
+        *,
+        expected_status: int = 200,
+    ) -> dict[str, Any]:
+        proxy = candidate.get("proxy")
+        proxy_name = str(proxy.get("name") or "") if isinstance(proxy, Mapping) else ""
+        if not proxy_name:
+            raise CoordinatorError("browser HTTP probe candidate is invalid")
+        slot = self._available.get()
+        try:
+            return _browser_http_outcome(
+                self.controller,
+                self.secret,
+                slot=slot,
+                proxy_name=proxy_name,
+                target_url=target_url,
+                timeout_ms=timeout_ms,
+                expected_status=expected_status,
+            )
+        finally:
+            self._available.put(slot)
+
+
+class _ForcedLoopbackProxyHandler(urllib.request.ProxyHandler):
+    """Proxy handler that cannot honor environment bypass rules."""
+
+    def proxy_open(
+        self,
+        request: urllib.request.Request,
+        proxy: str,
+        request_type: str,
+    ) -> Any:
+        original_type = request.type
+        proxy_type, user, password, hostport = urllib.request._parse_proxy(proxy)
+        if user is not None or password is not None:
+            raise CoordinatorError("loopback probe proxy must not contain credentials")
+        request.set_proxy(
+            urllib.parse.unquote(hostport), proxy_type or original_type
+        )
+        if original_type == (proxy_type or original_type) or original_type == "https":
+            return None
+        return self.parent.open(request, timeout=request.timeout)
 
 
 def _egress(target: Mapping[str, Any]) -> dict[str, Any]:
@@ -1757,7 +1986,7 @@ def _safe_direct_probe_diagnostics(
         "schema_version": 3,
         "shard_index": shard_index,
         "clients": {
-            "control": "mihomo-proxy-panel-any-http",
+            "control": "browser-http-proxy-panel-strict-200",
             "canaries": "mihomo-direct-exact-state",
         },
         "control": {
@@ -1899,9 +2128,18 @@ def _probe_inside(args: argparse.Namespace) -> int:
     work_dir = Path(context["work_dir"])
     work_dir.mkdir(parents=True, exist_ok=True)
     names = [str(item["proxy"]["name"]) for item in candidates]
-    if len(names) != len(set(names)) or INTERNAL_GROUP in names:
+    if any(not name for name in names) or len(names) != len(set(names)):
         raise CoordinatorError("shard proxy names are missing, duplicated, or reserved")
     guarded_names = [str(item["proxy"]["name"]) for item in guarded_candidates]
+    http_slots, http_groups, http_listeners = _http_probe_runtime(
+        guarded_names,
+        shard_index=index,
+        workers=int(manifest["workers_per_shard"]),
+    )
+    if {INTERNAL_GROUP, *(slot.group_name for slot in http_slots)}.intersection(
+        names
+    ):
+        raise CoordinatorError("shard proxy names are missing, duplicated, or reserved")
     hosts = _runtime_hosts(
         pinned,
         auxiliary,
@@ -1921,8 +2159,10 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 "name": INTERNAL_GROUP,
                 "type": "select",
                 "proxies": guarded_names + ["DIRECT"],
-            }
+            },
+            *http_groups,
         ],
+        "listeners": http_listeners,
         "rules": [f"MATCH,{INTERNAL_GROUP}"],
     }
     runtime_yaml, invalid = dump_clash_yaml(runtime)
@@ -1941,6 +2181,8 @@ def _probe_inside(args: argparse.Namespace) -> int:
         controller_version = _wait_mihomo(controller, secret, process)
         if controller_version != manifest["mihomo_version"]:
             raise CoordinatorError("Mihomo controller version differs from the manifest")
+        time.sleep(HTTP_PROBE_STARTUP_GRACE_SECONDS)
+        browser_probe = _BrowserProbePool(controller, secret, http_slots)
 
         def health(_phase: str, _round: int) -> dict[str, Any]:
             if process.poll() is not None:
@@ -1964,12 +2206,11 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 return {"error_category": "dns"}
             if candidate_id in ipv6_unavailable_ids:
                 return {"error_category": "connect"}
-            return _delay_attempt(
-                controller,
-                secret,
+            return browser_probe.probe(
                 candidate,
                 str(manifest["target_url"]),
                 int(manifest["request_timeout_ms"]),
+                expected_status=int(manifest["expected_status"]),
             )
 
         control_target = _operational_target("control-gmgn-v1", auxiliary)
@@ -1978,7 +2219,9 @@ def _probe_inside(args: argparse.Namespace) -> int:
             control_authority = f"{control_authority}:{control_target['port']}"
         control_url = f"https://{control_authority}{control_target['path']}"
         if (
-            control_target.get("status_policy") != "any_http"
+            control_target.get("status_policy") != "exact"
+            or int(control_target.get("expected_status", 0))
+            != CONTROL_EXPECTED_STATUS
             or control_url != str(manifest["target_url"])
         ):
             raise CoordinatorError("GMGN control reachability target is invalid")
@@ -1991,9 +2234,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 return {"error_category": "dns"}
             if candidate_id in ipv6_unavailable_ids:
                 return {"error_category": "connect"}
-            return _delay_attempt(
-                controller,
-                secret,
+            return browser_probe.probe(
                 candidate,
                 control_url,
                 min(int(manifest["request_timeout_ms"]), CONTROL_PROBE_TIMEOUT_MS),
@@ -2437,6 +2678,10 @@ def _finalize(args: argparse.Namespace) -> int:
         snapshot, accepted, history, region_decisions
     )
     selection = select_candidates_v2(selection_input)
+    validate_selection_publication(
+        selection["summary"],
+        published_count_from_bundle(previous.bundle),
+    )
     updated_history = reduce_history(
         history,
         run_context={
@@ -2686,6 +2931,16 @@ __all__ = [
     "PREFLIGHT_KIND",
     "PREFLIGHT_SCHEMA_VERSION",
     "REGION_PROVIDER_TARGET",
+    "GMGN_BROWSER_ACCEPT",
+    "GMGN_BROWSER_USER_AGENT",
+    "HTTP_PROBE_PORT_BASE",
+    "HTTP_PROBE_PORT_STRIDE",
+    "HTTP_PROBE_PORTS_PER_SHARD",
+    "_BrowserProbePool",
+    "_HttpProbeSlot",
+    "_browser_http_outcome",
+    "_http_probe_runtime",
+    "_http_probe_slots",
     "_operational_target",
     "_runtime_hosts",
     "build_parser",

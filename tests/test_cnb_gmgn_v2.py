@@ -467,6 +467,150 @@ class TriggerAndPreflightTests(unittest.TestCase):
 
 
 class GuardedRuntimeTests(unittest.TestCase):
+    def test_http_probe_runtime_allocates_one_isolated_listener_per_worker(self) -> None:
+        slots, groups, listeners = cnb_gmgn_v2._http_probe_runtime(
+            ["candidate-a", "candidate-b"],
+            shard_index=2,
+            workers=8,
+        )
+
+        self.assertEqual(len(slots), 8)
+        self.assertEqual(
+            [slot.port for slot in slots],
+            list(
+                range(
+                    cnb_gmgn_v2.HTTP_PROBE_PORT_BASE
+                    + 2 * cnb_gmgn_v2.HTTP_PROBE_PORT_STRIDE,
+                    cnb_gmgn_v2.HTTP_PROBE_PORT_BASE
+                    + 2 * cnb_gmgn_v2.HTTP_PROBE_PORT_STRIDE
+                    + 8,
+                )
+            ),
+        )
+        self.assertEqual(
+            [group["name"] for group in groups],
+            [slot.group_name for slot in slots],
+        )
+        self.assertTrue(
+            all(group["proxies"] == ["candidate-a", "candidate-b"] for group in groups)
+        )
+        self.assertEqual(
+            [listener["proxy"] for listener in listeners],
+            [slot.group_name for slot in slots],
+        )
+        self.assertTrue(all(listener["listen"] == "127.0.0.1" for listener in listeners))
+
+    def test_probe_guard_allows_the_full_fixed_listener_port_budget(self) -> None:
+        context = cnb_gmgn_v2._http_probe_slots(3, 16)
+        ports = {
+            cnb_gmgn_v2.HTTP_PROBE_PORT_BASE
+            + 3 * cnb_gmgn_v2.HTTP_PROBE_PORT_STRIDE
+            + offset
+            for offset in range(cnb_gmgn_v2.HTTP_PROBE_PORTS_PER_SHARD)
+        }
+        self.assertEqual(len(ports), cnb_gmgn_v2.HTTP_PROBE_PORTS_PER_SHARD)
+        self.assertEqual({slot.port for slot in context}.issubset(ports), True)
+
+    def test_browser_http_probe_sends_fixed_browser_headers_through_its_slot(self) -> None:
+        response = MagicMock()
+        response.status = 200
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value = response
+        slot = cnb_gmgn_v2._http_probe_slots(0, 1)[0]
+
+        with (
+            patch.object(cnb_gmgn_v2, "_controller_request") as controller_request,
+            patch.object(
+                cnb_gmgn_v2.urllib.request,
+                "build_opener",
+                return_value=opener,
+            ) as build_opener,
+            patch.object(cnb_gmgn_v2.time, "monotonic", side_effect=[10.0, 10.075]),
+            patch.dict(os.environ, {"NO_PROXY": "gmgn.ai", "no_proxy": "gmgn.ai"}),
+        ):
+            outcome = cnb_gmgn_v2._browser_http_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                slot=slot,
+                proxy_name="candidate-a",
+                target_url="https://gmgn.ai/",
+                timeout_ms=3000,
+            )
+
+        self.assertEqual(outcome, {"delay_ms": 75, "target_status": 200})
+        controller_request.assert_called_once_with(
+            "127.0.0.1:19090",
+            "test-secret",
+            "PUT",
+            f"/proxies/{slot.group_name}",
+            body={"name": "candidate-a"},
+            timeout=cnb_gmgn_v2.CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        )
+        proxy_handler = build_opener.call_args.args[0]
+        self.assertIsInstance(proxy_handler, cnb_gmgn_v2._ForcedLoopbackProxyHandler)
+        self.assertEqual(
+            proxy_handler.proxies,
+            {
+                "http": f"http://127.0.0.1:{slot.port}",
+                "https": f"http://127.0.0.1:{slot.port}",
+            },
+        )
+        request = opener.open.call_args.args[0]
+        self.assertEqual(
+            request.get_header("User-agent"), cnb_gmgn_v2.GMGN_BROWSER_USER_AGENT
+        )
+        proxy_handler.proxy_open(request, proxy_handler.proxies["https"], "https")
+        self.assertEqual(request.host, f"127.0.0.1:{slot.port}")
+        self.assertEqual(request._tunnel_host, "gmgn.ai")
+        self.assertEqual(opener.open.call_args.kwargs["timeout"], 3.0)
+
+    def test_browser_http_probe_preserves_target_403_for_scoring(self) -> None:
+        opener = MagicMock()
+        opener.open.side_effect = cnb_gmgn_v2.urllib.error.HTTPError(
+            "https://gmgn.ai/", 403, "Forbidden", {}, None
+        )
+        slot = cnb_gmgn_v2._http_probe_slots(0, 1)[0]
+
+        with (
+            patch.object(cnb_gmgn_v2, "_controller_request"),
+            patch.object(
+                cnb_gmgn_v2.urllib.request,
+                "build_opener",
+                return_value=opener,
+            ),
+            patch.object(cnb_gmgn_v2.time, "monotonic", side_effect=[20.0, 20.1]),
+        ):
+            outcome = cnb_gmgn_v2._browser_http_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                slot=slot,
+                proxy_name="candidate-a",
+                target_url="https://gmgn.ai/",
+                timeout_ms=3000,
+            )
+
+        self.assertEqual(outcome, {"target_status": 403})
+        self.assertEqual(normalize_outcome(outcome), (None, "target_403"))
+
+    def test_browser_probe_pool_returns_a_slot_after_probe_failure(self) -> None:
+        pool = cnb_gmgn_v2._BrowserProbePool(
+            "127.0.0.1:19090",
+            "test-secret",
+            cnb_gmgn_v2._http_probe_slots(0, 1),
+        )
+        candidate = {"proxy": {"name": "candidate-a"}}
+        with patch.object(
+            cnb_gmgn_v2,
+            "_browser_http_outcome",
+            side_effect=[RuntimeError("boom"), {"delay_ms": 80, "target_status": 200}],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                pool.probe(candidate, "https://gmgn.ai/", 3000)
+            self.assertEqual(
+                pool.probe(candidate, "https://gmgn.ai/", 3000),
+                {"delay_ms": 80, "target_status": 200},
+            )
+
     def test_mihomo_direct_probe_uses_the_same_delay_contract_as_candidates(self) -> None:
         target_url = "https://www.gstatic.com/generate_204"
         with patch.object(
@@ -811,7 +955,7 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertEqual(
             diagnostics["clients"],
             {
-                "control": "mihomo-proxy-panel-any-http",
+                "control": "browser-http-proxy-panel-strict-200",
                 "canaries": "mihomo-direct-exact-state",
             },
         )

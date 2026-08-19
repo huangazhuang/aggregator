@@ -12,6 +12,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -38,6 +39,8 @@ from scripts.gmgn_measurement import (
     VALIDITY_POLICY_VERSION,
 )
 from scripts.gmgn_selection import (
+    DESIRED_CAPACITY,
+    MAX_NODES,
     NODE_STATUS_KIND,
     NODE_STATUS_SCHEMA_VERSION,
     REGION_POLICY_VERSION,
@@ -60,11 +63,28 @@ RUN_INDEX_KIND = "cnb-gmgn-run-index"
 RUN_INDEX_SCHEMA_VERSION = 1
 RUN_DIAGNOSTICS_KIND = "cnb-gmgn-run-diagnostics"
 RUN_DIAGNOSTICS_SCHEMA_VERSION = 1
-PUBLISH_POLICY_VERSION = "gmgn-publication-v1"
+PUBLISH_POLICY_VERSION = "gmgn-publication-v2"
+SUPPORTED_PUBLISH_POLICY_VERSIONS = frozenset(
+    {"gmgn-publication-v1", PUBLISH_POLICY_VERSION}
+)
+SUPPORTED_PUBLICATION_POLICY_PAIRS = frozenset(
+    {
+        ("gmgn-publication-v1", "gmgn-validity-v5"),
+        (PUBLISH_POLICY_VERSION, VALIDITY_POLICY_VERSION),
+    }
+)
 PUBLIC_ALLOWLIST_VERSION = "gmgn-public-allowlist-v1"
 AUTHORITATIVE_BRANCH = "clash-cn-gmgn-v2-shadow"
 STAGING_BRANCH_PREFIX = "clash-cn-gmgn-v2-staging"
 RECENT_RUN_LIMIT = 5
+
+# Capacity is deliberately a soft target.  A valid run may publish fewer than
+# ``DESIRED_CAPACITY`` nodes, but an empty result must never replace the last
+# good bundle.  The retention floor only protects an already published bundle
+# from an accidental/partial result; it is not a quality target or a request to
+# pad the output with slow nodes.
+PUBLICATION_MIN_COUNT = 1
+PUBLICATION_MIN_RETAIN_RATIO = 0.40
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
@@ -386,6 +406,100 @@ def _non_negative_int(value: Any, label: str) -> int:
     return value
 
 
+def validate_publication_capacity(
+    published_count: Any,
+    previous_published_count: Any = 0,
+    *,
+    desired_capacity: int = DESIRED_CAPACITY,
+    max_nodes: int = MAX_NODES,
+    minimum_count: int = PUBLICATION_MIN_COUNT,
+    retain_ratio: float = PUBLICATION_MIN_RETAIN_RATIO,
+) -> dict[str, Any]:
+    """Validate the soft-capacity publication policy.
+
+    ``desired_capacity`` is informational: it describes the preferred size,
+    not a lower bound.  The only unconditional lower bound is one usable
+    proxy.  When a previous bundle exists, a modest retention floor protects
+    against an accidentally partial result while still allowing a substantial
+    quality-driven reduction.
+    """
+
+    count = _non_negative_int(published_count, "published_count")
+    previous = _non_negative_int(previous_published_count, "previous_published_count")
+    desired = _non_negative_int(desired_capacity, "desired_capacity")
+    maximum = _non_negative_int(max_nodes, "max_nodes")
+    minimum = _non_negative_int(minimum_count, "minimum_count")
+    if (
+        maximum < 1
+        or desired < 1
+        or desired > maximum
+        or minimum < 1
+        or minimum > maximum
+    ):
+        raise PublicationError("publication capacity bounds are invalid")
+    if not isinstance(retain_ratio, (int, float)) or isinstance(retain_ratio, bool):
+        raise PublicationError("publication retain ratio is invalid")
+    ratio = float(retain_ratio)
+    if ratio < 0 or ratio > 1 or not math.isfinite(ratio):
+        raise PublicationError("publication retain ratio is invalid")
+    if count > maximum:
+        raise PublicationError(
+            f"publication contains {count} nodes; the hard cap is {maximum}"
+        )
+    previous_baseline = min(previous, desired)
+    required = minimum
+    if previous > 0:
+        required = max(required, math.ceil(previous_baseline * ratio))
+    if count < required:
+        if count == 0:
+            raise PublicationError(
+                "publication produced no usable nodes (all candidates may be "
+                "unknown, unreachable, or unverified); refusing to replace "
+                "the last-good profile"
+            )
+        raise PublicationError(
+            f"publication shrank to {count} nodes; at least {required} are "
+            "required by the last-good retention floor; refusing to replace "
+            "the last-good profile"
+        )
+    return {
+        "published_count": count,
+        "previous_published_count": previous,
+        "previous_publish_baseline": previous_baseline,
+        "minimum_required": required,
+        "desired_capacity": desired,
+        "desired_capacity_reached": count >= desired,
+        "max_nodes": maximum,
+        "retain_ratio": ratio,
+    }
+
+
+def validate_selection_publication(
+    summary: Mapping[str, Any],
+    previous_published_count: Any = 0,
+) -> dict[str, Any]:
+    """Apply the publication gate to a normalized V2 selection summary."""
+
+    value = _validate_selection_summary(summary)
+    source_count = value["source_candidate_count"]
+    if source_count < 1:
+        raise PublicationError(
+            "publication has no source candidates; refusing to replace the "
+            "last-good profile"
+        )
+    if value["unknown_region_count"] >= source_count:
+        raise PublicationError(
+            "publication classified every candidate region as unknown; "
+            "refusing to replace the last-good profile"
+        )
+    return validate_publication_capacity(
+        value["published_count"],
+        previous_published_count,
+        desired_capacity=value["desired_capacity"],
+        max_nodes=value["max_nodes"],
+    )
+
+
 def _positive_number(value: Any, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise PublicationError(f"{label} must be a positive number")
@@ -572,7 +686,9 @@ def _validate_selection_summary(raw: Any) -> dict[str, Any]:
 
 
 def _validate_node_status(
-    raw: Any, *, expected_bundle_hash: str | None
+    raw: Any,
+    *,
+    expected_bundle_hash: str | None,
 ) -> dict[str, Any]:
     expected_fields = NODE_STATUS_FIELDS
     if expected_bundle_hash is None:
@@ -760,7 +876,13 @@ def _validate_node_status(
     return value
 
 
-def validate_public_diagnostics(raw: Any) -> dict[str, Any]:
+def validate_public_diagnostics(
+    raw: Any,
+    *,
+    accepted_validity_policy_versions: frozenset[str] = frozenset(
+        {VALIDITY_POLICY_VERSION}
+    ),
+) -> dict[str, Any]:
     value = _strict_mapping(raw, DIAGNOSTICS_FIELDS, "run diagnostics")
     if (
         value["kind"] != RUN_DIAGNOSTICS_KIND
@@ -796,7 +918,7 @@ def validate_public_diagnostics(raw: Any) -> dict[str, Any]:
         raise PublicationError("run diagnostics selection policy is unsupported")
     if value["region_policy_version"] != REGION_POLICY_VERSION:
         raise PublicationError("run diagnostics region policy is unsupported")
-    if value["validity_policy_version"] != VALIDITY_POLICY_VERSION:
+    if value["validity_policy_version"] not in accepted_validity_policy_versions:
         raise PublicationError("run diagnostics validity policy is unsupported")
     if value["total_rounds"] != TOTAL_ROUNDS or value["shard_count"] != SHARD_COUNT:
         raise PublicationError("run diagnostics round or shard contract mismatch")
@@ -1051,6 +1173,7 @@ def build_publish_bundle(
     profile_names = {str(proxy["name"]) for proxy in profile["proxies"]}
     selection_status = public_selection_status(selection)
     summary = _validate_selection_summary(selection["summary"])
+    validate_selection_publication(summary)
     if published_count != summary["published_count"]:
         raise PublicationError("selection profile count disagrees with its status")
     status_summary = {
@@ -1320,7 +1443,7 @@ def validate_publish_bundle(files: Mapping[str, bytes]) -> PublishBundle:
     if (
         status["kind"] != PUBLISH_STATUS_KIND
         or status["schema_version"] != PUBLISH_STATUS_SCHEMA_VERSION
-        or status["publish_policy_version"] != PUBLISH_POLICY_VERSION
+        or status["publish_policy_version"] not in SUPPORTED_PUBLISH_POLICY_VERSIONS
         or status["public_allowlist_version"] != PUBLIC_ALLOWLIST_VERSION
     ):
         raise PublicationError("publish status kind, schema, or policy is unsupported")
@@ -1366,8 +1489,12 @@ def validate_publish_bundle(files: Mapping[str, bytes]) -> PublishBundle:
         raise PublicationError("publish status region policy is unsupported")
     if status["history_policy_version"] != HISTORY_POLICY_VERSION:
         raise PublicationError("publish status history policy is unsupported")
-    if status["validity_policy_version"] != VALIDITY_POLICY_VERSION:
-        raise PublicationError("publish status validity policy is unsupported")
+    if (
+        status["publish_policy_version"],
+        status["validity_policy_version"],
+    ) not in SUPPORTED_PUBLICATION_POLICY_PAIRS:
+        raise PublicationError("publish status policy pair is unsupported")
+    bundle_validity_policies = frozenset({status["validity_policy_version"]})
     if status["total_rounds"] != TOTAL_ROUNDS or status["shard_count"] != SHARD_COUNT:
         raise PublicationError("publish status round/shard contract mismatch")
     if _positive_number(
@@ -1477,7 +1604,8 @@ def validate_publish_bundle(files: Mapping[str, bytes]) -> PublishBundle:
         if history_node is None or history_node["output_name"] != node["output_name"]:
             raise PublicationError("selected node-status identity disagrees with history")
     diagnostics = validate_public_diagnostics(
-        _load_json_bytes(normalized_files[diagnostics_path], diagnostics_path)
+        _load_json_bytes(normalized_files[diagnostics_path], diagnostics_path),
+        accepted_validity_policy_versions=bundle_validity_policies,
     )
     if diagnostics["bundle_hash"] != bundle_hash:
         raise PublicationError("run diagnostics bundle hash mismatch")
@@ -1572,6 +1700,23 @@ def load_publish_bundle(directory: str | Path) -> PublishBundle:
             relative = path.relative_to(root).as_posix()
             files[relative] = path.read_bytes()
     return validate_publish_bundle(files)
+
+
+def published_count_from_bundle(bundle: PublishBundle | None) -> int:
+    """Return the published proxy count from an already validated bundle."""
+
+    if bundle is None:
+        return 0
+    try:
+        status = json.loads(bundle.files["status.json"].decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PreviousStateError("previous bundle status is unreadable") from exc
+    if not isinstance(status, Mapping):
+        raise PreviousStateError("previous bundle status is malformed")
+    value = status.get("published_count")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise PreviousStateError("previous bundle published count is malformed")
+    return value
 
 
 def classify_previous_ref(
@@ -1671,6 +1816,9 @@ def execute_transaction(
 ) -> TransactionResult:
     """Execute staging -> smoke -> CAS promote -> smoke with controlled rollback."""
 
+    current_count = published_count_from_bundle(bundle)
+    previous_count = published_count_from_bundle(previous.bundle)
+    validate_publication_capacity(current_count, previous_count)
     if previous.exists != (previous.observed_tip is not None):
         raise PreviousStateError("previous branch existence and tip disagree")
     if previous.exists and previous.bundle is None:
@@ -1977,9 +2125,12 @@ __all__ = [
     "publication_revision",
     "load_publish_bundle",
     "publish_bundle_to_remote",
+    "published_count_from_bundle",
     "read_bundle_from_commit",
     "staging_ref_for_source",
     "validate_public_diagnostics",
+    "validate_publication_capacity",
+    "validate_selection_publication",
     "validate_publish_bundle",
     "write_publish_bundle",
 ]

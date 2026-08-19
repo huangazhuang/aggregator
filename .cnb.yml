@@ -79,8 +79,11 @@ main:
         ASIA_EMERGENCY_MIN_SUCCESS: "10"
         ASIA_EMERGENCY_MAX_P90_MS: "2800"
         ASIA_EMERGENCY_MAX_COUNT: "0"
-        MIN_SUCCESS: "50"
-        MIN_RETAIN_RATIO: "0.50"
+        # 80 is a soft capacity target.  Keep only quality-qualified nodes;
+        # allow a smaller valid publication, while retaining 40% of the last
+        # good profile to fail closed on partial/infrastructure scans.
+        MIN_SUCCESS: "1"
+        MIN_RETAIN_RATIO: "0.40"
         TIMEOUT_MS: "3000"
       stages:
         - name: Test proxies from the CNB runner

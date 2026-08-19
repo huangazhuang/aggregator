@@ -51,6 +51,16 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
             ROOT / "Dockerfile.gmgn-v2.dockerignore"
         ).read_text(encoding="utf-8")
 
+    def test_mainland_capacity_target_is_soft_and_quality_floor_is_separate(self) -> None:
+        probe = self.cnb["main"]["crontab: 10 11,23 * * *"][0]
+        env = probe["env"]
+        self.assertEqual(env["BASE_TARGET"], "80")
+        self.assertEqual(env["MAX_NODES"], "150")
+        self.assertEqual(env["MIN_SUCCESS"], "1")
+        self.assertEqual(env["MIN_RETAIN_RATIO"], "0.40")
+        self.assertEqual(env["MIN_SUCCESS_RATE"], "0.70")
+        self.assertEqual(env["TOTAL_ROUNDS"], "20")
+
     def test_manual_v2_trigger_is_default_off_and_requires_full_source_sha(self) -> None:
         dispatch = self.sync[True]["workflow_dispatch"]["inputs"]
         self.assertFalse(dispatch["trigger_gmgn_v2_shadow"]["default"])

@@ -32,8 +32,11 @@ class PublishFloorTests(unittest.TestCase):
         self.assertEqual(calculate_publish_floor(80, 150, 0.50), 80)
 
     def test_cnb_floor_is_lower_than_target_and_ignores_elite_expansion(self) -> None:
-        self.assertEqual(calculate_cnb_publish_floor(50, 80, 80, 0.50), (50, 80))
-        self.assertEqual(calculate_cnb_publish_floor(50, 150, 80, 0.50), (50, 80))
+        self.assertEqual(calculate_cnb_publish_floor(1, 80, 80, 0.40), (32, 80))
+        self.assertEqual(calculate_cnb_publish_floor(1, 150, 80, 0.40), (32, 80))
+
+    def test_cnb_first_publication_can_be_smaller_than_the_soft_target(self) -> None:
+        self.assertEqual(calculate_cnb_publish_floor(1, 0, 80, 0.40), (1, 0))
 
     def test_rejects_invalid_settings(self) -> None:
         with self.assertRaises(ValueError):

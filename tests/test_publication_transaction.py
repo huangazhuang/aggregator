@@ -36,7 +36,9 @@ from scripts.publish_transaction import (
     publication_revision,
     public_json_bytes,
     staging_ref_for_source,
+    validate_publication_capacity,
     validate_publish_bundle,
+    validate_selection_publication,
     write_publish_bundle,
 )
 
@@ -299,10 +301,127 @@ def bundle_fixture(
     return bundle, binary
 
 
+def policy_bundle_fixture(
+    *,
+    publish_policy: str = "gmgn-publication-v1",
+    validity_policy: str = "gmgn-validity-v5",
+):
+    """Rewrite a valid current fixture into a coherent requested policy pair."""
+
+    bundle, binary = bundle_fixture()
+    payloads = {
+        path: json.loads(content)
+        for path, content in bundle.files.items()
+        if path.endswith(".json") and path != "bundle.json"
+    }
+    payloads["status.json"]["publish_policy_version"] = publish_policy
+    payloads["status.json"]["validity_policy_version"] = validity_policy
+    diagnostics_path = "runs/run-1/diagnostics.json"
+    payloads[diagnostics_path]["validity_policy_version"] = validity_policy
+    diagnostics_without_hash = copy.deepcopy(payloads[diagnostics_path])
+    diagnostics_without_hash.pop("bundle_hash", None)
+    payloads["runs/index.json"]["entries"][-1]["diagnostics_sha256"] = hashlib.sha256(
+        json.dumps(
+            diagnostics_without_hash,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    files = {
+        "clash.yaml": bundle.files["clash.yaml"],
+        **{path: public_json_bytes(payload) for path, payload in payloads.items()},
+    }
+    bundle_hash = compute_logical_bundle_hash(files)
+    for path, payload in payloads.items():
+        payload["bundle_hash"] = bundle_hash
+        files[path] = public_json_bytes(payload)
+    manifest = json.loads(bundle.files["bundle.json"])
+    manifest["bundle_hash"] = bundle_hash
+    manifest["files"] = [
+        {
+            "path": path,
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "size": len(content),
+            "kind": (
+                "clash-profile" if path == "clash.yaml" else json.loads(content)["kind"]
+            ),
+            "schema_version": (
+                None
+                if path == "clash.yaml"
+                else int(json.loads(content)["schema_version"])
+            ),
+        }
+        for path, content in sorted(files.items())
+    ]
+    files["bundle.json"] = public_json_bytes(manifest)
+    return validate_publish_bundle(files), binary
+
+
+class CapacityPolicyTests(unittest.TestCase):
+    def test_desired_capacity_is_soft_and_small_valid_result_is_allowed(self) -> None:
+        result = validate_publication_capacity(
+            12,
+            0,
+            desired_capacity=80,
+            max_nodes=150,
+        )
+        self.assertFalse(result["desired_capacity_reached"])
+        self.assertEqual(result["minimum_required"], 1)
+
+    def test_empty_result_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no usable nodes"):
+            validate_publication_capacity(0, 0)
+
+    def test_previous_bundle_retention_floor_still_applies(self) -> None:
+        with self.assertRaisesRegex(ValueError, "last-good retention floor"):
+            validate_publication_capacity(3, 10, retain_ratio=0.40)
+        result = validate_publication_capacity(4, 10, retain_ratio=0.40)
+        self.assertEqual(result["minimum_required"], 4)
+
+    def test_elite_expansion_does_not_raise_the_next_floor_above_base_capacity(self) -> None:
+        result = validate_publication_capacity(
+            32,
+            150,
+            desired_capacity=80,
+            retain_ratio=0.40,
+        )
+        self.assertEqual(result["previous_publish_baseline"], 80)
+        self.assertEqual(result["minimum_required"], 32)
+
+    def test_hard_cap_is_not_softened(self) -> None:
+        with self.assertRaisesRegex(ValueError, "hard cap"):
+            validate_publication_capacity(151, 0)
+
+    def test_all_unknown_regions_fail_even_with_a_nonzero_count(self) -> None:
+        summary = selection_fixture()["summary"]
+        summary["source_candidate_count"] = 3
+        summary["unknown_region_count"] = 3
+        with self.assertRaisesRegex(ValueError, "every candidate region as unknown"):
+            validate_selection_publication(summary)
+
+
 class PublishBundleTests(unittest.TestCase):
+    def test_previous_v1_v5_bundle_remains_readable_during_policy_upgrade(self) -> None:
+        bundle, _binary = policy_bundle_fixture()
+        status = json.loads(bundle.files["status.json"])
+        self.assertEqual(status["publish_policy_version"], "gmgn-publication-v1")
+        self.assertEqual(status["validity_policy_version"], "gmgn-validity-v5")
+
+    def test_mixed_old_and_new_policy_pair_is_rejected(self) -> None:
+        with self.assertRaisesRegex(PublicationError, "policy pair"):
+            policy_bundle_fixture(
+                publish_policy="gmgn-publication-v2",
+                validity_policy="gmgn-validity-v5",
+            )
+
     def test_bundle_hash_is_non_recursive_and_every_payload_is_bound(self) -> None:
         bundle, _binary = bundle_fixture()
         self.assertEqual(compute_logical_bundle_hash(bundle.files), bundle.bundle_hash)
+        self.assertEqual(
+            json.loads(bundle.files["status.json"])["publish_policy_version"],
+            "gmgn-publication-v2",
+        )
         self.assertEqual(
             set(bundle.files),
             {

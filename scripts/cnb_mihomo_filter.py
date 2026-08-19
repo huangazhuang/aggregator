@@ -46,6 +46,13 @@ from scripts.pipeline_utils import (
 )
 
 
+# Publication capacity is a soft target.  The quality thresholds below still
+# decide whether an individual proxy qualifies; this floor only prevents an
+# empty or clearly partial scan from replacing the last-good profile.
+DEFAULT_MIN_PUBLISH_COUNT = 1
+DEFAULT_MIN_RETAIN_RATIO = 0.40
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Use Mihomo to keep the fastest proxies that work from this machine."
@@ -104,8 +111,8 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Optional cap for last-resort Asia nodes; zero means only as many as needed",
     )
-    parser.add_argument("--min-success", type=int, default=50)
-    parser.add_argument("--min-retain-ratio", type=float, default=0.50)
+    parser.add_argument("--min-success", type=int, default=DEFAULT_MIN_PUBLISH_COUNT)
+    parser.add_argument("--min-retain-ratio", type=float, default=DEFAULT_MIN_RETAIN_RATIO)
     return parser.parse_args()
 
 
