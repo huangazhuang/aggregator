@@ -838,7 +838,7 @@ class GuardedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(normalize_outcome(outcome), (None, "other"))
 
-    def test_control_discovery_balances_candidate_states_and_keeps_live_panel(self) -> None:
+    def test_control_discovery_prioritizes_passed_candidates_and_keeps_live_panel(self) -> None:
         candidates = [
             {
                 "candidate_id": f"candidate-{state}-{index}",
@@ -850,13 +850,13 @@ class GuardedRuntimeTests(unittest.TestCase):
         selected = cnb_gmgn_v2._select_control_candidates(candidates, limit=4)
         self.assertEqual(
             [candidate["github_check_state"] for candidate in selected].count("passed"),
-            2,
+            4,
         )
         self.assertEqual(
             [candidate["github_check_state"] for candidate in selected].count(
                 "bypassed_asia"
             ),
-            2,
+            0,
         )
         live_ids = {
             selected[1]["candidate_id"]: 73,
@@ -885,6 +885,27 @@ class GuardedRuntimeTests(unittest.TestCase):
             workers=2,
         )
         self.assertEqual(normalize_outcome(outcome), (51, None))
+
+    def test_control_discovery_uses_bypassed_candidates_only_as_fallback(self) -> None:
+        candidates = [
+            {
+                "candidate_id": f"candidate-passed-{index}",
+                "github_check_state": "passed",
+            }
+            for index in range(2)
+        ] + [
+            {
+                "candidate_id": f"candidate-bypassed-{index}",
+                "github_check_state": "bypassed_asia",
+            }
+            for index in range(6)
+        ]
+
+        selected = cnb_gmgn_v2._select_control_candidates(candidates, limit=4)
+
+        states = [candidate["github_check_state"] for candidate in selected]
+        self.assertEqual(states.count("passed"), 2)
+        self.assertEqual(states.count("bypassed_asia"), 2)
 
     def test_direct_probe_preflight_accepts_waf_control_but_fails_persistent_canary(self) -> None:
         diagnostics = cnb_gmgn_v2._require_direct_probe_preflight(

@@ -79,7 +79,7 @@ workflow run 的失败 job 重跑仍可验证原 artifact，而跨 run 或跨提
 
 V2 Pipeline 还会在无密钥子容器中真实执行一次临时 network namespace 的 add/delete capability smoke，然后四个分片各自在独立 namespace 内运行。Runner 不支持 `NET_ADMIN`/`SYS_ADMIN`、Docker service、iptables 或 namespace 创建/清理时，任务必须直接失败；不得改用 `--privileged` 或 `seccomp=unconfined` 降级绕过。完成密钥引用和 capability smoke 后，才从 GitHub 手动同步页同时传入完整 64 位 candidate profile SHA 和对应的精确 40 位 candidate output commit，触发第一轮真实 shadow。基础设施 retry 必须复用同一组 profile SHA 与 candidate commit，只更换显式 retry token。
 
-GMGN 对 Mihomo 内建 URL-test 的默认请求指纹会返回 403，因此 V2 不再把 URL-test 当作候选节点的正式 GMGN 响应。每个分片会按 worker 建立独立的 loopback selector/listener，通过指定节点发送固定、非敏感的浏览器式 HTTPS 请求，并严格要求 GMGN 返回 200；403、429、5xx、超时和连接失败继续分别计入失败统计。Mihomo URL-test 只保留给 gstatic/Cloudflare 直连 canary，不能把“任意 HTTP 响应”当作 GMGN 合格响应。
+GMGN 对 Mihomo 内建 URL-test 的默认请求指纹会返回 403，因此 V2 不再把 URL-test 当作候选节点的正式 GMGN 响应。每个分片会按 worker 建立独立的 loopback selector/listener，通过指定节点发送固定、非敏感的浏览器式 HTTPS 请求，并严格要求 GMGN 返回 200；403、429、5xx、超时和连接失败继续分别计入失败统计。控制面板发现优先从 GitHub `passed` 候选中确定性取样，只有数量不足时才用 `bypassed_asia` 补位；这个优先级只保护基础设施控制质量，不会从正式 20 轮测量中删除亚洲宽松候选。Mihomo URL-test 只保留给 gstatic/Cloudflare 直连 canary，不能把“任意 HTTP 响应”当作 GMGN 合格响应。
 
 V2 的 80 个节点是期望容量，不是发布下限；少于 80 个但真实通过质量、地区和完整性门禁的结果可以发布，150 仍是硬上限。首次有效 shadow 至少要有 1 个可发布节点；已有 last-good 后，新结果还必须保留至少上一版基础容量（最多按 80 个计算）的 40%。零节点、候选地区全部为 unknown，或低于该保留门槛时都会失败关闭，不覆盖 last-good。
 

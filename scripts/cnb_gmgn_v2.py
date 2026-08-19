@@ -1749,14 +1749,8 @@ def _select_control_candidates(
         key=lambda candidate: str(candidate["candidate_id"]),
     )
     target_count = min(limit, len(normalized))
-    passed_count = min(len(passed), (target_count + 1) // 2)
+    passed_count = min(len(passed), target_count)
     bypassed_count = min(len(bypassed), target_count - passed_count)
-    remaining = target_count - passed_count - bypassed_count
-    if remaining:
-        passed_count += min(remaining, len(passed) - passed_count)
-        remaining = target_count - passed_count - bypassed_count
-    if remaining:
-        bypassed_count += min(remaining, len(bypassed) - bypassed_count)
     selected = _spread_candidates(passed, passed_count) + _spread_candidates(
         bypassed, bypassed_count
     )
