@@ -871,8 +871,17 @@ main:
                 docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-0.json "${container}:/work/input/shard.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-0.txt "${container}:/work/input/controller-secret.txt"
+                set +e
                 docker start --attach "${container}"
+                probe_status="$?"
+                set -e
                 mkdir -p .cnb-runtime/gmgn-v2/shards/shard-0
+                if test "${probe_status}" -ne 0; then
+                  mkdir -p .cnb-runtime/gmgn-v2/shards/shard-0/safe-diagnostics
+                  docker cp "${container}:/work/.cnb-runtime/shard-0/safe-diagnostics/." \
+                    .cnb-runtime/gmgn-v2/shards/shard-0/safe-diagnostics/ || true
+                  exit "${probe_status}"
+                fi
                 docker cp "${container}:/work/.cnb-runtime/shard-0/." .cnb-runtime/gmgn-v2/shards/shard-0/
             shard-1:
               timeout: 300m
@@ -903,8 +912,17 @@ main:
                 docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-1.json "${container}:/work/input/shard.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-1.txt "${container}:/work/input/controller-secret.txt"
+                set +e
                 docker start --attach "${container}"
+                probe_status="$?"
+                set -e
                 mkdir -p .cnb-runtime/gmgn-v2/shards/shard-1
+                if test "${probe_status}" -ne 0; then
+                  mkdir -p .cnb-runtime/gmgn-v2/shards/shard-1/safe-diagnostics
+                  docker cp "${container}:/work/.cnb-runtime/shard-1/safe-diagnostics/." \
+                    .cnb-runtime/gmgn-v2/shards/shard-1/safe-diagnostics/ || true
+                  exit "${probe_status}"
+                fi
                 docker cp "${container}:/work/.cnb-runtime/shard-1/." .cnb-runtime/gmgn-v2/shards/shard-1/
             shard-2:
               timeout: 300m
@@ -935,8 +953,17 @@ main:
                 docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-2.json "${container}:/work/input/shard.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-2.txt "${container}:/work/input/controller-secret.txt"
+                set +e
                 docker start --attach "${container}"
+                probe_status="$?"
+                set -e
                 mkdir -p .cnb-runtime/gmgn-v2/shards/shard-2
+                if test "${probe_status}" -ne 0; then
+                  mkdir -p .cnb-runtime/gmgn-v2/shards/shard-2/safe-diagnostics
+                  docker cp "${container}:/work/.cnb-runtime/shard-2/safe-diagnostics/." \
+                    .cnb-runtime/gmgn-v2/shards/shard-2/safe-diagnostics/ || true
+                  exit "${probe_status}"
+                fi
                 docker cp "${container}:/work/.cnb-runtime/shard-2/." .cnb-runtime/gmgn-v2/shards/shard-2/
             shard-3:
               timeout: 300m
@@ -967,8 +994,17 @@ main:
                 docker cp .cnb-runtime/gmgn-v2/prepared/manifest.json "${container}:/work/input/manifest.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/shards/shard-3.json "${container}:/work/input/shard.json"
                 docker cp .cnb-runtime/gmgn-v2/prepared/controller-secrets/shard-3.txt "${container}:/work/input/controller-secret.txt"
+                set +e
                 docker start --attach "${container}"
+                probe_status="$?"
+                set -e
                 mkdir -p .cnb-runtime/gmgn-v2/shards/shard-3
+                if test "${probe_status}" -ne 0; then
+                  mkdir -p .cnb-runtime/gmgn-v2/shards/shard-3/safe-diagnostics
+                  docker cp "${container}:/work/.cnb-runtime/shard-3/safe-diagnostics/." \
+                    .cnb-runtime/gmgn-v2/shards/shard-3/safe-diagnostics/ || true
+                  exit "${probe_status}"
+                fi
                 docker cp "${container}:/work/.cnb-runtime/shard-3/." .cnb-runtime/gmgn-v2/shards/shard-3/
 
         - name: Redact measurements and exit identity offline

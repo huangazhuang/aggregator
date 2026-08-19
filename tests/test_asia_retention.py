@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from unittest.mock import patch
@@ -14,7 +15,10 @@ from scripts.cnb_mihomo_filter import (
     select_stable_results,
     summarize_probe_record,
 )
-from scripts.filter_reachability import select_reachability_passes
+from scripts.filter_reachability import (
+    mihomo_expected_status_passed,
+    select_reachability_passes,
+)
 from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
 
@@ -81,6 +85,45 @@ class AsiaSourceTests(unittest.TestCase):
 
 
 class AsiaFilterBypassTests(unittest.TestCase):
+    def test_strict_site_filter_requires_expected_status_alive_state(self) -> None:
+        target = "https://gmgn.ai/"
+
+        def result(alive: bool) -> bool:
+            payloads = iter(
+                (
+                    json.dumps({"delay": 91}),
+                    json.dumps({"extra": {target: {"alive": alive}}}),
+                )
+            )
+            return mihomo_expected_status_passed(
+                {"name": "candidate a"},
+                target,
+                200,
+                controller="127.0.0.1:9090",
+                getter=lambda **_kwargs: next(payloads),
+            )
+
+        self.assertTrue(result(True))
+        self.assertFalse(result(False))
+
+    def test_strict_site_filter_rejects_stale_alive_without_current_delay(self) -> None:
+        target = "https://www.google.com/generate_204"
+        payloads = iter(
+            (
+                json.dumps({"delay": 0}),
+                json.dumps({"extra": {target: {"alive": True}}}),
+            )
+        )
+
+        self.assertFalse(
+            mihomo_expected_status_passed(
+                {"name": "candidate"},
+                target,
+                204,
+                getter=lambda **_kwargs: next(payloads),
+            )
+        )
+
     def test_tcp_probe_never_drops_requested_asia(self) -> None:
         blocked = {"asia.example:443", "us.example:443"}
 

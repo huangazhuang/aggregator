@@ -408,10 +408,19 @@ class PublishBundleTests(unittest.TestCase):
         self.assertEqual(status["publish_policy_version"], "gmgn-publication-v1")
         self.assertEqual(status["validity_policy_version"], "gmgn-validity-v5")
 
+    def test_previous_v2_v6_bundle_remains_readable_during_policy_upgrade(self) -> None:
+        bundle, _binary = policy_bundle_fixture(
+            publish_policy="gmgn-publication-v2",
+            validity_policy="gmgn-validity-v6",
+        )
+        status = json.loads(bundle.files["status.json"])
+        self.assertEqual(status["publish_policy_version"], "gmgn-publication-v2")
+        self.assertEqual(status["validity_policy_version"], "gmgn-validity-v6")
+
     def test_mixed_old_and_new_policy_pair_is_rejected(self) -> None:
         with self.assertRaisesRegex(PublicationError, "policy pair"):
             policy_bundle_fixture(
-                publish_policy="gmgn-publication-v2",
+                publish_policy="gmgn-publication-v3",
                 validity_policy="gmgn-validity-v5",
             )
 
@@ -420,7 +429,7 @@ class PublishBundleTests(unittest.TestCase):
         self.assertEqual(compute_logical_bundle_hash(bundle.files), bundle.bundle_hash)
         self.assertEqual(
             json.loads(bundle.files["status.json"])["publish_policy_version"],
-            "gmgn-publication-v2",
+            "gmgn-publication-v3",
         )
         self.assertEqual(
             set(bundle.files),

@@ -41,6 +41,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import yaml
 
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:  # The dependency is mandatory in the isolated V2 image.
+    curl_requests = None
+
 from scripts.asia_source_registry import (
     CONTROLLER_HEALTH_TIMEOUT_SECONDS,
     CONTROLLER_SELECTION_TIMEOUT_SECONDS,
@@ -69,6 +74,7 @@ from scripts.gmgn_measurement import (
     build_redacted_fragment,
     candidate_ids_sha256,
     canonical_json_sha256,
+    classify_error,
     normalize_outcome,
     run_measurement_schedule,
     summarize_canaries,
@@ -190,6 +196,20 @@ GMGN_BROWSER_ACCEPT = (
     "text/html,application/xhtml+xml,application/xml;q=0.9,"
     "image/avif,image/webp,*/*;q=0.8"
 )
+GMGN_TLS_IMPERSONATE = "chrome"
+SAFE_PROBE_DIAGNOSTIC_CATEGORIES = frozenset(
+    {
+        "tls_certificate_verify",
+        "tls_handshake",
+        "connection_eof_reset",
+        "connection_other",
+        "client_timeout",
+        "dns",
+        "proxy_connect",
+        "client_dependency_missing",
+        "other",
+    }
+)
 
 NORMAL_TAG_RE = re.compile(r"^cnb-gmgn-v2-([0-9a-f]{64})-([0-9a-f]{40})$")
 RETRY_TAG_RE = re.compile(
@@ -250,6 +270,17 @@ REGION_PROVIDER_TARGET = "egress-provider-v1"
 
 class CoordinatorError(RuntimeError):
     """A V2 orchestration boundary failed closed."""
+
+
+class ControlDiscoveryError(CoordinatorError):
+    """Control discovery failed with public-safe aggregate diagnostics."""
+
+    def __init__(self, diagnostics: Mapping[str, Any]) -> None:
+        self.diagnostics = copy.deepcopy(dict(diagnostics))
+        super().__init__(
+            "GMGN proxy control discovery failed; safe diagnostics="
+            + json.dumps(self.diagnostics, sort_keys=True, separators=(",", ":"))
+        )
 
 
 @dataclass(frozen=True)
@@ -1400,7 +1431,9 @@ def _http_probe_runtime(
     reserved = {INTERNAL_GROUP, *(slot.group_name for slot in slots)}
     if reserved.intersection(names):
         raise CoordinatorError("candidate name collides with an internal probe group")
-    members = names or ["DIRECT"]
+    if "DIRECT" in names:
+        raise CoordinatorError("candidate name collides with a built-in probe target")
+    members = [*names, "DIRECT"]
     groups = [
         {
             "name": slot.group_name,
@@ -1432,7 +1465,7 @@ def _browser_http_outcome(
     timeout_ms: int,
     expected_status: int = 200,
 ) -> dict[str, Any]:
-    """Send one browser-shaped request through an exclusively held slot."""
+    """Send one Chrome-TLS request through an exclusively held Mihomo slot."""
 
     parsed = urllib.parse.urlsplit(target_url)
     if (
@@ -1461,33 +1494,110 @@ def _browser_http_outcome(
     target_port = parsed.port or 443
     if not 1 <= target_port <= 65_535:
         raise CoordinatorError("browser HTTP probe target port is invalid")
-    request = urllib.request.Request(
-        target_url,
-        headers={
-            "User-Agent": GMGN_BROWSER_USER_AGENT,
-            "Accept": GMGN_BROWSER_ACCEPT,
-            "Accept-Language": "en-US,en;q=0.9",
-            "Cache-Control": "no-cache",
-        },
-    )
+    if curl_requests is None:
+        return {
+            "error_category": "other",
+            "diagnostic_category": "client_dependency_missing",
+        }
     proxy_url = f"http://127.0.0.1:{slot.port}"
-    opener = urllib.request.build_opener(
-        _ForcedLoopbackProxyHandler({"http": proxy_url, "https": proxy_url})
-    )
     started = time.monotonic()
+    response = None
+    session = curl_requests.Session(
+        trust_env=False,
+        verify=True,
+        impersonate=GMGN_TLS_IMPERSONATE,
+        default_headers=True,
+        allow_redirects=False,
+    )
     try:
-        with opener.open(request, timeout=timeout_ms / 1000) as response:
-            status = int(response.status)
-    except urllib.error.HTTPError as exc:
-        status = int(exc.code)
+        response = session.get(
+            target_url,
+            proxy=proxy_url,
+            timeout=timeout_ms / 1000,
+            verify=True,
+            impersonate=GMGN_TLS_IMPERSONATE,
+            allow_redirects=False,
+            stream=True,
+            headers={
+                "Accept": GMGN_BROWSER_ACCEPT,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "no-cache",
+            },
+        )
+        status = int(response.status_code)
     except Exception as exc:
-        return {"error": f"browser target request failed: {exc}"}
+        return _safe_curl_probe_failure(exc)
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+        try:
+            session.close()
+        except Exception:
+            pass
     delay_ms = max(1, int(round((time.monotonic() - started) * 1000)))
     if not 100 <= status <= 599:
         return {"error": "browser target returned an invalid HTTP status"}
     if status != expected_status:
         return {"target_status": status}
-    return {"delay_ms": delay_ms, "target_status": status}
+    return {"delay_ms": delay_ms}
+
+
+def _safe_curl_probe_failure(exc: Exception) -> dict[str, str]:
+    """Map curl failures to coarse scoring and public-safe diagnostic labels."""
+
+    text = str(exc).lower()
+    if curl_requests is not None:
+        errors = curl_requests.exceptions
+        if isinstance(exc, errors.CertificateVerifyError):
+            return {
+                "error_category": "tls",
+                "diagnostic_category": "tls_certificate_verify",
+            }
+        if isinstance(exc, errors.SSLError):
+            return {
+                "error_category": "tls",
+                "diagnostic_category": "tls_handshake",
+            }
+        if isinstance(exc, errors.Timeout):
+            return {
+                "error_category": "client_timeout",
+                "diagnostic_category": "client_timeout",
+            }
+        if isinstance(exc, errors.DNSError):
+            return {"error_category": "dns", "diagnostic_category": "dns"}
+        if isinstance(exc, errors.ProxyError):
+            return {
+                "error_category": "connect",
+                "diagnostic_category": "proxy_connect",
+            }
+        if isinstance(exc, errors.ConnectionError):
+            detail = (
+                "connection_eof_reset"
+                if any(token in text for token in ("eof", "reset", "got nothing", "recv"))
+                else "connection_other"
+            )
+            return {"error_category": "connect", "diagnostic_category": detail}
+    if "certificate" in text or "verify" in text:
+        return {
+            "error_category": "tls",
+            "diagnostic_category": "tls_certificate_verify",
+        }
+    if "tls" in text or "ssl" in text or "handshake" in text:
+        return {"error_category": "tls", "diagnostic_category": "tls_handshake"}
+    if "timeout" in text or "timed out" in text:
+        return {
+            "error_category": "client_timeout",
+            "diagnostic_category": "client_timeout",
+        }
+    if any(token in text for token in ("eof", "reset", "got nothing", "recv")):
+        return {
+            "error_category": "connect",
+            "diagnostic_category": "connection_eof_reset",
+        }
+    return {"error_category": "other", "diagnostic_category": "other"}
 
 
 class _BrowserProbePool:
@@ -1537,27 +1647,6 @@ class _BrowserProbePool:
             )
         finally:
             self._available.put(slot)
-
-
-class _ForcedLoopbackProxyHandler(urllib.request.ProxyHandler):
-    """Proxy handler that cannot honor environment bypass rules."""
-
-    def proxy_open(
-        self,
-        request: urllib.request.Request,
-        proxy: str,
-        request_type: str,
-    ) -> Any:
-        original_type = request.type
-        proxy_type, user, password, hostport = urllib.request._parse_proxy(proxy)
-        if user is not None or password is not None:
-            raise CoordinatorError("loopback probe proxy must not contain credentials")
-        request.set_proxy(
-            urllib.parse.unquote(hostport), proxy_type or original_type
-        )
-        if original_type == (proxy_type or original_type) or original_type == "https":
-            return None
-        return self.parent.open(request, timeout=request.timeout)
 
 
 def _egress(target: Mapping[str, Any]) -> dict[str, Any]:
@@ -1766,6 +1855,132 @@ def _dominant_error_category(counts: Mapping[str, int]) -> str:
     )
 
 
+def _safe_probe_summary(
+    outcomes: Sequence[Mapping[str, Any] | None],
+) -> dict[str, Any]:
+    error_counts = {category: 0 for category in ERROR_CATEGORIES}
+    diagnostic_counts = {
+        category: 0 for category in SAFE_PROBE_DIAGNOSTIC_CATEGORIES
+    }
+    status_counts: dict[str, int] = {}
+    successes = 0
+    for raw in outcomes:
+        outcome = dict(raw or {})
+        try:
+            delay, category = normalize_outcome(outcome)
+        except Exception:
+            delay, category = None, "other"
+        if delay is not None:
+            successes += 1
+        else:
+            error_counts[str(category or "other")] += 1
+        detail = outcome.get("diagnostic_category")
+        if detail is not None:
+            normalized_detail = (
+                str(detail)
+                if detail in SAFE_PROBE_DIAGNOSTIC_CATEGORIES
+                else "other"
+            )
+            diagnostic_counts[normalized_detail] += 1
+        target_status = outcome.get("target_status")
+        if isinstance(target_status, int) and not isinstance(target_status, bool):
+            key = str(target_status)
+            status_counts[key] = status_counts.get(key, 0) + 1
+    return {
+        "attempt_count": len(outcomes),
+        "success_count": successes,
+        "error_counts": {
+            category: count for category, count in error_counts.items() if count
+        },
+        "diagnostic_counts": {
+            category: count
+            for category, count in diagnostic_counts.items()
+            if count
+        },
+        "target_status_counts": dict(sorted(status_counts.items())),
+    }
+
+
+def _run_safe_probe_group(
+    calls: Sequence[Callable[[], Mapping[str, Any] | None]],
+    *,
+    workers: int = 8,
+) -> dict[str, Any]:
+    if (
+        not calls
+        or isinstance(workers, bool)
+        or not isinstance(workers, int)
+        or workers < 1
+    ):
+        raise CoordinatorError("safe probe group contract is invalid")
+    outcomes: list[Mapping[str, Any] | None] = []
+    with ThreadPoolExecutor(max_workers=min(workers, len(calls))) as executor:
+        futures = [executor.submit(call) for call in calls]
+        for future in as_completed(futures):
+            try:
+                outcomes.append(future.result())
+            except Exception as exc:
+                outcomes.append(
+                    {
+                        "error_category": classify_error(exc),
+                        "diagnostic_category": "other",
+                    }
+                )
+    return _safe_probe_summary(outcomes)
+
+
+def _same_client_probe_matrix(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    direct_gmgn_probe: Callable[[], Mapping[str, Any] | None],
+    proxy_gmgn_probe: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+    proxy_canary_probe: Callable[
+        [Mapping[str, Any], str], Mapping[str, Any] | None
+    ],
+    canary_ids: Sequence[str],
+    proxy_limit: int = 4,
+) -> dict[str, Any]:
+    """Compare target and canary paths with one TLS client before discovery."""
+
+    normalized = [dict(candidate) for candidate in candidates]
+    normalized_canaries = [str(value) for value in canary_ids]
+    if (
+        not normalized
+        or not normalized_canaries
+        or isinstance(proxy_limit, bool)
+        or not isinstance(proxy_limit, int)
+        or proxy_limit < 1
+    ):
+        raise CoordinatorError("same-client probe matrix contract is invalid")
+    selected = normalized[: min(proxy_limit, len(normalized))]
+    return {
+        "kind": "cnb-gmgn-v2-same-client-matrix",
+        "schema_version": 1,
+        "client": {
+            "implementation": "curl_cffi",
+            "impersonate": GMGN_TLS_IMPERSONATE,
+            "tls_verify": True,
+            "redirects": False,
+            "environment_proxy": False,
+        },
+        "direct_gmgn": _run_safe_probe_group([direct_gmgn_probe]),
+        "proxy_gmgn": _run_safe_probe_group(
+            [lambda candidate=candidate: proxy_gmgn_probe(candidate) for candidate in selected]
+        ),
+        "proxy_canaries": {
+            canary_id: _run_safe_probe_group(
+                [
+                    lambda candidate=candidate, canary_id=canary_id: proxy_canary_probe(
+                        candidate, canary_id
+                    )
+                    for candidate in selected
+                ]
+            )
+            for canary_id in normalized_canaries
+        },
+    }
+
+
 def _discover_control_panel(
     candidates: Sequence[Mapping[str, Any]],
     probe: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
@@ -1785,6 +2000,10 @@ def _discover_control_panel(
         raise CoordinatorError("GMGN control discovery contract is invalid")
     successes: list[tuple[int, str, dict[str, Any]]] = []
     counts = {category: 0 for category in ERROR_CATEGORIES}
+    diagnostic_counts = {
+        category: 0 for category in SAFE_PROBE_DIAGNOSTIC_CATEGORIES
+    }
+    status_counts: dict[str, int] = {}
     attempted = 0
     for offset in range(0, len(selected), batch_size):
         batch = selected[offset : offset + batch_size]
@@ -1796,9 +2015,25 @@ def _discover_control_panel(
                 candidate = futures[future]
                 attempted += 1
                 try:
-                    delay, category = normalize_outcome(future.result())
+                    outcome = dict(future.result() or {})
+                    delay, category = normalize_outcome(outcome)
                 except Exception:
+                    outcome = {}
                     delay, category = None, "other"
+                detail = outcome.get("diagnostic_category")
+                if detail is not None:
+                    normalized_detail = (
+                        str(detail)
+                        if detail in SAFE_PROBE_DIAGNOSTIC_CATEGORIES
+                        else "other"
+                    )
+                    diagnostic_counts[normalized_detail] += 1
+                target_status = outcome.get("target_status")
+                if isinstance(target_status, int) and not isinstance(
+                    target_status, bool
+                ):
+                    key = str(target_status)
+                    status_counts[key] = status_counts.get(key, 0) + 1
                 if delay is not None:
                     successes.append(
                         (int(delay), str(candidate["candidate_id"]), candidate)
@@ -1817,12 +2052,15 @@ def _discover_control_panel(
             for category in ERROR_CATEGORIES
             if counts[category]
         },
+        "diagnostic_counts": {
+            category: diagnostic_counts[category]
+            for category in sorted(SAFE_PROBE_DIAGNOSTIC_CATEGORIES)
+            if diagnostic_counts[category]
+        },
+        "target_status_counts": dict(sorted(status_counts.items())),
     }
     if not successes:
-        raise CoordinatorError(
-            "GMGN proxy control discovery failed; safe diagnostics="
-            + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
-        )
+        raise ControlDiscoveryError(diagnostics)
     successes.sort(key=lambda item: (item[0], item[1]))
     panel = tuple(item[2] for item in successes[:panel_size])
     diagnostics["panel_size"] = len(panel)
@@ -2130,9 +2368,11 @@ def _probe_inside(args: argparse.Namespace) -> int:
         shard_index=index,
         workers=int(manifest["workers_per_shard"]),
     )
-    if {INTERNAL_GROUP, *(slot.group_name for slot in http_slots)}.intersection(
-        names
-    ):
+    if {
+        INTERNAL_GROUP,
+        "DIRECT",
+        *(slot.group_name for slot in http_slots),
+    }.intersection(names):
         raise CoordinatorError("shard proxy names are missing, duplicated, or reserved")
     hosts = _runtime_hosts(
         pinned,
@@ -2171,6 +2411,8 @@ def _probe_inside(args: argparse.Namespace) -> int:
         config=config,
         log=log,
     )
+    stage = "mihomo_startup"
+    safe_diagnostics = work_dir.parent / "safe-diagnostics"
     try:
         controller_version = _wait_mihomo(controller, secret, process)
         if controller_version != manifest["mihomo_version"]:
@@ -2253,6 +2495,52 @@ def _probe_inside(args: argparse.Namespace) -> int:
             )
 
         control_candidates = _select_control_candidates(guarded_candidates)
+        stage = "same_client_matrix"
+
+        def browser_canary_attempt(
+            candidate: Mapping[str, Any], name: str
+        ) -> dict[str, Any]:
+            target = _operational_target(name, auxiliary)
+            if target.get("status_policy") != "exact":
+                raise CoordinatorError("browser canary target policy is invalid")
+            port = int(target["port"])
+            authority = str(target["server"])
+            if port != 443:
+                authority = f"{authority}:{port}"
+            return browser_probe.probe(
+                candidate,
+                f"https://{authority}{target['path']}",
+                int(DIRECT_PROBE_TIMEOUT_SECONDS * 1000),
+                expected_status=int(target["expected_status"]),
+            )
+
+        same_client_matrix = _same_client_probe_matrix(
+            control_candidates,
+            direct_gmgn_probe=lambda: browser_probe.probe(
+                {"proxy": {"name": "DIRECT"}},
+                control_url,
+                CONTROL_PROBE_TIMEOUT_MS,
+                expected_status=CONTROL_EXPECTED_STATUS,
+            ),
+            proxy_gmgn_probe=lambda candidate: control_attempt(candidate, 0),
+            proxy_canary_probe=browser_canary_attempt,
+            canary_ids=CANARY_IDS,
+        )
+        _write_json(
+            safe_diagnostics / "same-client-matrix.json", same_client_matrix
+        )
+        print(
+            "GMGN V2 same-client probe matrix: "
+            + json.dumps(
+                same_client_matrix,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
+        stage = "control_discovery"
         control_panel, control_discovery = _discover_control_panel(
             control_candidates,
             lambda candidate: control_attempt(candidate, 0),
@@ -2264,6 +2552,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 lambda candidate: control_attempt(candidate, round_number),
             )
 
+        stage = "direct_preflight"
         preflight_diagnostics = _require_direct_probe_preflight(
             control_probe=control_probe,
             canary_probe=lambda canary, _round: mihomo_direct_probe(canary),
@@ -2281,6 +2570,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
             flush=True,
         )
 
+        stage = "measurement"
         scheduled = run_measurement_schedule(
             candidates,
             attempt,
@@ -2319,6 +2609,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
             private_fragment,
             private_root=Path(context["private_fragment"]).parent,
         )
+        stage = "region_lookup"
         summaries = {item["candidate_id"]: item["summary"] for item in private_fragment["results"]}
         raw_regions: dict[str, Any] = {}
         for item in candidates:
@@ -2346,6 +2637,20 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 "observations": raw_regions,
             },
         )
+    except Exception as exc:
+        failure_diagnostics: dict[str, Any] = {
+            "kind": "cnb-gmgn-v2-safe-failure-diagnostics",
+            "schema_version": 1,
+            "shard_index": index,
+            "stage": stage,
+            "error_category": classify_error(exc),
+        }
+        if isinstance(exc, ControlDiscoveryError):
+            failure_diagnostics["control_discovery"] = exc.diagnostics
+        _write_json(
+            safe_diagnostics / "failure-diagnostics.json", failure_diagnostics
+        )
+        raise
     finally:
         if process.poll() is None:
             process.terminate()

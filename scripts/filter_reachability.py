@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -107,6 +107,51 @@ def select_reachability_passes(
     ]
 
 
+def mihomo_expected_status_passed(
+    proxy: dict[str, Any],
+    target: str,
+    expected: int,
+    *,
+    controller: str = clash.EXTERNAL_CONTROLLER,
+    getter: Callable[..., str] | None = None,
+) -> bool:
+    """Require both a current delay and Mihomo's expected-status alive state."""
+
+    if (
+        not isinstance(target, str)
+        or not target
+        or isinstance(expected, bool)
+        or not isinstance(expected, int)
+        or not 100 <= expected <= 599
+    ):
+        return False
+    name = urllib.parse.quote(str(proxy.get("name", "")), safe="")
+    if not name:
+        return False
+    fetch = getter or utils.http_get
+    quoted = urllib.parse.quote(target, safe="")
+    delay_url = (
+        f"http://{controller}/proxies/{name}/delay"
+        f"?timeout=3000&url={quoted}&expected={expected}"
+    )
+    state_url = f"http://{controller}/proxies/{name}"
+    try:
+        delay_payload = json.loads(fetch(url=delay_url, retry=2, interval=0.1))
+        state_payload = json.loads(fetch(url=state_url, retry=2, interval=0.1))
+    except Exception:
+        return False
+    delay = delay_payload.get("delay") if isinstance(delay_payload, dict) else None
+    if (
+        isinstance(delay, bool)
+        or not isinstance(delay, (int, float))
+        or delay <= 0
+    ):
+        return False
+    extra = state_payload.get("extra") if isinstance(state_payload, dict) else None
+    target_state = extra.get(target) if isinstance(extra, dict) else None
+    return isinstance(target_state, dict) and target_state.get("alive") is True
+
+
 def main() -> int:
     candidate_v2 = candidate_v2_enabled()
     targets = [
@@ -157,19 +202,6 @@ def main() -> int:
     protected = [utils.is_preferred_asian_proxy(proxy) for proxy in checks]
     tested = [proxy for index, proxy in enumerate(checks) if not protected[index]]
 
-    def reachable(proxy: dict[str, Any], target: str, expected: int) -> bool:
-        name = urllib.parse.quote(str(proxy.get("name", "")), safe="")
-        quoted = urllib.parse.quote(target)
-        url = (
-            f"http://{clash.EXTERNAL_CONTROLLER}/proxies/{name}/delay"
-            f"?timeout=3000&url={quoted}&expected={expected}"
-        )
-        content = utils.http_get(url=url, retry=2, interval=0.1)
-        try:
-            return json.loads(content).get("delay", -1) > 0
-        except Exception:
-            return False
-
     process: subprocess.Popen[Any] | None = None
     lines: list[str] = [
         f"protected Asia skipped from network tests: {sum(protected)}/{len(checks)}"
@@ -186,7 +218,7 @@ def main() -> int:
 
             for target, expected in targets:
                 masks = utils.multi_thread_run(
-                    func=reachable,
+                    func=mihomo_expected_status_passed,
                     tasks=[[proxy, target, expected] for proxy in tested],
                     num_threads=128,
                     show_progress=False,
@@ -221,7 +253,7 @@ def main() -> int:
     report = {
         "kind": "github-reachability-report",
         "schema_version": 1,
-        "policy_version": "github-reachability-v1",
+        "policy_version": "github-reachability-v2",
         "tested": len(tested),
         "passed": ordinary_passed,
         "failed": len(tested) - ordinary_passed,

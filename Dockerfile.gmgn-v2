@@ -4,8 +4,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates iproute2 iptables util-linux \
     && python -m pip install --no-cache-dir --disable-pip-version-check \
         PyYAML==6.0.3 \
+        curl_cffi==0.16.0 \
         pycryptodomex==3.23.0 \
         tqdm==4.69.0
+
+RUN python -c "from curl_cffi import requests; s=requests.Session(impersonate='chrome', trust_env=False); assert s.impersonate == 'chrome'; s.close()"
 
 WORKDIR /opt/aggregator
 ENV PYTHONPATH=/opt/aggregator \

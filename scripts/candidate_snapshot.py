@@ -79,9 +79,13 @@ CANDIDATE_STATUS_KIND = "github-candidate-status"
 CANDIDATE_STATUS_SCHEMA_VERSION = 2
 CANDIDATE_METADATA_KIND = "github-candidate-metadata"
 IDENTITY_FIXTURE_VERSION = "identity-fixture-v1"
-CANDIDATE_PUBLISH_POLICY_VERSION = "candidate-publish-v3"
+CANDIDATE_PUBLISH_POLICY_VERSION = "candidate-publish-v4"
 READABLE_CANDIDATE_PUBLISH_POLICY_VERSIONS = frozenset(
-    {"candidate-publish-v2", CANDIDATE_PUBLISH_POLICY_VERSION}
+    {
+        "candidate-publish-v2",
+        "candidate-publish-v3",
+        CANDIDATE_PUBLISH_POLICY_VERSION,
+    }
 )
 
 LAST_GOOD_MAX_AGE_SECONDS = 48 * 3600

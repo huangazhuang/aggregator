@@ -21,6 +21,44 @@ SOURCE_SHA = "1" * 64
 CANDIDATE_COMMIT = "a" * 40
 
 
+class FakeCurlConnectionError(Exception):
+    pass
+
+
+class FakeCurlCertificateVerifyError(FakeCurlConnectionError):
+    pass
+
+
+class FakeCurlSSLError(FakeCurlConnectionError):
+    pass
+
+
+class FakeCurlTimeout(Exception):
+    pass
+
+
+class FakeCurlDNSError(FakeCurlConnectionError):
+    pass
+
+
+class FakeCurlProxyError(Exception):
+    pass
+
+
+def fake_curl_client(session: MagicMock) -> SimpleNamespace:
+    return SimpleNamespace(
+        Session=MagicMock(return_value=session),
+        exceptions=SimpleNamespace(
+            CertificateVerifyError=FakeCurlCertificateVerifyError,
+            SSLError=FakeCurlSSLError,
+            Timeout=FakeCurlTimeout,
+            DNSError=FakeCurlDNSError,
+            ProxyError=FakeCurlProxyError,
+            ConnectionError=FakeCurlConnectionError,
+        ),
+    )
+
+
 def auxiliary_targets() -> dict[str, dict]:
     addresses = {
         "control-gmgn-v1": "1.1.1.1",
@@ -492,7 +530,10 @@ class GuardedRuntimeTests(unittest.TestCase):
             [slot.group_name for slot in slots],
         )
         self.assertTrue(
-            all(group["proxies"] == ["candidate-a", "candidate-b"] for group in groups)
+            all(
+                group["proxies"] == ["candidate-a", "candidate-b", "DIRECT"]
+                for group in groups
+            )
         )
         self.assertEqual(
             [listener["proxy"] for listener in listeners],
@@ -511,20 +552,17 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertEqual(len(ports), cnb_gmgn_v2.HTTP_PROBE_PORTS_PER_SHARD)
         self.assertEqual({slot.port for slot in context}.issubset(ports), True)
 
-    def test_browser_http_probe_sends_fixed_browser_headers_through_its_slot(self) -> None:
+    def test_browser_http_probe_forces_chrome_tls_through_its_slot(self) -> None:
         response = MagicMock()
-        response.status = 200
-        opener = MagicMock()
-        opener.open.return_value.__enter__.return_value = response
+        response.status_code = 200
+        session = MagicMock()
+        session.get.return_value = response
+        fake_curl = fake_curl_client(session)
         slot = cnb_gmgn_v2._http_probe_slots(0, 1)[0]
 
         with (
             patch.object(cnb_gmgn_v2, "_controller_request") as controller_request,
-            patch.object(
-                cnb_gmgn_v2.urllib.request,
-                "build_opener",
-                return_value=opener,
-            ) as build_opener,
+            patch.object(cnb_gmgn_v2, "curl_requests", fake_curl),
             patch.object(cnb_gmgn_v2.time, "monotonic", side_effect=[10.0, 10.075]),
             patch.dict(os.environ, {"NO_PROXY": "gmgn.ai", "no_proxy": "gmgn.ai"}),
         ):
@@ -537,7 +575,7 @@ class GuardedRuntimeTests(unittest.TestCase):
                 timeout_ms=3000,
             )
 
-        self.assertEqual(outcome, {"delay_ms": 75, "target_status": 200})
+        self.assertEqual(outcome, {"delay_ms": 75})
         controller_request.assert_called_once_with(
             "127.0.0.1:19090",
             "test-secret",
@@ -546,38 +584,41 @@ class GuardedRuntimeTests(unittest.TestCase):
             body={"name": "candidate-a"},
             timeout=cnb_gmgn_v2.CONTROLLER_SELECTION_TIMEOUT_SECONDS,
         )
-        proxy_handler = build_opener.call_args.args[0]
-        self.assertIsInstance(proxy_handler, cnb_gmgn_v2._ForcedLoopbackProxyHandler)
-        self.assertEqual(
-            proxy_handler.proxies,
-            {
-                "http": f"http://127.0.0.1:{slot.port}",
-                "https": f"http://127.0.0.1:{slot.port}",
+        fake_curl.Session.assert_called_once_with(
+            trust_env=False,
+            verify=True,
+            impersonate=cnb_gmgn_v2.GMGN_TLS_IMPERSONATE,
+            default_headers=True,
+            allow_redirects=False,
+        )
+        session.get.assert_called_once_with(
+            "https://gmgn.ai/",
+            proxy=f"http://127.0.0.1:{slot.port}",
+            timeout=3.0,
+            verify=True,
+            impersonate=cnb_gmgn_v2.GMGN_TLS_IMPERSONATE,
+            allow_redirects=False,
+            stream=True,
+            headers={
+                "Accept": cnb_gmgn_v2.GMGN_BROWSER_ACCEPT,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "no-cache",
             },
         )
-        request = opener.open.call_args.args[0]
-        self.assertEqual(
-            request.get_header("User-agent"), cnb_gmgn_v2.GMGN_BROWSER_USER_AGENT
-        )
-        proxy_handler.proxy_open(request, proxy_handler.proxies["https"], "https")
-        self.assertEqual(request.host, f"127.0.0.1:{slot.port}")
-        self.assertEqual(request._tunnel_host, "gmgn.ai")
-        self.assertEqual(opener.open.call_args.kwargs["timeout"], 3.0)
+        response.close.assert_called_once_with()
+        session.close.assert_called_once_with()
 
     def test_browser_http_probe_preserves_target_403_for_scoring(self) -> None:
-        opener = MagicMock()
-        opener.open.side_effect = cnb_gmgn_v2.urllib.error.HTTPError(
-            "https://gmgn.ai/", 403, "Forbidden", {}, None
-        )
+        response = MagicMock()
+        response.status_code = 403
+        session = MagicMock()
+        session.get.return_value = response
+        fake_curl = fake_curl_client(session)
         slot = cnb_gmgn_v2._http_probe_slots(0, 1)[0]
 
         with (
             patch.object(cnb_gmgn_v2, "_controller_request"),
-            patch.object(
-                cnb_gmgn_v2.urllib.request,
-                "build_opener",
-                return_value=opener,
-            ),
+            patch.object(cnb_gmgn_v2, "curl_requests", fake_curl),
             patch.object(cnb_gmgn_v2.time, "monotonic", side_effect=[20.0, 20.1]),
         ):
             outcome = cnb_gmgn_v2._browser_http_outcome(
@@ -591,6 +632,35 @@ class GuardedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(outcome, {"target_status": 403})
         self.assertEqual(normalize_outcome(outcome), (None, "target_403"))
+
+    def test_browser_http_probe_redacts_certificate_failure_to_safe_categories(self) -> None:
+        session = MagicMock()
+        session.get.side_effect = FakeCurlCertificateVerifyError(
+            "certificate path included sensitive endpoint"
+        )
+        fake_curl = fake_curl_client(session)
+        slot = cnb_gmgn_v2._http_probe_slots(0, 1)[0]
+
+        with (
+            patch.object(cnb_gmgn_v2, "_controller_request"),
+            patch.object(cnb_gmgn_v2, "curl_requests", fake_curl),
+        ):
+            outcome = cnb_gmgn_v2._browser_http_outcome(
+                "127.0.0.1:19090",
+                "test-secret",
+                slot=slot,
+                proxy_name="candidate-a",
+                target_url="https://gmgn.ai/",
+                timeout_ms=3000,
+            )
+
+        self.assertEqual(
+            outcome,
+            {
+                "error_category": "tls",
+                "diagnostic_category": "tls_certificate_verify",
+            },
+        )
 
     def test_browser_probe_pool_returns_a_slot_after_probe_failure(self) -> None:
         pool = cnb_gmgn_v2._BrowserProbePool(
@@ -907,6 +977,61 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertEqual(states.count("passed"), 2)
         self.assertEqual(states.count("bypassed_asia"), 2)
 
+    def test_same_client_matrix_separates_target_tls_from_canary_health(self) -> None:
+        candidates = [
+            {"candidate_id": "candidate-a"},
+            {"candidate_id": "candidate-b"},
+        ]
+
+        matrix = cnb_gmgn_v2._same_client_probe_matrix(
+            candidates,
+            direct_gmgn_probe=lambda: {"delay_ms": 60},
+            proxy_gmgn_probe=lambda candidate: (
+                {"delay_ms": 90}
+                if candidate["candidate_id"] == "candidate-a"
+                else {
+                    "error_category": "tls",
+                    "diagnostic_category": "tls_handshake",
+                }
+            ),
+            proxy_canary_probe=lambda _candidate, _canary: {"delay_ms": 50},
+            canary_ids=("gstatic", "cloudflare"),
+        )
+
+        self.assertEqual(matrix["direct_gmgn"]["success_count"], 1)
+        self.assertEqual(matrix["proxy_gmgn"]["success_count"], 1)
+        self.assertEqual(matrix["proxy_gmgn"]["error_counts"], {"tls": 1})
+        self.assertEqual(
+            matrix["proxy_gmgn"]["diagnostic_counts"], {"tls_handshake": 1}
+        )
+        self.assertTrue(
+            all(
+                summary["success_count"] == 2
+                for summary in matrix["proxy_canaries"].values()
+            )
+        )
+
+    def test_control_discovery_failure_keeps_only_aggregate_tls_details(self) -> None:
+        candidates = [{"candidate_id": "candidate-a"}]
+
+        with self.assertRaises(cnb_gmgn_v2.ControlDiscoveryError) as caught:
+            cnb_gmgn_v2._discover_control_panel(
+                candidates,
+                lambda _candidate: {
+                    "error_category": "tls",
+                    "diagnostic_category": "connection_eof_reset",
+                },
+                panel_size=1,
+                batch_size=1,
+                workers=1,
+            )
+
+        self.assertEqual(caught.exception.diagnostics["error_counts"], {"tls": 1})
+        self.assertEqual(
+            caught.exception.diagnostics["diagnostic_counts"],
+            {"connection_eof_reset": 1},
+        )
+
     def test_direct_probe_preflight_accepts_waf_control_but_fails_persistent_canary(self) -> None:
         diagnostics = cnb_gmgn_v2._require_direct_probe_preflight(
             control_probe=lambda _round: {"delay_ms": 80},
@@ -1143,6 +1268,20 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertTrue(
             all(job["timeout"] == "300m" for job in probe_stage["jobs"].values())
         )
+        for job in probe_stage["jobs"].values():
+            script = job["script"]
+            self.assertIn('probe_status="$?"', script)
+            self.assertIn("safe-diagnostics", script)
+            self.assertLess(
+                script.index('probe_status="$?"'),
+                script.index('if test "${probe_status}" -ne 0'),
+            )
+        dockerfile = (
+            Path(__file__).resolve().parents[1] / "Dockerfile.gmgn-v2"
+        ).read_text(encoding="utf-8")
+        self.assertIn("curl_cffi==0.16.0", dockerfile)
+        self.assertIn("impersonate='chrome'", dockerfile)
+        self.assertIn("trust_env=False", dockerfile)
         self.assertEqual(pipeline["lock"]["expires"], 28800)
         self.assertEqual(pipeline["lock"]["timeout"], 28800)
 
