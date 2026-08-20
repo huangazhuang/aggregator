@@ -633,6 +633,98 @@ class GuardedRuntimeTests(unittest.TestCase):
         self.assertEqual(outcome, {"target_status": 403})
         self.assertEqual(normalize_outcome(outcome), (None, "target_403"))
 
+    def test_browser_json_probe_forces_candidate_listener_and_ignores_no_proxy(self) -> None:
+        response = MagicMock()
+        response.status_code = 200
+        response.content = (
+            b'{"ip":"1.1.1.1","country_code":"US","region_code":"CA"}'
+        )
+        session = MagicMock()
+        session.get.return_value = response
+        fake_curl = fake_curl_client(session)
+        slot = cnb_gmgn_v2._http_probe_slots(2, 1)[0]
+
+        with (
+            patch.object(cnb_gmgn_v2, "_controller_request") as controller_request,
+            patch.object(cnb_gmgn_v2, "curl_requests", fake_curl),
+            patch.dict(
+                os.environ,
+                {"NO_PROXY": "region.example", "no_proxy": "region.example"},
+            ),
+        ):
+            payload = cnb_gmgn_v2._browser_json_payload(
+                "127.0.0.1:19090",
+                "test-secret",
+                slot=slot,
+                proxy_name="candidate-a",
+                target_url="https://region.example/json",
+                timeout_ms=7000,
+            )
+
+        self.assertEqual(payload["ip"], "1.1.1.1")
+        controller_request.assert_called_once_with(
+            "127.0.0.1:19090",
+            "test-secret",
+            "PUT",
+            f"/proxies/{slot.group_name}",
+            body={"name": "candidate-a"},
+            timeout=cnb_gmgn_v2.CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        )
+        fake_curl.Session.assert_called_once_with(
+            trust_env=False,
+            verify=True,
+            impersonate=cnb_gmgn_v2.GMGN_TLS_IMPERSONATE,
+            default_headers=True,
+            allow_redirects=False,
+        )
+        session.get.assert_called_once_with(
+            "https://region.example/json",
+            proxy=f"http://127.0.0.1:{slot.port}",
+            timeout=7.0,
+            verify=True,
+            impersonate=cnb_gmgn_v2.GMGN_TLS_IMPERSONATE,
+            allow_redirects=False,
+            headers={"Accept": "application/json"},
+        )
+        response.close.assert_called_once_with()
+        session.close.assert_called_once_with()
+
+    def test_browser_json_probe_fails_closed_on_status_size_and_json(self) -> None:
+        slot = cnb_gmgn_v2._http_probe_slots(0, 1)[0]
+        cases = (
+            (403, b"{}"),
+            (200, b"x" * (1024 * 1024 + 1)),
+            (200, b"not-json"),
+            (200, b"[]"),
+        )
+        for status, content in cases:
+            with self.subTest(status=status, size=len(content)):
+                response = MagicMock()
+                response.status_code = status
+                response.content = content
+                session = MagicMock()
+                session.get.return_value = response
+                with (
+                    patch.object(cnb_gmgn_v2, "_controller_request"),
+                    patch.object(
+                        cnb_gmgn_v2,
+                        "curl_requests",
+                        fake_curl_client(session),
+                    ),
+                ):
+                    self.assertIsNone(
+                        cnb_gmgn_v2._browser_json_payload(
+                            "127.0.0.1:19090",
+                            "test-secret",
+                            slot=slot,
+                            proxy_name="candidate-a",
+                            target_url="https://region.example/json",
+                            timeout_ms=7000,
+                        )
+                    )
+                response.close.assert_called_once_with()
+                session.close.assert_called_once_with()
+
     def test_browser_http_probe_redacts_certificate_failure_to_safe_categories(self) -> None:
         session = MagicMock()
         session.get.side_effect = FakeCurlCertificateVerifyError(
@@ -1301,41 +1393,99 @@ class GuardedRuntimeTests(unittest.TestCase):
                 5000, workers_per_shard=16
             )
 
-    def test_region_selection_uses_the_budgeted_loopback_timeout(self) -> None:
-        response = MagicMock()
-        response.status = 200
-        response.read.return_value = (
-            b'{"ip":"1.1.1.1","country_code":"US",'
-            b'"region_code":"CA","asn":"AS13335"}'
-        )
-        opener = MagicMock()
-        opener.open.return_value.__enter__.return_value = response
+    def test_region_selection_uses_candidate_bound_browser_listener(self) -> None:
+        pool = MagicMock()
+        pool.fetch_json.return_value = {
+            "ip": "1.1.1.1",
+            "country_code": "US",
+            "region_code": "CA",
+            "asn": "AS13335",
+        }
+        candidate = {"proxy": {"name": "proxy-a"}}
 
-        with (
-            patch.object(cnb_gmgn_v2, "_controller_request") as controller_request,
-            patch.object(cnb_gmgn_v2.urllib.request, "build_opener", return_value=opener),
-        ):
-            result = cnb_gmgn_v2._proxy_region(
-                controller="127.0.0.1:19090",
-                secret="test-secret",
-                mixed_port=19091,
-                proxy_name="proxy-a",
-                provider_target={"server": "region.example", "path": "/json"},
-            )
+        result = cnb_gmgn_v2._proxy_region(
+            browser_probe=pool,
+            candidate=candidate,
+            provider_target={
+                "server": "region.example",
+                "port": 443,
+                "path": "/json",
+                "status_policy": "exact",
+                "expected_status": 200,
+            },
+            direct_public_ips=("9.9.9.9",),
+        )
 
         self.assertEqual(result["country_code"], "US")
         self.assertEqual(result["region_code"], "CA")
-        controller_request.assert_called_once_with(
-            "127.0.0.1:19090",
-            "test-secret",
-            "PUT",
-            "/proxies/__gmgn_v2_probe__",
-            body={"name": "proxy-a"},
-            timeout=cnb_gmgn_v2.CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        pool.fetch_json.assert_called_once_with(
+            candidate,
+            "https://region.example/json",
+            cnb_gmgn_v2.REGION_LOOKUP_TIMEOUT_SECONDS * 1000,
+            expected_status=200,
         )
-        self.assertEqual(
-            opener.open.call_args.kwargs["timeout"],
-            cnb_gmgn_v2.REGION_LOOKUP_TIMEOUT_SECONDS,
+
+    def test_region_selection_rejects_runner_direct_egress_collision(self) -> None:
+        pool = MagicMock()
+        pool.fetch_json.return_value = {
+            "ip": "9.9.9.9",
+            "country_code": "US",
+            "region_code": "CA",
+        }
+        with self.assertRaisesRegex(
+            cnb_gmgn_v2.CoordinatorError, "direct runner egress"
+        ):
+            cnb_gmgn_v2._proxy_region(
+                browser_probe=pool,
+                candidate={"proxy": {"name": "proxy-a"}},
+                provider_target={
+                    "server": "region.example",
+                    "port": 443,
+                    "path": "/json",
+                    "status_policy": "exact",
+                    "expected_status": 200,
+                },
+                direct_public_ips=("9.9.9.9",),
+            )
+
+    def test_redacted_region_collision_gate_rejects_runner_exit_identity(self) -> None:
+        runner_exit = "exit1_" + "1" * 24
+        candidate_id = "c1_" + "2" * 24
+        fragments = [
+            {
+                "egress": {
+                    "before": {"exit_id": runner_exit},
+                    "after": {"exit_id": "exit1_" + "3" * 24},
+                }
+            }
+        ]
+        observation = {
+            "kind": cnb_gmgn_v2.REGION_OBSERVATION_KIND,
+            "schema_version": cnb_gmgn_v2.REGION_OBSERVATION_SCHEMA_VERSION,
+            "candidate_id": candidate_id,
+            "identity_key_version": "key-v1",
+            "identity_epoch": "epoch-v1",
+            "country_code": "CN",
+            "region_code": "GD",
+            "exit_id": runner_exit,
+            "asn_id": None,
+            "observed_at": "2026-08-20T00:00:00Z",
+            "provider_schema": cnb_gmgn_v2.REGION_PROVIDER_SCHEMA_VERSION,
+        }
+
+        with self.assertRaisesRegex(
+            cnb_gmgn_v2.CoordinatorError,
+            "matched the runner egress",
+        ):
+            cnb_gmgn_v2._reject_region_runner_egress_collisions(
+                fragments,
+                {candidate_id: observation},
+            )
+
+        observation["exit_id"] = "exit1_" + "4" * 24
+        cnb_gmgn_v2._reject_region_runner_egress_collisions(
+            fragments,
+            {candidate_id: observation},
         )
 
 

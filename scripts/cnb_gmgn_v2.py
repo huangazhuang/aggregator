@@ -96,6 +96,8 @@ from scripts.gmgn_region import (
     REGION_OBSERVATION_SCHEMA_VERSION,
     REGION_PROVIDER_SCHEMA_VERSION,
     resolve_region_decisions,
+    strip_incompatible_region_caches,
+    validate_region_observation,
 )
 from scripts.gmgn_selection import (
     SELECTION_POLICY_VERSION,
@@ -1545,6 +1547,92 @@ def _browser_http_outcome(
     return {"delay_ms": delay_ms}
 
 
+def _browser_json_payload(
+    controller: str,
+    secret: str,
+    *,
+    slot: _HttpProbeSlot,
+    proxy_name: str,
+    target_url: str,
+    timeout_ms: int,
+    expected_status: int = 200,
+) -> dict[str, Any] | None:
+    """Fetch one small JSON document through a candidate-bound listener.
+
+    The main mixed port follows Mihomo's global-mode routing and therefore
+    cannot prove that a request used the selected candidate.  Region lookups
+    reuse the same isolated selector/listener contract as the GMGN browser
+    probes so environment proxy bypasses and global-mode defaults cannot turn
+    a proxy observation into the runner's DIRECT egress.
+    """
+
+    parsed = urllib.parse.urlsplit(target_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+        or timeout_ms <= 0
+        or isinstance(expected_status, bool)
+        or not isinstance(expected_status, int)
+        or not 100 <= expected_status <= 599
+    ):
+        raise CoordinatorError("browser JSON request contract is invalid")
+    try:
+        _controller_request(
+            controller,
+            secret,
+            "PUT",
+            f"/proxies/{urllib.parse.quote(slot.group_name, safe='')}",
+            body={"name": proxy_name},
+            timeout=CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
+    if curl_requests is None:
+        return None
+
+    response = None
+    session = curl_requests.Session(
+        trust_env=False,
+        verify=True,
+        impersonate=GMGN_TLS_IMPERSONATE,
+        default_headers=True,
+        allow_redirects=False,
+    )
+    try:
+        response = session.get(
+            target_url,
+            proxy=f"http://127.0.0.1:{slot.port}",
+            timeout=timeout_ms / 1000,
+            verify=True,
+            impersonate=GMGN_TLS_IMPERSONATE,
+            allow_redirects=False,
+            headers={"Accept": "application/json"},
+        )
+        if int(response.status_code) != expected_status:
+            return None
+        content = bytes(response.content)
+        if len(content) > 1024 * 1024:
+            return None
+        payload = json.loads(content.decode("utf-8"))
+        return dict(payload) if isinstance(payload, Mapping) else None
+    except CoordinatorError:
+        raise
+    except Exception:
+        return None
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
 def _safe_curl_probe_failure(exc: Exception) -> dict[str, str]:
     """Map curl failures to coarse scoring and public-safe diagnostic labels."""
 
@@ -1637,6 +1725,32 @@ class _BrowserProbePool:
         slot = self._available.get()
         try:
             return _browser_http_outcome(
+                self.controller,
+                self.secret,
+                slot=slot,
+                proxy_name=proxy_name,
+                target_url=target_url,
+                timeout_ms=timeout_ms,
+                expected_status=expected_status,
+            )
+        finally:
+            self._available.put(slot)
+
+    def fetch_json(
+        self,
+        candidate: Mapping[str, Any],
+        target_url: str,
+        timeout_ms: int,
+        *,
+        expected_status: int = 200,
+    ) -> dict[str, Any] | None:
+        proxy = candidate.get("proxy")
+        proxy_name = str(proxy.get("name") or "") if isinstance(proxy, Mapping) else ""
+        if not proxy_name:
+            raise CoordinatorError("browser JSON candidate is invalid")
+        slot = self._available.get()
+        try:
+            return _browser_json_payload(
                 self.controller,
                 self.secret,
                 slot=slot,
@@ -2256,42 +2370,43 @@ def _safe_direct_probe_diagnostics(
 
 def _proxy_region(
     *,
-    controller: str,
-    secret: str,
-    mixed_port: int,
-    proxy_name: str,
+    browser_probe: _BrowserProbePool,
+    candidate: Mapping[str, Any],
     provider_target: Mapping[str, Any],
+    direct_public_ips: Sequence[str],
 ) -> dict[str, Any] | None:
     try:
-        _controller_request(
-            controller,
-            secret,
-            "PUT",
-            f"/proxies/{urllib.parse.quote(INTERNAL_GROUP, safe='')}",
-            body={"name": proxy_name},
-            timeout=CONTROLLER_SELECTION_TIMEOUT_SECONDS,
+        try:
+            expected_status = int(provider_target.get("expected_status", 0))
+            port = int(provider_target["port"])
+            direct_addresses = {
+                ipaddress.ip_address(str(value)).compressed.lower()
+                for value in direct_public_ips
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CoordinatorError("region lookup routing contract is invalid") from exc
+        if provider_target.get("status_policy") != "exact" or expected_status != 200:
+            raise CoordinatorError("region provider target policy is invalid")
+        if not direct_addresses:
+            raise CoordinatorError("direct egress identity is missing for region lookup")
+        authority = str(provider_target["server"])
+        if port != 443:
+            authority = f"{authority}:{port}"
+        payload = browser_probe.fetch_json(
+            candidate,
+            f"https://{authority}{provider_target['path']}",
+            int(REGION_LOOKUP_TIMEOUT_SECONDS * 1000),
+            expected_status=expected_status,
         )
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler(
-                {
-                    "http": f"http://127.0.0.1:{mixed_port}",
-                    "https": f"http://127.0.0.1:{mixed_port}",
-                }
-            )
-        )
-        request = urllib.request.Request(
-            f"https://{provider_target['server']}{provider_target['path']}",
-            headers={"User-Agent": "aggregator-gmgn-v2/1.0", "Accept": "application/json"},
-        )
-        with opener.open(request, timeout=REGION_LOOKUP_TIMEOUT_SECONDS) as response:
-            if response.status != 200:
-                return None
-            payload = json.loads(response.read(1024 * 1024).decode("utf-8"))
-        if not isinstance(payload, Mapping):
+        if payload is None:
             return None
         address = ipaddress.ip_address(str(payload.get("ip") or ""))
         if not address.is_global:
             return None
+        if address.compressed.lower() in direct_addresses:
+            raise CoordinatorError(
+                "proxy region lookup matched the direct runner egress"
+            )
         country = str(payload.get("country_code") or "").upper()
         if not re.fullmatch(r"[A-Z]{2}", country):
             return None
@@ -2307,6 +2422,8 @@ def _proxy_region(
             "asn": normalized_asn,
             "observed_at": utc_now(),
         }
+    except CoordinatorError:
+        raise
     except Exception:
         return None
 
@@ -2636,19 +2753,22 @@ def _probe_inside(args: argparse.Namespace) -> int:
         )
         stage = "region_lookup"
         summaries = {item["candidate_id"]: item["summary"] for item in private_fragment["results"]}
+        direct_public_ips = {
+            str(scheduled.egress_before["public_ip"]),
+            str(scheduled.egress_after["public_ip"]),
+        }
         raw_regions: dict[str, Any] = {}
         for item in candidates:
             candidate_id_value = item["candidate_id"]
             if int(summaries[candidate_id_value]["response_count"]) < 1:
                 continue
             observation = _proxy_region(
-                controller=controller,
-                secret=secret,
-                mixed_port=int(shard["mixed_port"]),
-                proxy_name=str(item["proxy"]["name"]),
+                browser_probe=browser_probe,
+                candidate=item,
                 provider_target=_operational_target(
                     REGION_PROVIDER_TARGET, auxiliary
                 ),
+                direct_public_ips=tuple(sorted(direct_public_ips)),
             )
             if observation is not None:
                 raw_regions[candidate_id_value] = observation
@@ -2716,6 +2836,7 @@ def _redact(args: argparse.Namespace) -> int:
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     observations: dict[str, dict[str, Any]] = {}
+    redacted_fragments: list[dict[str, Any]] = []
     for index in range(SHARD_COUNT):
         private = _load_json(Path(args.shard_root) / f"shard-{index}" / "private-fragment.json")
         redacted = build_redacted_fragment(
@@ -2728,7 +2849,7 @@ def _redact(args: argparse.Namespace) -> int:
                 identity_epoch=settings.identity_epoch,
             ),
         )
-        _write_json(output / "fragments" / f"shard-{index}.json", redacted)
+        redacted_fragments.append(redacted)
         raw = _load_json(Path(args.shard_root) / f"shard-{index}" / "raw-regions.json")
         if (
             set(raw) != {"kind", "schema_version", "run_id", "shard_index", "observations"}
@@ -2771,6 +2892,9 @@ def _redact(args: argparse.Namespace) -> int:
                 "observed_at": str(item.get("observed_at") or ""),
                 "provider_schema": REGION_PROVIDER_SCHEMA_VERSION,
             }
+    _reject_region_runner_egress_collisions(redacted_fragments, observations)
+    for index, redacted in enumerate(redacted_fragments):
+        _write_json(output / "fragments" / f"shard-{index}.json", redacted)
     _write_json(
         output / "region-observations.json",
         {
@@ -2882,7 +3006,14 @@ def _remote_previous(remote: str, work_dir: Path) -> tuple[PreviousState, dict[s
     history = json.loads(bundle.files["history.json"].decode("utf-8"))
     history.pop("bundle_hash", None)
     run_index = json.loads(bundle.files["runs/index.json"].decode("utf-8"))
-    return previous, validate_history(history, reserved_names=V2_GROUP_NAMES), run_index
+    return (
+        previous,
+        strip_incompatible_region_caches(
+            history,
+            reserved_names=V2_GROUP_NAMES,
+        ),
+        run_index,
+    )
 
 
 def _source_events(snapshot: PreparedSnapshot, history: Mapping[str, Any]) -> dict[str, str]:
@@ -2940,6 +3071,50 @@ def _public_region_label(value: Any) -> str:
     return label
 
 
+def _reject_region_runner_egress_collisions(
+    fragments: Sequence[Mapping[str, Any]],
+    observations: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Fail closed if a proxy region observation is the CNB runner itself."""
+
+    runner_exit_ids: set[str] = set()
+    try:
+        for fragment in fragments:
+            if not isinstance(fragment, Mapping) or not isinstance(
+                fragment.get("egress"), Mapping
+            ):
+                raise CoordinatorError("redacted shard egress evidence is malformed")
+            egress = fragment["egress"]
+            for phase in ("before", "after"):
+                point = egress.get(phase)
+                if not isinstance(point, Mapping):
+                    raise CoordinatorError("redacted shard egress evidence is malformed")
+                runner_exit_ids.add(validate_public_id(point.get("exit_id"), "exit"))
+    except CoordinatorError:
+        raise
+    except Exception as exc:
+        raise CoordinatorError("redacted shard egress evidence is malformed") from exc
+    if not runner_exit_ids:
+        raise CoordinatorError("redacted runner egress identity is missing")
+
+    try:
+        for raw_candidate_id, raw_observation in observations.items():
+            candidate_id_value = validate_public_id(raw_candidate_id, "candidate")
+            observation = validate_region_observation(raw_observation)
+            if observation["candidate_id"] != candidate_id_value:
+                raise CoordinatorError(
+                    "opaque region observation identity is inconsistent"
+                )
+            if observation["exit_id"] in runner_exit_ids:
+                raise CoordinatorError(
+                    "opaque region observation matched the runner egress identity"
+                )
+    except CoordinatorError:
+        raise
+    except Exception as exc:
+        raise CoordinatorError("opaque region observations are malformed") from exc
+
+
 def _finalize(args: argparse.Namespace) -> int:
     manifest = validate_manifest_v3(_load_json(args.manifest))
     snapshot = _load_prepared_snapshot(args.snapshot, manifest)
@@ -2986,6 +3161,10 @@ def _finalize(args: argparse.Namespace) -> int:
         or not isinstance(opaque_regions["observations"], Mapping)
     ):
         raise CoordinatorError("opaque region observations are malformed")
+    _reject_region_runner_egress_collisions(
+        fragments,
+        opaque_regions["observations"],
+    )
     measurements = {item["candidate_id"]: item for item in accepted["results"]}
     candidate_metadata = {
         entry.candidate_id: entry.metadata for entry in snapshot.ordered_candidates

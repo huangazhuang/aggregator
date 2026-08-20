@@ -11,6 +11,7 @@ from scripts.gmgn_region import (
     RegionError,
     build_region_query_plan,
     resolve_region_decisions,
+    strip_incompatible_region_caches,
 )
 from scripts.gmgn_selection import SELECTION_POLICY_VERSION
 
@@ -138,6 +139,18 @@ def protected_history(index: int) -> dict:
 
 
 class RegionResolutionTests(unittest.TestCase):
+    def test_region_upgrade_drops_v1_cache_without_mutating_previous_history(self):
+        history = protected_history(4)
+        history["nodes"][cid(4)]["region_cache"]["policy_version"] = "gmgn-region-v1"
+
+        sanitized = strip_incompatible_region_caches(history)
+
+        self.assertIsNone(sanitized["nodes"][cid(4)]["region_cache"])
+        self.assertEqual(
+            history["nodes"][cid(4)]["region_cache"]["policy_version"],
+            "gmgn-region-v1",
+        )
+
     def test_observation_must_bind_identity_version_and_be_fresh(self):
         history = empty_history(
             identity_key_version="test-k1",

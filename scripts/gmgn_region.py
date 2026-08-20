@@ -18,7 +18,7 @@ from scripts.gmgn_history import validate_history
 from scripts.proxy_identity import validate_identity_version, validate_public_id
 
 
-REGION_POLICY_VERSION = "gmgn-region-v1"
+REGION_POLICY_VERSION = "gmgn-region-v2"
 REGION_OBSERVATION_KIND = "cnb-gmgn-region-observation"
 REGION_OBSERVATION_SCHEMA_VERSION = 1
 REGION_DECISION_KIND = "cnb-gmgn-region-decision"
@@ -242,6 +242,27 @@ def collect_region_observations(
             raise RegionError("region provider returned the wrong candidate identity")
         observations[candidate_id] = observation
     return observations
+
+
+def strip_incompatible_region_caches(
+    history: Mapping[str, Any],
+    *,
+    reserved_names: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Remove cache evidence produced by another region-routing policy.
+
+    Older public bundles remain readable for history continuity, but their
+    cached exits cannot be trusted after the candidate-bound listener fix.
+    Returning a fully validated copy also ensures a new bundle cannot silently
+    carry those observations forward.
+    """
+
+    normalized = validate_history(history, reserved_names=reserved_names)
+    for node in normalized["nodes"].values():
+        cache = node.get("region_cache")
+        if cache is not None and cache.get("policy_version") != REGION_POLICY_VERSION:
+            node["region_cache"] = None
+    return validate_history(normalized, reserved_names=reserved_names)
 
 
 def _cache_from_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
@@ -561,6 +582,7 @@ __all__ = [
     "collect_region_observations",
     "reliable_source_region",
     "resolve_region_decisions",
+    "strip_incompatible_region_caches",
     "validate_region_decision",
     "validate_region_observation",
 ]

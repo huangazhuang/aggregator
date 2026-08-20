@@ -63,22 +63,18 @@ RUN_INDEX_KIND = "cnb-gmgn-run-index"
 RUN_INDEX_SCHEMA_VERSION = 1
 RUN_DIAGNOSTICS_KIND = "cnb-gmgn-run-diagnostics"
 RUN_DIAGNOSTICS_SCHEMA_VERSION = 1
-PUBLISH_POLICY_VERSION = "gmgn-publication-v4"
-SUPPORTED_PUBLISH_POLICY_VERSIONS = frozenset(
+PUBLISH_POLICY_VERSION = "gmgn-publication-v5"
+SUPPORTED_PUBLICATION_POLICY_TRIPLES = frozenset(
     {
-        "gmgn-publication-v1",
-        "gmgn-publication-v2",
-        "gmgn-publication-v3",
-        PUBLISH_POLICY_VERSION,
+        ("gmgn-publication-v1", "gmgn-validity-v5", "gmgn-region-v1"),
+        ("gmgn-publication-v2", "gmgn-validity-v6", "gmgn-region-v1"),
+        ("gmgn-publication-v3", "gmgn-validity-v7", "gmgn-region-v1"),
+        ("gmgn-publication-v4", "gmgn-validity-v8", "gmgn-region-v1"),
+        (PUBLISH_POLICY_VERSION, VALIDITY_POLICY_VERSION, REGION_POLICY_VERSION),
     }
 )
-SUPPORTED_PUBLICATION_POLICY_PAIRS = frozenset(
-    {
-        ("gmgn-publication-v1", "gmgn-validity-v5"),
-        ("gmgn-publication-v2", "gmgn-validity-v6"),
-        ("gmgn-publication-v3", "gmgn-validity-v7"),
-        (PUBLISH_POLICY_VERSION, VALIDITY_POLICY_VERSION),
-    }
+SUPPORTED_PUBLISH_POLICY_VERSIONS = frozenset(
+    item[0] for item in SUPPORTED_PUBLICATION_POLICY_TRIPLES
 )
 PUBLIC_ALLOWLIST_VERSION = "gmgn-public-allowlist-v1"
 AUTHORITATIVE_BRANCH = "clash-cn-gmgn-v2-shadow"
@@ -696,6 +692,9 @@ def _validate_node_status(
     raw: Any,
     *,
     expected_bundle_hash: str | None,
+    accepted_region_policy_versions: frozenset[str] = frozenset(
+        {REGION_POLICY_VERSION}
+    ),
 ) -> dict[str, Any]:
     expected_fields = NODE_STATUS_FIELDS
     if expected_bundle_hash is None:
@@ -721,7 +720,7 @@ def _validate_node_status(
     )
     if value["selection_policy_version"] != SELECTION_POLICY_VERSION:
         raise PublicationError("node-status selection policy is unsupported")
-    if value["region_policy_version"] != REGION_POLICY_VERSION:
+    if value["region_policy_version"] not in accepted_region_policy_versions:
         raise PublicationError("node-status region policy is unsupported")
     value["summary"] = _validate_selection_summary(value["summary"])
     nodes = value["nodes"]
@@ -889,6 +888,9 @@ def validate_public_diagnostics(
     accepted_validity_policy_versions: frozenset[str] = frozenset(
         {VALIDITY_POLICY_VERSION}
     ),
+    accepted_region_policy_versions: frozenset[str] = frozenset(
+        {REGION_POLICY_VERSION}
+    ),
 ) -> dict[str, Any]:
     value = _strict_mapping(raw, DIAGNOSTICS_FIELDS, "run diagnostics")
     if (
@@ -923,7 +925,7 @@ def validate_public_diagnostics(
     )
     if value["selection_policy_version"] != SELECTION_POLICY_VERSION:
         raise PublicationError("run diagnostics selection policy is unsupported")
-    if value["region_policy_version"] != REGION_POLICY_VERSION:
+    if value["region_policy_version"] not in accepted_region_policy_versions:
         raise PublicationError("run diagnostics region policy is unsupported")
     if value["validity_policy_version"] not in accepted_validity_policy_versions:
         raise PublicationError("run diagnostics validity policy is unsupported")
@@ -1098,6 +1100,18 @@ def _validate_selection_result(raw: Any) -> dict[str, Any]:
     return value
 
 
+def _require_history_region_policy(
+    history: Mapping[str, Any],
+    expected_policy_version: str,
+) -> None:
+    for node in history["nodes"].values():
+        cache = node.get("region_cache")
+        if cache is not None and cache.get("policy_version") != expected_policy_version:
+            raise PublicationError(
+                "history region cache policy disagrees with the publication"
+            )
+
+
 def build_publish_bundle(
     *,
     selection_result: Mapping[str, Any],
@@ -1174,6 +1188,10 @@ def build_publish_bundle(
         != common["selection_policy_version"]
     ):
         raise PublicationError("history identity or selection policy mismatch")
+    _require_history_region_policy(
+        normalized_history,
+        common["region_policy_version"],
+    )
 
     profile_bytes = render_selection_profile(selection).encode("utf-8")
     profile, published_count = _validate_profile(profile_bytes)
@@ -1492,16 +1510,17 @@ def validate_publish_bundle(files: Mapping[str, bytes]) -> PublishBundle:
             raise PublicationError(f"publish status {field} disagrees with bundle manifest")
     if status["selection_policy_version"] != SELECTION_POLICY_VERSION:
         raise PublicationError("publish status selection policy is unsupported")
-    if status["region_policy_version"] != REGION_POLICY_VERSION:
-        raise PublicationError("publish status region policy is unsupported")
     if status["history_policy_version"] != HISTORY_POLICY_VERSION:
         raise PublicationError("publish status history policy is unsupported")
-    if (
+    policy_triple = (
         status["publish_policy_version"],
         status["validity_policy_version"],
-    ) not in SUPPORTED_PUBLICATION_POLICY_PAIRS:
-        raise PublicationError("publish status policy pair is unsupported")
+        status["region_policy_version"],
+    )
+    if policy_triple not in SUPPORTED_PUBLICATION_POLICY_TRIPLES:
+        raise PublicationError("publish status policy triple is unsupported")
     bundle_validity_policies = frozenset({status["validity_policy_version"]})
+    bundle_region_policies = frozenset({status["region_policy_version"]})
     if status["total_rounds"] != TOTAL_ROUNDS or status["shard_count"] != SHARD_COUNT:
         raise PublicationError("publish status round/shard contract mismatch")
     if _positive_number(
@@ -1583,9 +1602,11 @@ def validate_publish_bundle(files: Mapping[str, bytes]) -> PublishBundle:
         or history["history_policy_version"] != status["history_policy_version"]
     ):
         raise PublicationError("published history identity or policy disagrees with status")
+    _require_history_region_policy(history, status["region_policy_version"])
     node_status = _validate_node_status(
         _load_json_bytes(normalized_files["node-status.json"], "node-status.json"),
         expected_bundle_hash=bundle_hash,
+        accepted_region_policy_versions=bundle_region_policies,
     )
     node_bindings = {
         "run_id": status["run_id"],
@@ -1613,6 +1634,7 @@ def validate_publish_bundle(files: Mapping[str, bytes]) -> PublishBundle:
     diagnostics = validate_public_diagnostics(
         _load_json_bytes(normalized_files[diagnostics_path], diagnostics_path),
         accepted_validity_policy_versions=bundle_validity_policies,
+        accepted_region_policy_versions=bundle_region_policies,
     )
     if diagnostics["bundle_hash"] != bundle_hash:
         raise PublicationError("run diagnostics bundle hash mismatch")

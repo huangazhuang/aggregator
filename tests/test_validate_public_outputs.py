@@ -441,6 +441,27 @@ class RolloutValidatorTests(unittest.TestCase):
                 require_distinct_source_sha=True,
             )
 
+        legacy_region_files = dict(bundles[2].files)
+        legacy_region_status = json.loads(legacy_region_files["status.json"])
+        legacy_region_status["region_policy_version"] = "gmgn-region-v1"
+        legacy_region_files["status.json"] = (
+            json.dumps(
+                legacy_region_status,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        legacy_region = copy.copy(bundles[2])
+        object.__setattr__(legacy_region, "files", legacy_region_files)
+        with self.assertRaisesRegex(PublicationError, "changed policy"):
+            validate_series(
+                [bundles[0], bundles[1], legacy_region],
+                required_valid_runs=3,
+                min_spacing_seconds=21_600,
+            )
+
         changed_files = dict(bundles[2].files)
         run_index = json.loads(changed_files["runs/index.json"])
         run_index["entries"][0]["attempt_id"] = "f" * 24

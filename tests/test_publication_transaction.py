@@ -305,8 +305,9 @@ def policy_bundle_fixture(
     *,
     publish_policy: str = "gmgn-publication-v1",
     validity_policy: str = "gmgn-validity-v5",
+    region_policy: str = "gmgn-region-v1",
 ):
-    """Rewrite a valid current fixture into a coherent requested policy pair."""
+    """Rewrite a valid current fixture into a requested policy triple."""
 
     bundle, binary = bundle_fixture()
     payloads = {
@@ -316,8 +317,11 @@ def policy_bundle_fixture(
     }
     payloads["status.json"]["publish_policy_version"] = publish_policy
     payloads["status.json"]["validity_policy_version"] = validity_policy
+    payloads["status.json"]["region_policy_version"] = region_policy
+    payloads["node-status.json"]["region_policy_version"] = region_policy
     diagnostics_path = "runs/run-1/diagnostics.json"
     payloads[diagnostics_path]["validity_policy_version"] = validity_policy
+    payloads[diagnostics_path]["region_policy_version"] = region_policy
     diagnostics_without_hash = copy.deepcopy(payloads[diagnostics_path])
     diagnostics_without_hash.pop("bundle_hash", None)
     payloads["runs/index.json"]["entries"][-1]["diagnostics_sha256"] = hashlib.sha256(
@@ -407,6 +411,7 @@ class PublishBundleTests(unittest.TestCase):
         status = json.loads(bundle.files["status.json"])
         self.assertEqual(status["publish_policy_version"], "gmgn-publication-v1")
         self.assertEqual(status["validity_policy_version"], "gmgn-validity-v5")
+        self.assertEqual(status["region_policy_version"], "gmgn-region-v1")
 
     def test_previous_v2_v6_bundle_remains_readable_during_policy_upgrade(self) -> None:
         bundle, _binary = policy_bundle_fixture(
@@ -416,6 +421,7 @@ class PublishBundleTests(unittest.TestCase):
         status = json.loads(bundle.files["status.json"])
         self.assertEqual(status["publish_policy_version"], "gmgn-publication-v2")
         self.assertEqual(status["validity_policy_version"], "gmgn-validity-v6")
+        self.assertEqual(status["region_policy_version"], "gmgn-region-v1")
 
     def test_previous_v3_v7_bundle_remains_readable_during_policy_upgrade(self) -> None:
         bundle, _binary = policy_bundle_fixture(
@@ -425,12 +431,25 @@ class PublishBundleTests(unittest.TestCase):
         status = json.loads(bundle.files["status.json"])
         self.assertEqual(status["publish_policy_version"], "gmgn-publication-v3")
         self.assertEqual(status["validity_policy_version"], "gmgn-validity-v7")
+        self.assertEqual(status["region_policy_version"], "gmgn-region-v1")
 
-    def test_mixed_old_and_new_policy_pair_is_rejected(self) -> None:
-        with self.assertRaisesRegex(PublicationError, "policy pair"):
+    def test_previous_v4_v8_v1_bundle_remains_readable_during_region_upgrade(self) -> None:
+        bundle, _binary = policy_bundle_fixture(
+            publish_policy="gmgn-publication-v4",
+            validity_policy="gmgn-validity-v8",
+            region_policy="gmgn-region-v1",
+        )
+        status = json.loads(bundle.files["status.json"])
+        self.assertEqual(status["publish_policy_version"], "gmgn-publication-v4")
+        self.assertEqual(status["validity_policy_version"], "gmgn-validity-v8")
+        self.assertEqual(status["region_policy_version"], "gmgn-region-v1")
+
+    def test_mixed_old_and_new_policy_triple_is_rejected(self) -> None:
+        with self.assertRaisesRegex(PublicationError, "policy triple"):
             policy_bundle_fixture(
-                publish_policy="gmgn-publication-v4",
-                validity_policy="gmgn-validity-v5",
+                publish_policy="gmgn-publication-v5",
+                validity_policy="gmgn-validity-v8",
+                region_policy="gmgn-region-v1",
             )
 
     def test_bundle_hash_is_non_recursive_and_every_payload_is_bound(self) -> None:
@@ -438,7 +457,11 @@ class PublishBundleTests(unittest.TestCase):
         self.assertEqual(compute_logical_bundle_hash(bundle.files), bundle.bundle_hash)
         self.assertEqual(
             json.loads(bundle.files["status.json"])["publish_policy_version"],
-            "gmgn-publication-v4",
+            "gmgn-publication-v5",
+        )
+        self.assertEqual(
+            json.loads(bundle.files["status.json"])["region_policy_version"],
+            "gmgn-region-v2",
         )
         self.assertEqual(
             set(bundle.files),
