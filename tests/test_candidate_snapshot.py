@@ -748,7 +748,7 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
         self.assertTrue(protected_ids.issubset(selected))
         self.assertTrue(low_quality_old.isdisjoint(selected))
 
-    def test_build_trims_before_rendering_and_records_policy_v4(self) -> None:
+    def test_build_trims_before_rendering_and_records_policy_v5(self) -> None:
         nodes = [
             proxy(f"JP node {index}", f"node-{index}.example", f"secret-{index}")
             for index in range(6)
@@ -764,13 +764,13 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
 
         self.assertEqual(snapshot.status["candidate_count"], 4)
         self.assertEqual(snapshot.metadata["candidate_count"], 4)
-        self.assertEqual(snapshot.status["policy_version"], "candidate-publish-v4")
+        self.assertEqual(snapshot.status["policy_version"], "candidate-publish-v5")
         self.assertEqual(
             snapshot.status["publish_gate"]["policy_version"],
-            "candidate-publish-v4",
+            "candidate-publish-v5",
         )
 
-    def test_previous_publish_policy_v3_is_read_only_and_migrates_to_v4(self) -> None:
+    def test_previous_publish_policy_v4_is_read_only_and_migrates_to_v5(self) -> None:
         node = proxy("JP stable", "stable.example", "stable-secret")
         source = task(
             "asia",
@@ -781,8 +781,8 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
             settings=IDENTITY,
         )
         previous_status = copy.deepcopy(initial.status)
-        previous_status["policy_version"] = "candidate-publish-v3"
-        previous_status["publish_gate"]["policy_version"] = "candidate-publish-v3"
+        previous_status["policy_version"] = "candidate-publish-v4"
+        previous_status["publish_gate"]["policy_version"] = "candidate-publish-v4"
         with self.assertRaisesRegex(CandidateSnapshotError, "publish gate"):
             validate_candidate_snapshot(
                 initial.profile_bytes,
@@ -809,7 +809,7 @@ class CandidateProvenanceSnapshotTests(unittest.TestCase):
             ),
         )
         migrated = build_candidate_snapshot(prepared, settings=IDENTITY)
-        self.assertEqual(migrated.status["policy_version"], "candidate-publish-v4")
+        self.assertEqual(migrated.status["policy_version"], "candidate-publish-v5")
 
     def test_numeric_authentication_and_reality_survive_snapshot_serialization(self) -> None:
         numeric_auth = {

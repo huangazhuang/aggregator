@@ -773,6 +773,11 @@ class CandidateWorkflowContractTests(unittest.TestCase):
         self.assertEqual(fc_probe["if"], "env.PROBE_URL != ''")
         self.assertNotIn("if", reachability)
 
+    def test_candidate_browser_probe_dependency_is_exactly_pinned(self) -> None:
+        lock = Path("requirements.lock").read_text(encoding="utf-8")
+
+        self.assertIn("curl_cffi==0.16.0", lock.splitlines())
+
 
 if __name__ == "__main__":
     unittest.main()

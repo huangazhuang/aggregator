@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
 import urllib.parse
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,6 +28,12 @@ from scripts.pipeline_utils import (
     build_candidate_v2_clash_profile,
     calculate_publish_floor,
     dump_clash_yaml,
+)
+from scripts.cnb_gmgn_v2 import (  # Reuse the audited CNB browser probe transport.
+    HTTP_PROBE_PORTS_PER_SHARD,
+    _BrowserProbePool,
+    _http_probe_runtime,
+    curl_requests as browser_requests,
 )
 
 
@@ -152,6 +160,84 @@ def mihomo_expected_status_passed(
     return isinstance(target_state, dict) and target_state.get("alive") is True
 
 
+def configure_candidate_browser_probes(
+    profile: dict[str, Any],
+    tested: list[dict[str, Any]],
+    *,
+    secret: str,
+    workers: int,
+) -> tuple[Any, ...]:
+    """Add loopback-only selector/listener pairs without starting URL tests."""
+
+    names = [str(proxy.get("name") or "") for proxy in tested]
+    slots, groups, listeners = _http_probe_runtime(
+        names,
+        shard_index=0,
+        workers=workers,
+    )
+    profile["secret"] = secret
+    profile.pop("mixed-port", None)
+    profile["proxy-groups"] = groups
+    profile["listeners"] = listeners
+    profile["rules"] = ["MATCH,DIRECT"]
+    return slots
+
+
+def browser_probe_outcome(
+    pool: Any,
+    proxy: dict[str, Any],
+    target: str,
+    expected: int,
+) -> dict[str, Any]:
+    """Run one strict browser request through the listener assigned by the pool."""
+
+    outcome = pool.probe(
+        {"proxy": proxy},
+        target,
+        3_000,
+        expected_status=expected,
+    )
+    return dict(outcome) if isinstance(outcome, dict) else {"error": "invalid outcome"}
+
+
+def browser_probe_passed(outcome: Any) -> bool:
+    """Accept only the positive delay emitted after the exact expected status."""
+
+    if not isinstance(outcome, dict):
+        return False
+    delay = outcome.get("delay_ms")
+    return (
+        not isinstance(delay, bool)
+        and isinstance(delay, (int, float))
+        and delay > 0
+        and "target_status" not in outcome
+        and "error" not in outcome
+        and "error_category" not in outcome
+    )
+
+
+def summarize_browser_probe_outcomes(outcomes: list[Any]) -> str:
+    """Return aggregate, credential-free diagnostics for one target."""
+
+    categories: Counter[str] = Counter()
+    for outcome in outcomes:
+        if browser_probe_passed(outcome):
+            categories["passed"] += 1
+        elif isinstance(outcome, dict) and isinstance(outcome.get("target_status"), int):
+            status = int(outcome["target_status"])
+            categories[f"http_{status}" if status in {403, 429} else "http_other"] += 1
+        elif isinstance(outcome, dict):
+            category = str(
+                outcome.get("diagnostic_category")
+                or outcome.get("error_category")
+                or "other"
+            )
+            categories[category] += 1
+        else:
+            categories["invalid_outcome"] += 1
+    return ", ".join(f"{key}={categories[key]}" for key in sorted(categories))
+
+
 def main() -> int:
     candidate_v2 = candidate_v2_enabled()
     targets = [
@@ -183,6 +269,7 @@ def main() -> int:
     clash_bin, _ = executable.which_bin()
     binary = workspace / clash_bin
     utils.chmod(str(binary))
+    check_profile: dict[str, Any] | None = None
     if candidate_v2:
         check_profile = build_candidate_v2_clash_profile(
             validated,
@@ -190,10 +277,6 @@ def main() -> int:
             test_url=os.environ.get("GMGN_CHECK_URL", "https://gmgn.ai/"),
         )
         checks = check_profile["proxies"]
-        check_text, rejected = dump_clash_yaml(check_profile)
-        if rejected:
-            fail_closed("Candidate V2 contains invalid REALITY short IDs")
-        (workspace / "reach-check.yaml").write_text(check_text, encoding="utf-8")
     else:
         checks = clash.generate_config(str(workspace), validated, "reach-check.yaml")
     if not checks:
@@ -201,6 +284,33 @@ def main() -> int:
 
     protected = [utils.is_preferred_asian_proxy(proxy) for proxy in checks]
     tested = [proxy for index, proxy in enumerate(checks) if not protected[index]]
+
+    browser_pool: Any | None = None
+    if candidate_v2 and tested:
+        if browser_requests is None:
+            fail_closed("curl_cffi is required for Candidate V2 browser probes")
+        workers = min(
+            integer_setting("STRICT_BROWSER_PROBE_WORKERS", HTTP_PROBE_PORTS_PER_SHARD),
+            HTTP_PROBE_PORTS_PER_SHARD,
+            len(tested),
+        )
+        controller_secret = secrets.token_hex(32)
+        slots = configure_candidate_browser_probes(
+            check_profile,
+            tested,
+            secret=controller_secret,
+            workers=workers,
+        )
+        browser_pool = _BrowserProbePool(
+            clash.EXTERNAL_CONTROLLER,
+            controller_secret,
+            slots,
+        )
+    if candidate_v2:
+        check_text, rejected = dump_clash_yaml(check_profile)
+        if rejected:
+            fail_closed("Candidate V2 contains invalid REALITY short IDs")
+        (workspace / "reach-check.yaml").write_text(check_text, encoding="utf-8")
 
     process: subprocess.Popen[Any] | None = None
     lines: list[str] = [
@@ -217,16 +327,30 @@ def main() -> int:
                 fail_closed(f"Mihomo exited before reachability checks (code {process.returncode})", lines)
 
             for target, expected in targets:
-                masks = utils.multi_thread_run(
-                    func=mihomo_expected_status_passed,
-                    tasks=[[proxy, target, expected] for proxy in tested],
-                    num_threads=128,
-                    show_progress=False,
-                )
+                if candidate_v2:
+                    outcomes = utils.multi_thread_run(
+                        func=browser_probe_outcome,
+                        tasks=[[browser_pool, proxy, target, expected] for proxy in tested],
+                        num_threads=workers,
+                        show_progress=False,
+                    )
+                    masks = [browser_probe_passed(outcome) for outcome in outcomes]
+                else:
+                    masks = utils.multi_thread_run(
+                        func=mihomo_expected_status_passed,
+                        tasks=[[proxy, target, expected] for proxy in tested],
+                        num_threads=128,
+                        show_progress=False,
+                    )
+                    outcomes = []
                 if not isinstance(masks, list) or len(masks) != len(tested):
                     fail_closed(f"incomplete reachability results for {target}", lines)
                 count = sum(1 for mask in masks if mask)
                 lines.append(f"{target}: {count}/{len(tested)} tested proxies reachable")
+                if outcomes:
+                    lines.append(
+                        f"{target} diagnostics: {summarize_browser_probe_outcomes(outcomes)}"
+                    )
                 print(lines[-1])
                 if count <= 0:
                     fail_closed(f"no proxy passed {target}; treating the target check as unavailable", lines)
@@ -253,7 +377,7 @@ def main() -> int:
     report = {
         "kind": "github-reachability-report",
         "schema_version": 1,
-        "policy_version": "github-reachability-v2",
+        "policy_version": "github-reachability-v3",
         "tested": len(tested),
         "passed": ordinary_passed,
         "failed": len(tested) - ordinary_passed,

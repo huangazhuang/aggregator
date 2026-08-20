@@ -16,8 +16,11 @@ from scripts.cnb_mihomo_filter import (
     summarize_probe_record,
 )
 from scripts.filter_reachability import (
+    browser_probe_passed,
+    configure_candidate_browser_probes,
     mihomo_expected_status_passed,
     select_reachability_passes,
+    summarize_browser_probe_outcomes,
 )
 from subscribe.asia import is_preferred_asian_proxy, preferred_asia_region_hints
 
@@ -85,6 +88,52 @@ class AsiaSourceTests(unittest.TestCase):
 
 
 class AsiaFilterBypassTests(unittest.TestCase):
+    def test_candidate_browser_probe_profile_uses_isolated_loopback_listeners(self) -> None:
+        profile = {
+            "mixed-port": 7890,
+            "proxies": [{"name": "ordinary-a"}, {"name": "ordinary-b"}],
+            "proxy-groups": [{"name": "automatic", "type": "url-test"}],
+            "rules": ["MATCH,automatic"],
+        }
+
+        slots = configure_candidate_browser_probes(
+            profile,
+            profile["proxies"],
+            secret="ephemeral-secret",
+            workers=2,
+        )
+
+        self.assertNotIn("mixed-port", profile)
+        self.assertEqual(profile["secret"], "ephemeral-secret")
+        self.assertEqual(profile["rules"], ["MATCH,DIRECT"])
+        self.assertEqual(len(slots), 2)
+        self.assertEqual(len(profile["listeners"]), 2)
+        self.assertTrue(
+            all(listener["listen"] == "127.0.0.1" for listener in profile["listeners"])
+        )
+        self.assertTrue(all(group["type"] == "select" for group in profile["proxy-groups"]))
+
+    def test_candidate_browser_probe_requires_exact_success_outcome(self) -> None:
+        self.assertTrue(browser_probe_passed({"delay_ms": 91}))
+        self.assertFalse(browser_probe_passed({"target_status": 403}))
+        self.assertFalse(browser_probe_passed({"target_status": 429}))
+        self.assertFalse(browser_probe_passed({"error_category": "client_timeout"}))
+        self.assertFalse(browser_probe_passed({"delay_ms": 0}))
+
+        summary = summarize_browser_probe_outcomes(
+            [
+                {"delay_ms": 91},
+                {"target_status": 403},
+                {"target_status": 429},
+                {"diagnostic_category": "tls_handshake"},
+                {"error_category": "client_timeout"},
+            ]
+        )
+        self.assertEqual(
+            summary,
+            "client_timeout=1, http_403=1, http_429=1, passed=1, tls_handshake=1",
+        )
+
     def test_strict_site_filter_requires_expected_status_alive_state(self) -> None:
         target = "https://gmgn.ai/"
 
