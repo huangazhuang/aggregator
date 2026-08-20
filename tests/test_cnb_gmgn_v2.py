@@ -908,7 +908,7 @@ class GuardedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(normalize_outcome(outcome), (None, "other"))
 
-    def test_control_discovery_prioritizes_passed_candidates_and_keeps_live_panel(self) -> None:
+    def test_control_discovery_balances_github_passed_and_asia_bypassed_candidates(self) -> None:
         candidates = [
             {
                 "candidate_id": f"candidate-{state}-{index}",
@@ -920,13 +920,13 @@ class GuardedRuntimeTests(unittest.TestCase):
         selected = cnb_gmgn_v2._select_control_candidates(candidates, limit=4)
         self.assertEqual(
             [candidate["github_check_state"] for candidate in selected].count("passed"),
-            4,
+            2,
         )
         self.assertEqual(
             [candidate["github_check_state"] for candidate in selected].count(
                 "bypassed_asia"
             ),
-            0,
+            2,
         )
         live_ids = {
             selected[1]["candidate_id"]: 73,
@@ -986,6 +986,7 @@ class GuardedRuntimeTests(unittest.TestCase):
         matrix = cnb_gmgn_v2._same_client_probe_matrix(
             candidates,
             direct_gmgn_probe=lambda: {"delay_ms": 60},
+            direct_canary_probe=lambda _canary: {"delay_ms": 40},
             proxy_gmgn_probe=lambda candidate: (
                 {"delay_ms": 90}
                 if candidate["candidate_id"] == "candidate-a"
@@ -999,6 +1000,12 @@ class GuardedRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(matrix["direct_gmgn"]["success_count"], 1)
+        self.assertTrue(
+            all(
+                summary["success_count"] == 1
+                for summary in matrix["direct_canaries"].values()
+            )
+        )
         self.assertEqual(matrix["proxy_gmgn"]["success_count"], 1)
         self.assertEqual(matrix["proxy_gmgn"]["error_counts"], {"tls": 1})
         self.assertEqual(

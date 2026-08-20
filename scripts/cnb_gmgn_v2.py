@@ -218,12 +218,12 @@ RETRY_TAG_RE = re.compile(
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIRECT_PREFLIGHT_ATTEMPTS = 3
-CONTROL_DISCOVERY_SIZE = 128
+CONTROL_DISCOVERY_SIZE = 512
 CONTROL_DISCOVERY_BATCH_SIZE = 32
 CONTROL_DISCOVERY_WORKERS = 16
-CONTROL_PANEL_SIZE = 8
-CONTROL_PANEL_WORKERS = 8
-CONTROL_PROBE_TIMEOUT_MS = 5_000
+CONTROL_PANEL_SIZE = 3
+CONTROL_PANEL_WORKERS = 3
+CONTROL_PROBE_TIMEOUT_MS = 8_000
 CONTROL_EXPECTED_STATUS = 200
 HTTP_PROBE_STARTUP_GRACE_SECONDS = 1.0
 HTTP_PROBE_PORTS_PER_SHARD = 32
@@ -1811,6 +1811,15 @@ def _spread_candidates(
 def _select_control_candidates(
     candidates: Sequence[Mapping[str, Any]], *, limit: int = CONTROL_DISCOVERY_SIZE
 ) -> tuple[dict[str, Any], ...]:
+    """Build a region-neutral control reservoir for the China-side runner.
+
+    ``passed`` only means that the proxy reached the fixed sites from GitHub's
+    runner.  Target-Asia candidates are deliberately allowed to bypass that
+    foreign-runner check, so excluding them here can starve a mainland CNB
+    shard of every locally reachable control.  Keep both populations whenever
+    they exist, while still giving ``passed`` the odd slot in a small sample.
+    """
+
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise CoordinatorError("GMGN control discovery size is invalid")
     normalized = [copy.deepcopy(dict(candidate)) for candidate in candidates]
@@ -1838,8 +1847,14 @@ def _select_control_candidates(
         key=lambda candidate: str(candidate["candidate_id"]),
     )
     target_count = min(limit, len(normalized))
-    passed_count = min(len(passed), target_count)
+    passed_count = min(len(passed), (target_count + 1) // 2)
     bypassed_count = min(len(bypassed), target_count - passed_count)
+    remaining = target_count - passed_count - bypassed_count
+    if remaining:
+        passed_count += min(remaining, len(passed) - passed_count)
+        remaining = target_count - passed_count - bypassed_count
+    if remaining:
+        bypassed_count += min(remaining, len(bypassed) - bypassed_count)
     selected = _spread_candidates(passed, passed_count) + _spread_candidates(
         bypassed, bypassed_count
     )
@@ -1933,6 +1948,7 @@ def _same_client_probe_matrix(
     candidates: Sequence[Mapping[str, Any]],
     *,
     direct_gmgn_probe: Callable[[], Mapping[str, Any] | None],
+    direct_canary_probe: Callable[[str], Mapping[str, Any] | None],
     proxy_gmgn_probe: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
     proxy_canary_probe: Callable[
         [Mapping[str, Any], str], Mapping[str, Any] | None
@@ -1952,7 +1968,7 @@ def _same_client_probe_matrix(
         or proxy_limit < 1
     ):
         raise CoordinatorError("same-client probe matrix contract is invalid")
-    selected = normalized[: min(proxy_limit, len(normalized))]
+    selected = _spread_candidates(normalized, min(proxy_limit, len(normalized)))
     return {
         "kind": "cnb-gmgn-v2-same-client-matrix",
         "schema_version": 1,
@@ -1964,6 +1980,12 @@ def _same_client_probe_matrix(
             "environment_proxy": False,
         },
         "direct_gmgn": _run_safe_probe_group([direct_gmgn_probe]),
+        "direct_canaries": {
+            canary_id: _run_safe_probe_group(
+                [lambda canary_id=canary_id: direct_canary_probe(canary_id)]
+            )
+            for canary_id in normalized_canaries
+        },
         "proxy_gmgn": _run_safe_probe_group(
             [lambda candidate=candidate: proxy_gmgn_probe(candidate) for candidate in selected]
         ),
@@ -2473,7 +2495,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
             return browser_probe.probe(
                 candidate,
                 control_url,
-                min(int(manifest["request_timeout_ms"]), CONTROL_PROBE_TIMEOUT_MS),
+                CONTROL_PROBE_TIMEOUT_MS,
                 expected_status=CONTROL_EXPECTED_STATUS,
             )
 
@@ -2521,6 +2543,9 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 control_url,
                 CONTROL_PROBE_TIMEOUT_MS,
                 expected_status=CONTROL_EXPECTED_STATUS,
+            ),
+            direct_canary_probe=lambda canary_id: browser_canary_attempt(
+                {"proxy": {"name": "DIRECT"}}, canary_id
             ),
             proxy_gmgn_probe=lambda candidate: control_attempt(candidate, 0),
             proxy_canary_probe=browser_canary_attempt,

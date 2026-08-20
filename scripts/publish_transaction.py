@@ -63,14 +63,20 @@ RUN_INDEX_KIND = "cnb-gmgn-run-index"
 RUN_INDEX_SCHEMA_VERSION = 1
 RUN_DIAGNOSTICS_KIND = "cnb-gmgn-run-diagnostics"
 RUN_DIAGNOSTICS_SCHEMA_VERSION = 1
-PUBLISH_POLICY_VERSION = "gmgn-publication-v3"
+PUBLISH_POLICY_VERSION = "gmgn-publication-v4"
 SUPPORTED_PUBLISH_POLICY_VERSIONS = frozenset(
-    {"gmgn-publication-v1", "gmgn-publication-v2", PUBLISH_POLICY_VERSION}
+    {
+        "gmgn-publication-v1",
+        "gmgn-publication-v2",
+        "gmgn-publication-v3",
+        PUBLISH_POLICY_VERSION,
+    }
 )
 SUPPORTED_PUBLICATION_POLICY_PAIRS = frozenset(
     {
         ("gmgn-publication-v1", "gmgn-validity-v5"),
         ("gmgn-publication-v2", "gmgn-validity-v6"),
+        ("gmgn-publication-v3", "gmgn-validity-v7"),
         (PUBLISH_POLICY_VERSION, VALIDITY_POLICY_VERSION),
     }
 )
