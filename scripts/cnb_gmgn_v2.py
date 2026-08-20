@@ -29,6 +29,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -2124,10 +2125,12 @@ def _discover_control_panel(
     panel_size: int = CONTROL_PANEL_SIZE,
     batch_size: int = CONTROL_DISCOVERY_BATCH_SIZE,
     workers: int = CONTROL_DISCOVERY_WORKERS,
+    allow_empty: bool = False,
 ) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     selected = [copy.deepcopy(dict(candidate)) for candidate in candidates]
     if (
         not selected
+        or not isinstance(allow_empty, bool)
         or any(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
             for value in (panel_size, batch_size, workers)
@@ -2195,12 +2198,103 @@ def _discover_control_panel(
         },
         "target_status_counts": dict(sorted(status_counts.items())),
     }
-    if not successes:
+    if not successes and not allow_empty:
         raise ControlDiscoveryError(diagnostics)
     successes.sort(key=lambda item: (item[0], item[1]))
     panel = tuple(item[2] for item in successes[:panel_size])
     diagnostics["panel_size"] = len(panel)
+    diagnostics["deferred"] = not panel
     return panel, diagnostics
+
+
+class _AdaptiveControlPanel:
+    """Keep a bounded, deterministic panel that can recover during round one.
+
+    Discovery evidence bootstraps the shard.  Fresh strict HTTP-200 candidate
+    measurements then replace stale bootstrap entries and keep the fastest
+    bounded set.  This makes concurrent updates deterministic without retaining
+    the full private candidate reservoir.
+    """
+
+    def __init__(
+        self,
+        candidates: Sequence[Mapping[str, Any]] = (),
+        *,
+        panel_size: int = CONTROL_PANEL_SIZE,
+        workers: int = CONTROL_PANEL_WORKERS,
+    ) -> None:
+        if (
+            isinstance(panel_size, bool)
+            or not isinstance(panel_size, int)
+            or panel_size < 1
+            or isinstance(workers, bool)
+            or not isinstance(workers, int)
+            or workers < 1
+        ):
+            raise CoordinatorError("adaptive GMGN control panel contract is invalid")
+        normalized = [copy.deepcopy(dict(candidate)) for candidate in candidates]
+        if len(normalized) > panel_size:
+            raise CoordinatorError("adaptive GMGN control panel exceeds its cap")
+        self._panel_size = panel_size
+        self._workers = workers
+        self._lock = threading.Lock()
+        self._entries: dict[
+            str, tuple[tuple[int, int, str], dict[str, Any]]
+        ] = {}
+        for index, candidate in enumerate(normalized):
+            candidate_id = str(candidate.get("candidate_id") or "")
+            if not candidate_id or candidate_id in self._entries:
+                raise CoordinatorError("adaptive GMGN control candidates are invalid")
+            self._entries[candidate_id] = (
+                (1, index, candidate_id),
+                candidate,
+            )
+
+    def observe(
+        self,
+        candidate: Mapping[str, Any],
+        outcome: Mapping[str, Any] | None,
+    ) -> bool:
+        delay, _category = normalize_outcome(outcome)
+        if delay is None:
+            return False
+        normalized = copy.deepcopy(dict(candidate))
+        candidate_id = str(normalized.get("candidate_id") or "")
+        if not candidate_id:
+            raise CoordinatorError("adaptive GMGN control candidate is invalid")
+        key = (0, int(delay), candidate_id)
+        with self._lock:
+            existing = self._entries.get(candidate_id)
+            if existing is not None:
+                if existing[0] <= key:
+                    return False
+                self._entries[candidate_id] = (key, normalized)
+                return True
+            if len(self._entries) < self._panel_size:
+                self._entries[candidate_id] = (key, normalized)
+                return True
+            worst_id, worst = max(
+                self._entries.items(), key=lambda item: item[1][0]
+            )
+            if key >= worst[0]:
+                return False
+            del self._entries[worst_id]
+            self._entries[candidate_id] = (key, normalized)
+            return True
+
+    def snapshot(self) -> tuple[dict[str, Any], ...]:
+        with self._lock:
+            ordered = sorted(self._entries.values(), key=lambda item: item[0])
+            return tuple(copy.deepcopy(candidate) for _key, candidate in ordered)
+
+    def probe(
+        self,
+        probe: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+    ) -> dict[str, Any]:
+        panel = self.snapshot()
+        if not panel:
+            return {"error_category": "other"}
+        return _control_panel_outcome(panel, probe, workers=self._workers)
 
 
 def _control_panel_outcome(
@@ -2250,11 +2344,14 @@ def _require_direct_probe_preflight(
     canary_probe: Callable[[str, int], Mapping[str, Any] | None],
     canary_ids: Sequence[str],
     attempts: int = DIRECT_PREFLIGHT_ATTEMPTS,
+    require_control_success: bool = True,
 ) -> dict[str, Any]:
-    """Reject a broken proxy control panel or direct canary path early."""
+    """Require direct canaries while optionally deferring proxy control."""
 
     if attempts < 1:
         raise CoordinatorError("direct probe preflight attempt count is invalid")
+    if not isinstance(require_control_success, bool):
+        raise CoordinatorError("direct probe preflight control requirement is invalid")
     normalized_canary_ids = [str(value).strip() for value in canary_ids]
     if (
         not normalized_canary_ids
@@ -2315,7 +2412,7 @@ def _require_direct_probe_preflight(
         },
         "canaries": canary_summaries,
     }
-    if control_successes == 0:
+    if control_successes == 0 and require_control_success:
         raise CoordinatorError(
             "GMGN proxy control preflight failed; safe diagnostics="
             + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
@@ -2683,22 +2780,31 @@ def _probe_inside(args: argparse.Namespace) -> int:
         )
 
         stage = "control_discovery"
-        control_panel, control_discovery = _discover_control_panel(
+        discovered_control_panel, control_discovery = _discover_control_panel(
             control_candidates,
             lambda candidate: control_attempt(candidate, 0),
+            allow_empty=True,
         )
+        control_panel = _AdaptiveControlPanel(discovered_control_panel)
 
         def control_probe(round_number: int) -> dict[str, Any]:
-            return _control_panel_outcome(
-                control_panel,
+            return control_panel.probe(
                 lambda candidate: control_attempt(candidate, round_number),
             )
+
+        def measurement_attempt(
+            candidate: Mapping[str, Any], round_number: int
+        ) -> dict[str, Any]:
+            outcome = attempt(candidate, round_number)
+            control_panel.observe(candidate, outcome)
+            return outcome
 
         stage = "direct_preflight"
         preflight_diagnostics = _require_direct_probe_preflight(
             control_probe=control_probe,
             canary_probe=lambda canary, _round: mihomo_direct_probe(canary),
             canary_ids=CANARY_IDS,
+            require_control_success=False,
         )
         preflight_diagnostics["control_discovery"] = control_discovery
         print(
@@ -2715,7 +2821,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
         stage = "measurement"
         scheduled = run_measurement_schedule(
             candidates,
-            attempt,
+            measurement_attempt,
             workers=int(manifest["workers_per_shard"]),
             total_rounds=int(manifest["total_rounds"]),
             minimum_observation_window_seconds=float(

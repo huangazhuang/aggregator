@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from argparse import Namespace
+from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -12,7 +14,11 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 from scripts import cnb_gmgn_v2
-from scripts.gmgn_measurement import RESOLVER_POLICY_VERSION, normalize_outcome
+from scripts.gmgn_measurement import (
+    RESOLVER_POLICY_VERSION,
+    normalize_outcome,
+    run_measurement_schedule,
+)
 from scripts.gmgn_processed_state import build_attempt
 from scripts.publish_transaction import PreviousState
 
@@ -1131,6 +1137,122 @@ class GuardedRuntimeTests(unittest.TestCase):
             {"connection_eof_reset": 1},
         )
 
+        panel, diagnostics = cnb_gmgn_v2._discover_control_panel(
+            candidates,
+            lambda _candidate: {
+                "error_category": "tls",
+                "diagnostic_category": "connection_eof_reset",
+            },
+            panel_size=1,
+            batch_size=1,
+            workers=1,
+            allow_empty=True,
+        )
+        self.assertEqual(panel, ())
+        self.assertEqual(diagnostics["panel_size"], 0)
+        self.assertTrue(diagnostics["deferred"])
+
+    def test_deferred_control_runs_all_twenty_rounds_and_promotes_live_candidates(self) -> None:
+        class FakeClock:
+            def __init__(self) -> None:
+                self.value = 1000.0
+                self.lock = threading.Lock()
+
+            def now(self) -> float:
+                with self.lock:
+                    return self.value
+
+            def sleep(self, seconds: float) -> None:
+                with self.lock:
+                    self.value += seconds
+
+        candidates = [
+            {
+                "candidate_id": f"c1_{index:024x}",
+                "proxy": {"name": f"candidate-{index}"},
+            }
+            for index in range(4)
+        ]
+        discovered, _diagnostics = cnb_gmgn_v2._discover_control_panel(
+            candidates,
+            lambda _candidate: {"error_category": "tls"},
+            panel_size=2,
+            batch_size=4,
+            workers=2,
+            allow_empty=True,
+        )
+        adaptive = cnb_gmgn_v2._AdaptiveControlPanel(
+            discovered,
+            panel_size=2,
+            workers=2,
+        )
+        calls = defaultdict(list)
+
+        def attempt(candidate, round_number):
+            calls[candidate["candidate_id"]].append(round_number)
+            if round_number == 1 and candidate["candidate_id"] in {
+                candidates[1]["candidate_id"],
+                candidates[3]["candidate_id"],
+            }:
+                delay = (
+                    80
+                    if candidate["candidate_id"] == candidates[3]["candidate_id"]
+                    else 120
+                )
+                outcome = {"delay_ms": delay}
+            else:
+                outcome = {"error_category": "tls"}
+            adaptive.observe(candidate, outcome)
+            return outcome
+
+        clock = FakeClock()
+        scheduled = run_measurement_schedule(
+            candidates,
+            attempt,
+            workers=4,
+            clock=clock.now,
+            sleeper=clock.sleep,
+            control_probe=lambda _round: adaptive.probe(
+                lambda candidate: {
+                    "delay_ms": 50
+                    if candidate["candidate_id"] == candidates[3]["candidate_id"]
+                    else 70
+                }
+            ),
+        )
+
+        self.assertEqual(len(scheduled.samples), 80)
+        self.assertTrue(
+            all(rounds == list(range(1, 21)) for rounds in calls.values())
+        )
+        self.assertIsNone(scheduled.control_samples[0]["delay_ms"])
+        self.assertEqual(scheduled.control_samples[0]["error_category"], "other")
+        self.assertTrue(
+            all(sample["delay_ms"] == 50 for sample in scheduled.control_samples[1:])
+        )
+        self.assertEqual(
+            [candidate["candidate_id"] for candidate in adaptive.snapshot()],
+            [candidates[3]["candidate_id"], candidates[1]["candidate_id"]],
+        )
+
+    def test_adaptive_control_replaces_stale_discovery_with_fresh_successes(self) -> None:
+        candidates = [
+            {"candidate_id": f"c1_{index:024x}"} for index in range(3)
+        ]
+        adaptive = cnb_gmgn_v2._AdaptiveControlPanel(
+            candidates[:2],
+            panel_size=2,
+            workers=2,
+        )
+
+        adaptive.observe(candidates[2], {"delay_ms": 80})
+        adaptive.observe(candidates[0], {"delay_ms": 120})
+
+        self.assertEqual(
+            [candidate["candidate_id"] for candidate in adaptive.snapshot()],
+            [candidates[2]["candidate_id"], candidates[0]["candidate_id"]],
+        )
+
     def test_direct_probe_preflight_accepts_waf_control_but_fails_persistent_canary(self) -> None:
         diagnostics = cnb_gmgn_v2._require_direct_probe_preflight(
             control_probe=lambda _round: {"delay_ms": 80},
@@ -1138,6 +1260,23 @@ class GuardedRuntimeTests(unittest.TestCase):
             canary_ids=["canary-a"],
         )
         self.assertEqual(diagnostics["control"]["success_count"], 3)
+
+        deferred = cnb_gmgn_v2._require_direct_probe_preflight(
+            control_probe=lambda _round: {"error_category": "tls"},
+            canary_probe=lambda _canary, _round: {"delay_ms": 50},
+            canary_ids=["canary-a"],
+            require_control_success=False,
+        )
+        self.assertEqual(deferred["control"]["success_count"], 0)
+
+        with self.assertRaisesRegex(
+            cnb_gmgn_v2.CoordinatorError, "control preflight"
+        ):
+            cnb_gmgn_v2._require_direct_probe_preflight(
+                control_probe=lambda _round: {"error_category": "tls"},
+                canary_probe=lambda _canary, _round: {"delay_ms": 50},
+                canary_ids=["canary-a"],
+            )
 
         with self.assertRaisesRegex(
             cnb_gmgn_v2.CoordinatorError, "canary preflight"
