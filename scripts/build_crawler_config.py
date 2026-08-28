@@ -15,6 +15,7 @@ from subscribe.asia import preferred_asia_include_pattern
 
 COMMUNITY_SUBS = [
     "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml",
     "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
     "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
     "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
@@ -29,6 +30,12 @@ COMMUNITY_SUBS = [
     "https://raw.githubusercontent.com/Barabama/FreeNodes/refs/heads/feat/ai-crawler-v2/nodes/merged.yaml",
     "https://raw.githubusercontent.com/Leon406/SubCrawler/master/sub/share/v2",
     "https://raw.githubusercontent.com/snakem982/proxypool/main/source/clash-meta-2.yaml",
+]
+# Public node-pool URLs curated by hwanz/SSR-V2ray-Trojan-vpn. Trial-airport
+# referral pages and client-app links from that README are intentionally omitted.
+HWANZ_NODE_POOLS = [
+    "https://links.bocchi2b.top/clash",
+    "https://raw.githubusercontent.com/Misaka-blog/chromego_merge/main/sub/merged_proxies_new.yaml",
 ]
 LINK_PATTERN = (
     r"|(?:vmess|trojan|ss|ssr|snell|hysteria2|vless|hysteria|tuic|anytls)://"
@@ -197,6 +204,7 @@ def build_config() -> dict:
             "freev2rayssr",
             "proxy_mtm",
             "proxystore11",
+            "yangmaoshare",
         )
     }
     twitter_users = {
@@ -248,6 +256,23 @@ def build_config() -> dict:
             if rotating_subscriptions
             else []
         )
+        + [
+            {
+                "name": "community-hwanz-pools",
+                "sub": list(HWANZ_NODE_POOLS),
+                "enable": True,
+                "rename": "",
+                "include": "",
+                "exclude": "",
+                "push_to": ["crawler"],
+                "ignorede": True,
+                "liveness": True,
+                "publish_derivatives": True,
+                "candidate_source_role": "fixed",
+                "rate": 20.0,
+                "secure": False,
+            }
+        ]
         + asia_domains()
         + external_asia_domains(),
         "crawl": {

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 from scripts import build_crawler_config
+from scripts.build_crawler_config import COMMUNITY_SUBS, HWANZ_NODE_POOLS
 from scripts.asia_source_registry import (
     AsiaSourceError,
     ENDPOINT_MAX_VARIANTS,
@@ -159,6 +160,31 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertEqual(
             config["crawl"]["config"]["candidate_source_role"], "dynamic"
         )
+        self.assertEqual(
+            domains["community-hwanz-pools"]["candidate_source_role"], "fixed"
+        )
+        self.assertEqual(domains["community-hwanz-pools"]["sub"], list(HWANZ_NODE_POOLS))
+        self.assertIn("yangmaoshare", config["crawl"]["telegram"]["users"])
+
+    def test_ermaozi_and_hwanz_public_pools_are_wired_without_referral_airports(self) -> None:
+        self.assertIn(
+            "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+            COMMUNITY_SUBS,
+        )
+        self.assertIn(
+            "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml",
+            COMMUNITY_SUBS,
+        )
+        self.assertEqual(
+            HWANZ_NODE_POOLS,
+            [
+                "https://links.bocchi2b.top/clash",
+                "https://raw.githubusercontent.com/Misaka-blog/chromego_merge/main/sub/merged_proxies_new.yaml",
+            ],
+        )
+        joined = "\n".join(COMMUNITY_SUBS + HWANZ_NODE_POOLS)
+        self.assertNotIn("jichangtuijian.com", joined)
+        self.assertNotIn("register?code=", joined)
 
     def test_task_dedup_keeps_registered_source_policy(self) -> None:
         tasks = [
