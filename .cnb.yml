@@ -1231,11 +1231,7 @@ main:
 "cnb-gmgn-v2-*":
   tag_push:
     - *gmgn_v2_shadow
-    - *gmgn_v2_shadow
-    - *gmgn_v2_shadow
 
 "cnb-runner-capability-*":
   tag_push:
-    - *cnb_runner_capabilities
-    - *cnb_runner_capabilities
     - *cnb_runner_capabilities

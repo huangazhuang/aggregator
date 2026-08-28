@@ -106,7 +106,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
     def test_v2_trigger_uses_guarded_anchor_and_cas_processed_registry(self) -> None:
         pipeline = self.cnb["main"]["web_trigger_gmgn_v2_shadow"][0]
         tag_lanes = self.cnb["cnb-gmgn-v2-*"]["tag_push"]
-        self.assertEqual(len(tag_lanes), 3)
+        self.assertEqual(len(tag_lanes), 1)
         self.assertTrue(all(lane == pipeline for lane in tag_lanes))
         serialized = json.dumps(pipeline, ensure_ascii=False)
         self.assertIn("clash-cn-gmgn-v2-shadow", serialized)
@@ -267,7 +267,7 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
 
         pipeline = self.cnb["main"]["web_trigger_cnb_runner_capabilities"][0]
         diagnostic_lanes = self.cnb["cnb-runner-capability-*"]["tag_push"]
-        self.assertEqual(len(diagnostic_lanes), 3)
+        self.assertEqual(len(diagnostic_lanes), 1)
         self.assertTrue(all(lane == pipeline for lane in diagnostic_lanes))
         self.assertEqual(
             pipeline["lock"],
@@ -423,34 +423,6 @@ class GmgnV2WorkflowContractTests(unittest.TestCase):
                     "cnb-gmgn-v2-*",
                     "tag_push",
                     0,
-                    5,
-                    "Redact measurements and exit identity offline",
-                ),
-                (
-                    "cnb-gmgn-v2-*",
-                    "tag_push",
-                    1,
-                    3,
-                    "Prepare the offline identity-bound V2 manifest",
-                ),
-                (
-                    "cnb-gmgn-v2-*",
-                    "tag_push",
-                    1,
-                    5,
-                    "Redact measurements and exit identity offline",
-                ),
-                (
-                    "cnb-gmgn-v2-*",
-                    "tag_push",
-                    2,
-                    3,
-                    "Prepare the offline identity-bound V2 manifest",
-                ),
-                (
-                    "cnb-gmgn-v2-*",
-                    "tag_push",
-                    2,
                     5,
                     "Redact measurements and exit identity offline",
                 ),
