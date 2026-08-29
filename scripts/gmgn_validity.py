@@ -131,6 +131,8 @@ ROUND_TREND_FIELDS = frozenset(
         "error_counts",
     }
 )
+CONTROL_MIN_SUCCESS_COUNT = 16
+CONTROL_MAX_CONSECUTIVE_FAILURES = 4
 CONTROL_FIELDS = frozenset(
     {"attempt_count", "success_count", "failure_count", "max_consecutive_failures", "median_delay_ms"}
 )
@@ -474,9 +476,12 @@ def validate_run(
     canary_by_id: dict[str, list[Mapping[str, Any]]] = {}
     for fragment in normalized:
         control = fragment["control"]
-        if int(control["attempt_count"]) != TOTAL_ROUNDS or int(control["success_count"]) < 18:
+        if (
+            int(control["attempt_count"]) != TOTAL_ROUNDS
+            or int(control["success_count"]) < CONTROL_MIN_SUCCESS_COUNT
+        ):
             reasons.add("control_below_threshold")
-        if int(control["max_consecutive_failures"]) >= 3:
+        if int(control["max_consecutive_failures"]) >= CONTROL_MAX_CONSECUTIVE_FAILURES:
             reasons.add("control_consecutive_failures")
         for canary in fragment["canaries"]:
             canary_by_id.setdefault(str(canary["canary_id"]), []).append(canary)
@@ -577,6 +582,8 @@ def accepted_measurement(
 __all__ = [
     "CANARY_FIELDS",
     "CONTROL_FIELDS",
+    "CONTROL_MAX_CONSECUTIVE_FAILURES",
+    "CONTROL_MIN_SUCCESS_COUNT",
     "EGRESS_POINT_FIELDS",
     "REDACTED_FRAGMENT_FIELDS",
     "REDACTED_RESULT_FIELDS",

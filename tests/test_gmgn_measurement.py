@@ -476,8 +476,8 @@ class ValidityTests(unittest.TestCase):
         fragments[0]["results"][0]["observation_span_seconds"] = 899.999
         cases.append((fragments, "observation_window_short"))
         fragments = valid_fragments(manifest, shards)
-        fragments[0]["control"]["success_count"] = 17
-        fragments[0]["control"]["failure_count"] = 3
+        fragments[0]["control"]["success_count"] = 15
+        fragments[0]["control"]["failure_count"] = 5
         cases.append((fragments, "control_below_threshold"))
         fragments = valid_fragments(manifest, shards)
         fragments[0]["canaries"][0]["success_count"] = 15
@@ -542,7 +542,7 @@ class ValidityTests(unittest.TestCase):
         manifest, shards = manifest_and_shards()
         fragments = valid_fragments(manifest, shards)
         fragments[0]["control"].update(
-            {"success_count": 18, "failure_count": 2, "max_consecutive_failures": 2}
+            {"success_count": 16, "failure_count": 4, "max_consecutive_failures": 3}
         )
         fragments[0]["canaries"][0].update(
             {"success_count": 16, "failure_count": 4, "max_consecutive_failures": 4}
@@ -552,7 +552,13 @@ class ValidityTests(unittest.TestCase):
 
         fragments = valid_fragments(manifest, shards)
         fragments[0]["control"].update(
-            {"success_count": 17, "failure_count": 3, "max_consecutive_failures": 3}
+            {"success_count": 15, "failure_count": 5, "max_consecutive_failures": 2}
+        )
+        self.assertIn("control_below_threshold", validate_run(manifest, fragments)["reasons"])
+
+        fragments = valid_fragments(manifest, shards)
+        fragments[0]["control"].update(
+            {"success_count": 16, "failure_count": 4, "max_consecutive_failures": 4}
         )
         self.assertIn("control_consecutive_failures", validate_run(manifest, fragments)["reasons"])
 
