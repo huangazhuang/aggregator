@@ -1,9 +1,0 @@
-{"file":".trellis/spec/aggregator/pipeline/index.md","reason":"复核 GMGN pipeline 质量门禁"}
-{"file":".trellis/spec/aggregator/python-and-data-contracts.md","reason":"检查严格字段、20轮/四片/计数守恒与公开私密边界"}
-{"file":".trellis/spec/aggregator/testing-guidelines.md","reason":"检查 fake-clock、精确阈值、组件和完整 unittest 证据"}
-{"file":".trellis/spec/aggregator/ci-and-release-safety.md","reason":"检查无效运行不发布、不泄密、runtime/hash 和失败关闭"}
-{"file":".trellis/spec/aggregator/gmgn-v2-contract.md","reason":"检查 manifest/fragment 关联、900秒和 valid_run 拒绝矩阵"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"验证全局错误/control/canary 数据确实到达 valid-run consumer"}
-{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/gmgn-pipeline-audit.md","reason":"按审计缺口复核出口、事故门禁、错误分类和并发可靠性"}
-{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/tests-ops-audit.md","reason":"复核20轮真实调用、900秒、四片组件与 workflow 证据"}
-{"file":".trellis/tasks/08-11-gmgn-asia-selection-v2/research/implementation-proposal.md","reason":"复核 C2 完成门禁和 C3/C4/C5 输入边界"}
