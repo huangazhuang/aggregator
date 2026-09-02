@@ -594,7 +594,7 @@ main:
         # finishes in minutes instead of hours.  "0" means measure everything.
         # A run with a non-zero value never publishes and never counts as one
         # of the three valid rollout runs.
-        V2_MAX_CANDIDATES: "0"
+        V2_MAX_CANDIDATES: "400"
         V2_DOCKER_CLI_VERSION: "27.5.1"
         V2_DOCKER_CLI_SHA256: 4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640
         V2_DOCKER_CLI_DIR: .cnb-runtime/gmgn-v2/docker-cli
