@@ -146,3 +146,13 @@ clash/local-check.yaml
 /public-cn/
 /public-cn-shadow/
 /public-cn-gmgn/
+
+# Generated crawler config (built from clash.yaml by build_crawler_config.py)
+subscribe/config/clash-verge-crawler.generated.json
+
+# Playwright MCP server state
+.playwright-mcp/
+
+# GFW probe Flask app and aggregated proxy snapshots — may contain credentials
+probe/app.py
+subconverter/*.yaml
