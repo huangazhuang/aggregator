@@ -62,6 +62,7 @@ def measurement(
     first: int | None = None,
     second: int | None = None,
     p90: int = 800,
+    baseline_p90: int = 300,
 ) -> dict:
     response = within if response is None else response
     first = min(within, 10) if first is None else first
@@ -84,6 +85,18 @@ def measurement(
         "five_round_within_1000_counts": blocks,
         "observation_span_seconds": 900.0,
         "error_counts": {
+            category: (20 - response if category == "client_timeout" else 0)
+            for category in ERROR_CATEGORIES
+        },
+        "baseline_measured": True,
+        "baseline_response_count": response,
+        "baseline_no_result_count": 20 - response,
+        "baseline_min_delay_ms": 60 if response else None,
+        "baseline_median_delay_ms": 150.0 if response else None,
+        "baseline_p90_delay_ms": float(baseline_p90) if response else None,
+        "baseline_max_delay_ms": 400 if response else None,
+        "baseline_jitter_ms": 10.0 if response else None,
+        "baseline_error_counts": {
             category: (20 - response if category == "client_timeout" else 0)
             for category in ERROR_CATEGORIES
         },

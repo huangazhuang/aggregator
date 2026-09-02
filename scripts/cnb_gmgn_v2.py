@@ -64,6 +64,7 @@ from scripts.candidate_snapshot import (
 )
 from scripts.gmgn_history import empty_history, reduce_history, validate_history
 from scripts.gmgn_measurement import (
+    BASELINE_TARGET_URL,
     ERROR_CATEGORIES,
     MINIMUM_OBSERVATION_WINDOW_SECONDS,
     NETWORK_GUARD_POLICY_VERSION,
@@ -923,6 +924,7 @@ def _prepare(args: argparse.Namespace) -> int:
         network_guard_policy_version=NETWORK_GUARD_POLICY_VERSION,
         controller_secret_sha256s=secret_hashes,
         workers_per_shard=args.workers,
+        diagnostic_sample_size=(int(getattr(args, "max_candidates", 0)) or None),
     )
     shards = _bind_shard_control_states(raw_shards, snapshot.ordered_candidates)
     root = Path(args.output_dir).resolve()
@@ -1346,6 +1348,7 @@ def _runtime_hosts(
     auxiliary_targets: Mapping[str, Mapping[str, Any]],
     *,
     target_url: str,
+    baseline_target_url: str = BASELINE_TARGET_URL,
 ) -> dict[str, str]:
     """Build a complete hostname pin set for the DNS-less guarded namespace."""
 
@@ -1376,6 +1379,7 @@ def _runtime_hosts(
 
     required_urls = [
         target_url,
+        baseline_target_url,
         f"https://{DIRECT_TARGETS[REGION_PROVIDER_TARGET]['server']}"
         f"{DIRECT_TARGETS[REGION_PROVIDER_TARGET]['path']}",
     ]
@@ -2614,6 +2618,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
         pinned,
         auxiliary,
         target_url=str(manifest["target_url"]),
+        baseline_target_url=str(manifest["baseline_target_url"]),
     )
     runtime = {
         "mixed-port": int(shard["mixed_port"]),
@@ -2683,6 +2688,28 @@ def _probe_inside(args: argparse.Namespace) -> int:
                 str(manifest["target_url"]),
                 int(manifest["request_timeout_ms"]),
                 expected_status=int(manifest["expected_status"]),
+            )
+
+        def baseline_attempt(
+            candidate: Mapping[str, Any], _round: int
+        ) -> dict[str, Any]:
+            """Probe a cheap 204 endpoint through the same proxy.
+
+            Paired with ``attempt`` inside one round so the two latencies can be
+            compared directly: the difference is target-side cost, not node
+            quality.
+            """
+
+            candidate_id = str(candidate["candidate_id"])
+            if candidate_id in dns_failed_ids:
+                return {"error_category": "dns"}
+            if candidate_id in ipv6_unavailable_ids:
+                return {"error_category": "connect"}
+            return browser_probe.probe(
+                candidate,
+                str(manifest["baseline_target_url"]),
+                int(manifest["request_timeout_ms"]),
+                expected_status=int(manifest["baseline_expected_status"]),
             )
 
         control_target = _operational_target("control-gmgn-v1", auxiliary)
@@ -2822,6 +2849,7 @@ def _probe_inside(args: argparse.Namespace) -> int:
         scheduled = run_measurement_schedule(
             candidates,
             measurement_attempt,
+            baseline_attempt=baseline_attempt,
             workers=int(manifest["workers_per_shard"]),
             total_rounds=int(manifest["total_rounds"]),
             minimum_observation_window_seconds=float(
@@ -3086,6 +3114,61 @@ def _load_prepared_snapshot(path: str | Path, manifest: Mapping[str, Any]) -> Pr
     )
 
 
+def _diagnostic_latency_summary(
+    manifest: Mapping[str, Any], fragments: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Summarise a diagnostic run's latency split for calibration.
+
+    The point of a diagnostic run is to separate two questions that a single
+    gmgn.ai latency cannot answer: is the node slow, or is the target slow?
+    ``target_*`` describes the gmgn.ai request; ``baseline_*`` describes a bare
+    204 through the same proxy in the same round.
+    """
+
+    target_medians: list[float] = []
+    baseline_medians: list[float] = []
+    within = responded = measured = 0
+    baseline_responded = 0
+    errors: dict[str, int] = {category: 0 for category in ERROR_CATEGORIES}
+    for fragment in fragments:
+        for result in fragment["results"]:
+            measured += 1
+            within += int(result["within_1000_count"])
+            responded += int(result["response_count"])
+            baseline_responded += int(result["baseline_response_count"])
+            if result["median_delay_ms"] is not None:
+                target_medians.append(float(result["median_delay_ms"]))
+            if result["baseline_median_delay_ms"] is not None:
+                baseline_medians.append(float(result["baseline_median_delay_ms"]))
+            for category in ERROR_CATEGORIES:
+                errors[category] += int(result["error_counts"][category])
+
+    def distribution(values: list[float]) -> dict[str, Any]:
+        if not values:
+            return {"count": 0, "p50": None, "p90": None, "min": None}
+        ordered = sorted(values)
+        return {
+            "count": len(ordered),
+            "p50": round(ordered[len(ordered) // 2], 1),
+            "p90": round(ordered[min(int(len(ordered) * 0.9), len(ordered) - 1)], 1),
+            "min": round(ordered[0], 1),
+        }
+
+    attempts = measured * int(manifest["total_rounds"]) or 1
+    return {
+        "run_id": manifest["run_id"],
+        "measured_candidates": measured,
+        "snapshot_candidates": manifest["full_candidate_count"],
+        "target_median_ms": distribution(target_medians),
+        "baseline_median_ms": distribution(baseline_medians),
+        "target_response_rate": round(responded / attempts, 4),
+        "baseline_response_rate": round(baseline_responded / attempts, 4),
+        "target_within_1000_rate": round(within / attempts, 4),
+        "nodes_with_baseline_under_1000": sum(1 for value in baseline_medians if value <= 1000),
+        "error_counts": errors,
+    }
+
+
 def _remote_previous(remote: str, work_dir: Path) -> tuple[PreviousState, dict[str, Any] | None, dict[str, Any] | None]:
     ref = f"refs/heads/{AUTHORITATIVE_BRANCH}"
     completed = subprocess.run(
@@ -3245,6 +3328,28 @@ def _finalize(args: argparse.Namespace) -> int:
             + f"; control summaries: {controls}"
         )
     accepted = accepted_measurement(manifest, fragments)
+    if manifest["diagnostic_sample_size"] is not None:
+        # A diagnostic run only measured a subset of the snapshot.  Its numbers
+        # are useful for calibration but must never reach the published bundle
+        # or count towards a valid rollout run.  Stop before any publication
+        # step, but exit cleanly so the measured fragments survive as artifacts.
+        _write_bytes(Path(args.noop_file), b"diagnostic\n")
+        print(
+            "GMGN V2 diagnostic run: "
+            + json.dumps(
+                _diagnostic_latency_summary(manifest, fragments),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+        print(
+            f"Diagnostic run measured {manifest['candidate_count']}"
+            f"/{manifest['full_candidate_count']} candidates; publication skipped.",
+            flush=True,
+        )
+        return 0
     work_dir = Path(args.work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     previous, previous_history, previous_run_index = _remote_previous(args.remote, work_dir)
@@ -3470,6 +3575,15 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--trigger", required=True)
     prepare.add_argument("--output-dir", required=True)
     prepare.add_argument("--workers", type=int, default=16)
+    prepare.add_argument(
+        "--max-candidates",
+        type=int,
+        default=0,
+        help=(
+            "Measure only a deterministic subset of the snapshot (0 = all). "
+            "Marks the run as diagnostic; such runs can never publish."
+        ),
+    )
 
     probe = commands.add_parser("probe")
     probe.add_argument("--manifest", required=True)

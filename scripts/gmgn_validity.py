@@ -119,6 +119,15 @@ REDACTED_RESULT_FIELDS = frozenset(
         "five_round_within_1000_counts",
         "observation_span_seconds",
         "error_counts",
+        "baseline_measured",
+        "baseline_response_count",
+        "baseline_no_result_count",
+        "baseline_min_delay_ms",
+        "baseline_median_delay_ms",
+        "baseline_p90_delay_ms",
+        "baseline_max_delay_ms",
+        "baseline_jitter_ms",
+        "baseline_error_counts",
     }
 )
 ROUND_TREND_FIELDS = frozenset(
@@ -318,6 +327,59 @@ def validate_redacted_fragment(
             jitter = float(latency_fields["jitter_ms"])
             if minimum <= 0 or not minimum <= median <= p90 <= maximum or jitter < 0:
                 raise MeasurementError("fragment result latency accounting mismatch")
+        baseline_measured = result.get("baseline_measured")
+        if not isinstance(baseline_measured, bool):
+            raise MeasurementError("fragment result baseline flag is invalid")
+        baseline_response = _non_negative_int(
+            result.get("baseline_response_count"), "baseline_response_count"
+        )
+        baseline_no_result = _non_negative_int(
+            result.get("baseline_no_result_count"), "baseline_no_result_count"
+        )
+        baseline_errors = result.get("baseline_error_counts")
+        if not isinstance(baseline_errors, Mapping) or set(baseline_errors) != set(ERROR_CATEGORIES):
+            raise MeasurementError("fragment result baseline error categories mismatch")
+        baseline_error_total = sum(
+            _non_negative_int(baseline_errors[name], name) for name in ERROR_CATEGORIES
+        )
+        baseline_latency_fields = {
+            name: _finite_or_none(result.get(name), name)
+            for name in (
+                "baseline_min_delay_ms",
+                "baseline_median_delay_ms",
+                "baseline_p90_delay_ms",
+                "baseline_max_delay_ms",
+                "baseline_jitter_ms",
+            )
+        }
+        if not baseline_measured:
+            # An unmeasured baseline must be fully null, never a silent zero.
+            if baseline_response or baseline_no_result or baseline_error_total:
+                raise MeasurementError("unmeasured baseline must not carry counts")
+            if any(metric is not None for metric in baseline_latency_fields.values()):
+                raise MeasurementError("unmeasured baseline must not carry latency")
+        else:
+            if baseline_response + baseline_no_result != attempts:
+                raise MeasurementError("fragment result baseline accounting mismatch")
+            if baseline_error_total != baseline_no_result:
+                raise MeasurementError("fragment result baseline error accounting mismatch")
+            if baseline_response == 0:
+                if any(metric is not None for metric in baseline_latency_fields.values()):
+                    raise MeasurementError("fragment result baseline latency accounting mismatch")
+            else:
+                if any(metric is None for metric in baseline_latency_fields.values()):
+                    raise MeasurementError("fragment result baseline latency accounting mismatch")
+                base_min = float(baseline_latency_fields["baseline_min_delay_ms"])
+                base_median = float(baseline_latency_fields["baseline_median_delay_ms"])
+                base_p90 = float(baseline_latency_fields["baseline_p90_delay_ms"])
+                base_max = float(baseline_latency_fields["baseline_max_delay_ms"])
+                base_jitter = float(baseline_latency_fields["baseline_jitter_ms"])
+                if (
+                    base_min <= 0
+                    or not base_min <= base_median <= base_p90 <= base_max
+                    or base_jitter < 0
+                ):
+                    raise MeasurementError("fragment result baseline latency accounting mismatch")
         result_totals["within"] += within
         result_totals["slow"] += slow
         result_totals["no_result"] += no_result

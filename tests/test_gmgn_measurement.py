@@ -25,6 +25,7 @@ from scripts.gmgn_measurement import (
     run_measurement_schedule,
     summarize_candidate_samples,
     summarize_control,
+    validate_manifest_v3,
     write_private_fragment,
 )
 from scripts.candidate_contract import CANDIDATE_METADATA_SCHEMA_VERSION
@@ -142,7 +143,13 @@ def zero_errors() -> dict:
     return {category: 0 for category in ERROR_CATEGORIES}
 
 
-def result_summary(candidate_id_value: str, *, response_count: int = 20, span: float = 900.0) -> dict:
+def result_summary(
+    candidate_id_value: str,
+    *,
+    response_count: int = 20,
+    span: float = 900.0,
+    baseline_measured: bool = True,
+) -> dict:
     within = response_count
     no_result = 20 - response_count
     errors = zero_errors()
@@ -150,6 +157,9 @@ def result_summary(candidate_id_value: str, *, response_count: int = 20, span: f
     blocks = [within // 4] * 4
     for index in range(within - sum(blocks)):
         blocks[index] += 1
+    baseline_errors = zero_errors()
+    if baseline_measured:
+        baseline_errors["client_timeout"] = no_result
     return {
         "candidate_id": candidate_id_value,
         "attempt_count": 20,
@@ -167,6 +177,15 @@ def result_summary(candidate_id_value: str, *, response_count: int = 20, span: f
         "five_round_within_1000_counts": blocks,
         "observation_span_seconds": span,
         "error_counts": errors,
+        "baseline_measured": baseline_measured,
+        "baseline_response_count": response_count if baseline_measured else 0,
+        "baseline_no_result_count": no_result if baseline_measured else 0,
+        "baseline_min_delay_ms": 40 if (baseline_measured and response_count) else None,
+        "baseline_median_delay_ms": 40.0 if (baseline_measured and response_count) else None,
+        "baseline_p90_delay_ms": 40.0 if (baseline_measured and response_count) else None,
+        "baseline_max_delay_ms": 40 if (baseline_measured and response_count) else None,
+        "baseline_jitter_ms": 0.0 if (baseline_measured and response_count) else None,
+        "baseline_error_counts": baseline_errors,
     }
 
 
@@ -198,7 +217,7 @@ def valid_fragments(manifest: dict, shards: list[list[dict]], *, response_count:
         fragments.append(
             {
                 "kind": "cnb-gmgn-redacted-fragment",
-                "schema_version": 3,
+                "schema_version": 4,
                 "manifest_sha256": manifest_hash,
                 "run_id": manifest["run_id"],
                 "source_sha256": manifest["source_sha256"],
@@ -270,6 +289,71 @@ def valid_fragments(manifest: dict, shards: list[list[dict]], *, response_count:
 
 
 class PartitionAndManifestTests(unittest.TestCase):
+    def test_diagnostic_sample_is_deterministic_and_records_the_full_count(self):
+        def build(size):
+            return build_manifest_v3(
+                fake_snapshot(64),
+                run_id="gmgnv2_test_run_0001",
+                created_at="2026-08-11T00:00:00Z",
+                trigger_type="manual",
+                attempt_id="1" * 24,
+                retry_of=None,
+                source_run_at="2026-08-11T00:00:00Z",
+                source_sha256="d" * 64,
+                canary_set=["canary-a"],
+                python_version="3.12.0",
+                pyyaml_version="6.0.3",
+                mihomo_version="test-mihomo",
+                mihomo_sha256="e" * 64,
+                resolver_policy_version=RESOLVER_POLICY_VERSION,
+                network_guard_policy_version=NETWORK_GUARD_POLICY_VERSION,
+                controller_secret_sha256s=[f"{index + 1:064x}" for index in range(4)],
+                diagnostic_sample_size=size,
+            )
+
+        manifest, shards = build(12)
+        self.assertEqual(manifest["candidate_count"], 12)
+        self.assertEqual(manifest["full_candidate_count"], 64)
+        self.assertEqual(manifest["diagnostic_sample_size"], 12)
+        self.assertEqual(sum(len(shard) for shard in shards), 12)
+        # The metadata binding still describes the whole snapshot.
+        self.assertEqual(manifest["candidate_metadata_count"], 64)
+
+        repeat, _ = build(12)
+        self.assertEqual(
+            [item["candidate_ids_sha256"] for item in manifest["shards"]],
+            [item["candidate_ids_sha256"] for item in repeat["shards"]],
+        )
+        validate_manifest_v3(manifest)
+
+        full, _ = build(None)
+        self.assertEqual(full["candidate_count"], 64)
+        self.assertIsNone(full["diagnostic_sample_size"])
+        validate_manifest_v3(full)
+
+        for bad in (3, 65):
+            with self.assertRaises(MeasurementError):
+                build(bad)
+
+    def test_manifest_rejects_a_sample_size_that_disagrees_with_candidate_count(self):
+        manifest, _ = manifest_and_shards()
+        # Declared as a 2-candidate sample while 4 candidates were measured.
+        broken = copy.deepcopy(manifest)
+        broken["diagnostic_sample_size"] = 2
+        with self.assertRaises(MeasurementError):
+            validate_manifest_v3(broken)
+        # A sample cannot be larger than the snapshot it came from.
+        broken = copy.deepcopy(manifest)
+        broken["diagnostic_sample_size"] = 8
+        broken["candidate_count"] = 8
+        with self.assertRaises(MeasurementError):
+            validate_manifest_v3(broken)
+        # A full run must cover every candidate in the snapshot.
+        broken = copy.deepcopy(manifest)
+        broken["candidate_count"] = broken["full_candidate_count"] - 1
+        with self.assertRaises(MeasurementError):
+            validate_manifest_v3(broken)
+
     def test_partition_is_stable_complete_and_balanced_for_required_sizes(self):
         for count in (4, 5, 2260, 5000):
             original = [candidate(index) for index in range(count)]
@@ -286,7 +370,7 @@ class PartitionAndManifestTests(unittest.TestCase):
 
     def test_manifest_v3_binds_identity_snapshot_runtime_and_four_shards(self):
         manifest, shards = manifest_and_shards(5)
-        self.assertEqual(manifest["schema_version"], 3)
+        self.assertEqual(manifest["schema_version"], 4)
         self.assertEqual(manifest["candidate_count"], 5)
         self.assertEqual([len(shard) for shard in shards], [2, 1, 1, 1])
         self.assertEqual(manifest["shard_stagger_seconds"], [0, 15, 30, 45])
@@ -388,6 +472,67 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(summary["error_counts"]["client_timeout"], 1)
             self.assertEqual(summary["error_counts"]["target_429"], 1)
 
+    def test_paired_baseline_probe_is_recorded_and_summarized_per_candidate(self):
+        clock = FakeClock()
+        baseline_rounds = defaultdict(list)
+
+        def attempt(_item: dict, round_number: int) -> dict:
+            # The target is uniformly slow: gmgn.ai pays Cloudflare + document cost.
+            if round_number == 5:
+                return {"target_status": 403}
+            return {"delay_ms": 1400}
+
+        def baseline(item: dict, round_number: int) -> dict:
+            baseline_rounds[item["candidate_id"]].append(round_number)
+            if round_number == 7:
+                return {"error": "client timeout"}
+            return {"delay_ms": 200}
+
+        run = run_measurement_schedule(
+            [candidate(0), candidate(1)],
+            attempt,
+            baseline_attempt=baseline,
+            workers=2,
+            clock=clock.now,
+            sleeper=clock.sleep,
+        )
+        self.assertTrue(all(rounds == list(range(1, 21)) for rounds in baseline_rounds.values()))
+        by_candidate = defaultdict(list)
+        for sample in run.samples:
+            by_candidate[sample["candidate_id"]].append(sample)
+        for samples in by_candidate.values():
+            summary = summarize_candidate_samples(samples)
+            # Target: 19 responses, all above the 1000 ms bar, one 403.
+            self.assertEqual(summary["within_1000_count"], 0)
+            self.assertEqual(summary["slow_response_count"], 19)
+            self.assertEqual(summary["error_counts"]["target_403"], 1)
+            # Baseline: the same nodes are fast once target cost is removed.
+            self.assertTrue(summary["baseline_measured"])
+            self.assertEqual(summary["baseline_response_count"], 19)
+            self.assertEqual(summary["baseline_no_result_count"], 1)
+            self.assertEqual(summary["baseline_median_delay_ms"], 200.0)
+            self.assertEqual(summary["baseline_error_counts"]["client_timeout"], 1)
+            self.assertLess(summary["baseline_p90_delay_ms"], summary["p90_delay_ms"])
+
+    def test_missing_baseline_probe_stays_null_instead_of_counting_failures(self):
+        clock = FakeClock()
+        run = run_measurement_schedule(
+            [candidate(0)],
+            lambda _item, _round: {"delay_ms": 100},
+            workers=1,
+            clock=clock.now,
+            sleeper=clock.sleep,
+        )
+        for sample in run.samples:
+            self.assertIsNone(sample["baseline_delay_ms"])
+            self.assertIsNone(sample["baseline_error_category"])
+        summary = summarize_candidate_samples(list(run.samples))
+        self.assertFalse(summary["baseline_measured"])
+        self.assertEqual(summary["baseline_response_count"], 0)
+        self.assertEqual(summary["baseline_no_result_count"], 0)
+        self.assertIsNone(summary["baseline_median_delay_ms"])
+        self.assertEqual(sum(summary["baseline_error_counts"].values()), 0)
+
     def test_candidates_can_run_concurrently_but_rounds_have_a_barrier(self):
         active = 0
         maximum = 0
@@ -468,6 +613,64 @@ class ValidityTests(unittest.TestCase):
         self.assertTrue(result["valid_run"], result)
         accepted = accepted_measurement(manifest, fragments)
         self.assertEqual(accepted["run_id"], manifest["run_id"])
+
+    def test_unmeasured_baseline_must_not_carry_counts_or_latency(self):
+        manifest, shards = manifest_and_shards()
+        # A fragment that never ran the baseline probe is accepted, but only if
+        # it stays fully null: "not measured" must never look like "measured
+        # and failed", which would silently penalise the node when ranking.
+        fragments = valid_fragments(manifest, shards)
+        for fragment in fragments:
+            for result in fragment["results"]:
+                result.update(
+                    {
+                        "baseline_measured": False,
+                        "baseline_response_count": 0,
+                        "baseline_no_result_count": 0,
+                        "baseline_min_delay_ms": None,
+                        "baseline_median_delay_ms": None,
+                        "baseline_p90_delay_ms": None,
+                        "baseline_max_delay_ms": None,
+                        "baseline_jitter_ms": None,
+                        "baseline_error_counts": zero_errors(),
+                    }
+                )
+        self.assertTrue(validate_run(manifest, fragments)["valid_run"])
+
+        for field, value in (
+            ("baseline_no_result_count", 20),
+            ("baseline_response_count", 20),
+            ("baseline_median_delay_ms", 200.0),
+        ):
+            broken = valid_fragments(manifest, shards)
+            for fragment in broken:
+                for result in fragment["results"]:
+                    result.update(
+                        {
+                            "baseline_measured": False,
+                            "baseline_response_count": 0,
+                            "baseline_no_result_count": 0,
+                            "baseline_min_delay_ms": None,
+                            "baseline_median_delay_ms": None,
+                            "baseline_p90_delay_ms": None,
+                            "baseline_max_delay_ms": None,
+                            "baseline_jitter_ms": None,
+                            "baseline_error_counts": zero_errors(),
+                        }
+                    )
+                    result[field] = value
+            outcome = validate_run(manifest, broken)
+            self.assertFalse(outcome["valid_run"], field)
+            self.assertIn("fragment_contract_mismatch", outcome["reasons"])
+
+    def test_measured_baseline_accounting_must_balance(self):
+        manifest, shards = manifest_and_shards()
+        fragments = valid_fragments(manifest, shards)
+        # 20 attempts, 20 responses recorded, but a stray error count.
+        fragments[0]["results"][0]["baseline_error_counts"]["dns"] = 1
+        outcome = validate_run(manifest, fragments)
+        self.assertFalse(outcome["valid_run"])
+        self.assertIn("fragment_contract_mismatch", outcome["reasons"])
 
     def test_short_window_control_canary_egress_and_incident_fail_closed(self):
         manifest, shards = manifest_and_shards()

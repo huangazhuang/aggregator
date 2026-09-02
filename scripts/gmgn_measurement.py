@@ -29,11 +29,11 @@ from scripts.proxy_identity import validate_public_id
 
 
 MANIFEST_KIND = "cnb-gmgn-shadow-manifest"
-MANIFEST_SCHEMA_VERSION = 3
+MANIFEST_SCHEMA_VERSION = 4
 PRIVATE_FRAGMENT_KIND = "cnb-gmgn-private-fragment"
-PRIVATE_FRAGMENT_SCHEMA_VERSION = 2
+PRIVATE_FRAGMENT_SCHEMA_VERSION = 3
 REDACTED_FRAGMENT_KIND = "cnb-gmgn-redacted-fragment"
-REDACTED_FRAGMENT_SCHEMA_VERSION = 3
+REDACTED_FRAGMENT_SCHEMA_VERSION = 4
 VALIDITY_RESULT_KIND = "cnb-gmgn-validity-result"
 VALIDITY_RESULT_SCHEMA_VERSION = 1
 
@@ -41,13 +41,20 @@ TOTAL_ROUNDS = 20
 SHARD_COUNT = 4
 REQUEST_TIMEOUT_MS = 3000
 QUALIFIED_DELAY_MS = 1000
+# Every round also probes a cheap 204 endpoint through the same proxy, right
+# after the target request.  ``gmgn.ai/`` is a Cloudflare-fronted SPA document
+# with bot mitigation, so its latency mixes node quality with target-side cost
+# and cannot rank nodes fairly on its own.  The paired baseline isolates the
+# node's own network quality; the target sample keeps measuring real usability.
+BASELINE_TARGET_URL = "https://cp.cloudflare.com/generate_204"
+BASELINE_EXPECTED_STATUS = 204
 MINIMUM_OBSERVATION_WINDOW_SECONDS = 900.0
 DEFAULT_WORKERS = 16
 SHARD_STAGGER_SECONDS = (0, 15, 30, 45)
 SHARD_CONTROLLER_PORTS = (19090, 19091, 19092, 19093)
 SHARD_MIXED_PORTS = (17890, 17891, 17892, 17893)
 SCHEDULER_POLICY_VERSION = "gmgn-scheduler-v1"
-VALIDITY_POLICY_VERSION = "gmgn-validity-v10"
+VALIDITY_POLICY_VERSION = "gmgn-validity-v11"
 CANARY_POLICY_VERSION = "gmgn-canary-v5"
 RESOLVER_POLICY_VERSION = "gmgn-resolver-v4"
 NETWORK_GUARD_POLICY_VERSION = "gmgn-network-guard-v3"
@@ -89,7 +96,16 @@ ERROR_CATEGORIES = (
 )
 
 SAMPLE_FIELDS = frozenset(
-    {"candidate_id", "round", "started_at", "finished_at", "delay_ms", "error_category"}
+    {
+        "candidate_id",
+        "round",
+        "started_at",
+        "finished_at",
+        "delay_ms",
+        "error_category",
+        "baseline_delay_ms",
+        "baseline_error_category",
+    }
 )
 CONTROL_SAMPLE_FIELDS = frozenset({"round", "delay_ms", "error_category"})
 CANARY_SAMPLE_FIELDS = frozenset({"canary_id", *CONTROL_SAMPLE_FIELDS})
@@ -122,10 +138,14 @@ MANIFEST_FIELDS = frozenset(
         "candidate_metadata_schema_version",
         "candidate_metadata_count",
         "candidate_count",
+        "full_candidate_count",
+        "diagnostic_sample_size",
         "identity_key_version",
         "identity_epoch",
         "target_url",
         "expected_status",
+        "baseline_target_url",
+        "baseline_expected_status",
         "request_timeout_ms",
         "qualified_delay_ms",
         "total_rounds",
@@ -302,8 +322,15 @@ def build_manifest_v3(
     network_guard_policy_version: str,
     controller_secret_sha256s: Sequence[str],
     workers_per_shard: int = DEFAULT_WORKERS,
+    diagnostic_sample_size: int | None = None,
 ) -> tuple[dict[str, Any], list[list[dict[str, Any]]]]:
-    """Build manifest v3 from a C1 ``CandidateSnapshot`` after identity preflight."""
+    """Build manifest v3 from a C1 ``CandidateSnapshot`` after identity preflight.
+
+    ``diagnostic_sample_size`` narrows the run to a deterministic subset of the
+    snapshot so a shakedown run finishes in about an hour instead of seven.  It
+    is recorded in the manifest and never publishes: see
+    ``publish_transaction`` which refuses any bundle carrying a sample size.
+    """
 
     ordered_candidates = getattr(snapshot, "ordered_candidates", None)
     if ordered_candidates is None:
@@ -311,6 +338,20 @@ def build_manifest_v3(
     status = getattr(snapshot, "status", None)
     if not isinstance(status, Mapping):
         raise MeasurementError("snapshot status binding is missing")
+    full_candidate_count = len(ordered_candidates)
+    if diagnostic_sample_size is not None:
+        if (
+            isinstance(diagnostic_sample_size, bool)
+            or not isinstance(diagnostic_sample_size, int)
+            or diagnostic_sample_size < SHARD_COUNT
+            or diagnostic_sample_size > full_candidate_count
+        ):
+            raise MeasurementError("diagnostic sample size is invalid")
+        # Candidate IDs are HMAC digests, so lexicographic order is an unbiased
+        # shuffle: the subset stays reproducible without favouring any source.
+        ordered_candidates = tuple(
+            sorted(ordered_candidates, key=_candidate_id)[:diagnostic_sample_size]
+        )
     shards = partition_candidates(ordered_candidates, SHARD_COUNT)
     canaries = sorted(str(value).strip() for value in canary_set)
     if not canaries or any(not value for value in canaries) or len(canaries) != len(set(canaries)):
@@ -325,7 +366,7 @@ def build_manifest_v3(
         "candidate_metadata_sha256": getattr(snapshot, "metadata_sha256", ""),
         "candidate_metadata_schema_version": metadata_schema,
         "candidate_metadata_count": metadata_count,
-        "candidate_count": len(ordered_candidates),
+        "candidate_count": full_candidate_count,
         "identity_key_version": getattr(snapshot, "identity_key_version", ""),
         "identity_epoch": getattr(snapshot, "identity_epoch", ""),
         "run_at": source_run_at,
@@ -355,10 +396,14 @@ def build_manifest_v3(
         "candidate_metadata_schema_version": metadata_schema,
         "candidate_metadata_count": metadata_count,
         "candidate_count": len(ordered_candidates),
+        "full_candidate_count": full_candidate_count,
+        "diagnostic_sample_size": diagnostic_sample_size,
         "identity_key_version": str(getattr(snapshot, "identity_key_version", "")),
         "identity_epoch": str(getattr(snapshot, "identity_epoch", "")),
         "target_url": "https://gmgn.ai/",
         "expected_status": 200,
+        "baseline_target_url": BASELINE_TARGET_URL,
+        "baseline_expected_status": BASELINE_EXPECTED_STATUS,
         "request_timeout_ms": REQUEST_TIMEOUT_MS,
         "qualified_delay_ms": QUALIFIED_DELAY_MS,
         "total_rounds": TOTAL_ROUNDS,
@@ -461,6 +506,11 @@ def validate_manifest_v3(manifest: Mapping[str, Any]) -> dict[str, Any]:
     ):
         _hex(value[name], 64, name)
     if value["target_url"] != "https://gmgn.ai/" or value["expected_status"] != 200:
+        raise MeasurementError("manifest target policy mismatch")
+    if (
+        value["baseline_target_url"] != BASELINE_TARGET_URL
+        or value["baseline_expected_status"] != BASELINE_EXPECTED_STATUS
+    ):
         raise MeasurementError("manifest target contract is invalid")
     if value["request_timeout_ms"] != REQUEST_TIMEOUT_MS or value["qualified_delay_ms"] != QUALIFIED_DELAY_MS:
         raise MeasurementError("manifest delay contract is invalid")
@@ -485,8 +535,24 @@ def validate_manifest_v3(manifest: Mapping[str, Any]) -> dict[str, Any]:
         != CANDIDATE_METADATA_SCHEMA_VERSION
     ):
         raise MeasurementError("manifest candidate metadata schema is invalid")
-    if value["candidate_metadata_count"] != value["candidate_count"]:
+    if value["candidate_metadata_count"] != value["full_candidate_count"]:
         raise MeasurementError("manifest candidate metadata count mismatch")
+    sample_size = value["diagnostic_sample_size"]
+    full_count = value["full_candidate_count"]
+    if isinstance(full_count, bool) or not isinstance(full_count, int) or full_count < 1:
+        raise MeasurementError("manifest full_candidate_count is invalid")
+    if sample_size is None:
+        if value["candidate_count"] != full_count:
+            raise MeasurementError("full run must measure every snapshot candidate")
+    else:
+        if (
+            isinstance(sample_size, bool)
+            or not isinstance(sample_size, int)
+            or sample_size < SHARD_COUNT
+            or sample_size > full_count
+            or value["candidate_count"] != sample_size
+        ):
+            raise MeasurementError("manifest diagnostic sample size is invalid")
     for field in (
         "identity_key_version",
         "identity_epoch",
@@ -689,6 +755,19 @@ def _validate_terminal_sample(sample: Mapping[str, Any]) -> dict[str, Any]:
     else:
         if isinstance(delay, bool) or not isinstance(delay, int) or delay <= 0 or category is not None:
             raise MeasurementError("responsive candidate sample is invalid")
+    baseline_delay = value["baseline_delay_ms"]
+    baseline_category = value["baseline_error_category"]
+    if baseline_delay is None:
+        if baseline_category is not None and baseline_category not in ERROR_CATEGORIES:
+            raise MeasurementError("candidate sample has unknown baseline error category")
+    else:
+        if (
+            isinstance(baseline_delay, bool)
+            or not isinstance(baseline_delay, int)
+            or baseline_delay <= 0
+            or baseline_category is not None
+        ):
+            raise MeasurementError("responsive candidate baseline sample is invalid")
     return value
 
 
@@ -736,10 +815,19 @@ def _terminal_sample(
     started_at: float,
     finished_at: float,
     outcome: Mapping[str, Any] | None,
+    baseline_outcome: Mapping[str, Any] | None = None,
+    *,
+    baseline_measured: bool = False,
 ) -> dict[str, Any]:
     delay, category = normalize_outcome(outcome)
     if finished_at < started_at:
         raise MeasurementError("sample finished before it started")
+    if baseline_measured:
+        baseline_delay, baseline_category = normalize_outcome(baseline_outcome)
+    else:
+        # No baseline probe configured; both fields stay null rather than
+        # recording a fabricated failure.
+        baseline_delay, baseline_category = None, None
     return {
         "candidate_id": candidate_id,
         "round": round_number,
@@ -747,6 +835,8 @@ def _terminal_sample(
         "finished_at": round(float(finished_at), 6),
         "delay_ms": delay,
         "error_category": category,
+        "baseline_delay_ms": baseline_delay,
+        "baseline_error_category": baseline_category,
     }
 
 
@@ -754,6 +844,7 @@ def run_measurement_schedule(
     candidates: Sequence[Any],
     attempt: Callable[[dict[str, Any], int], Mapping[str, Any]],
     *,
+    baseline_attempt: Callable[[dict[str, Any], int], Mapping[str, Any]] | None = None,
     workers: int = DEFAULT_WORKERS,
     total_rounds: int = TOTAL_ROUNDS,
     minimum_observation_window_seconds: float = MINIMUM_OBSERVATION_WINDOW_SECONDS,
@@ -838,8 +929,24 @@ def run_measurement_schedule(
                     outcome = attempt(copy.deepcopy(candidate), round_number)
                 except Exception as exc:  # raw text is classified then discarded
                     outcome = {"error": str(exc)}
+                baseline_outcome: Mapping[str, Any] | None = None
+                if baseline_attempt is not None:
+                    # Paired with the target request inside the same round so the
+                    # two latencies describe the same moment on the same proxy.
+                    try:
+                        baseline_outcome = baseline_attempt(copy.deepcopy(candidate), round_number)
+                    except Exception as exc:
+                        baseline_outcome = {"error": str(exc)}
                 finished = clock()
-                return _terminal_sample(candidate["candidate_id"], round_number, started, finished, outcome)
+                return _terminal_sample(
+                    candidate["candidate_id"],
+                    round_number,
+                    started,
+                    finished,
+                    outcome,
+                    baseline_outcome,
+                    baseline_measured=baseline_attempt is not None,
+                )
 
             futures = [executor.submit(invoke, candidate) for candidate in ordered]
             current = [future.result() for future in as_completed(futures)]
@@ -931,6 +1038,24 @@ def summarize_candidate_samples(
     median = float(statistics.median(delays)) if delays else None
     jitter = float(statistics.pstdev(delays)) if len(delays) > 1 else (0.0 if delays else None)
     span = float(ordered[-1]["started_at"]) - float(ordered[0]["started_at"])
+    baseline_delays = [
+        int(item["baseline_delay_ms"]) for item in ordered if item.get("baseline_delay_ms") is not None
+    ]
+    baseline_measured = any(
+        item.get("baseline_delay_ms") is not None or item.get("baseline_error_category") is not None
+        for item in ordered
+    )
+    baseline_error_counts = {category: 0 for category in ERROR_CATEGORIES}
+    for item in ordered:
+        category = item.get("baseline_error_category")
+        if category is not None:
+            baseline_error_counts[str(category)] += 1
+    baseline_median = float(statistics.median(baseline_delays)) if baseline_delays else None
+    baseline_jitter = (
+        float(statistics.pstdev(baseline_delays))
+        if len(baseline_delays) > 1
+        else (0.0 if baseline_delays else None)
+    )
     return {
         "candidate_id": next(iter(candidate_ids)),
         "attempt_count": TOTAL_ROUNDS,
@@ -948,6 +1073,18 @@ def summarize_candidate_samples(
         "five_round_within_1000_counts": [sum(flags[index : index + 5]) for index in range(0, 20, 5)],
         "observation_span_seconds": round(span, 6),
         "error_counts": error_counts,
+        # Baseline block: the node's own network quality, free of target-side
+        # cost.  ``baseline_measured`` stays false for runs recorded without a
+        # baseline probe so consumers never mistake "not measured" for "failed".
+        "baseline_measured": baseline_measured,
+        "baseline_response_count": len(baseline_delays),
+        "baseline_no_result_count": (TOTAL_ROUNDS - len(baseline_delays)) if baseline_measured else 0,
+        "baseline_min_delay_ms": min(baseline_delays) if baseline_delays else None,
+        "baseline_median_delay_ms": round(baseline_median, 2) if baseline_median is not None else None,
+        "baseline_p90_delay_ms": nearest_rank(baseline_delays, 0.90),
+        "baseline_max_delay_ms": max(baseline_delays) if baseline_delays else None,
+        "baseline_jitter_ms": round(baseline_jitter, 2) if baseline_jitter is not None else None,
+        "baseline_error_counts": baseline_error_counts,
     }
 
 
@@ -1420,6 +1557,8 @@ def benchmark_recommendation(evidence: Sequence[Mapping[str, Any]]) -> str:
 
 __all__ = [
     "CANARY_POLICY_VERSION",
+    "BASELINE_EXPECTED_STATUS",
+    "BASELINE_TARGET_URL",
     "BENCHMARK_EVIDENCE_FIELDS",
     "DEFAULT_WORKERS",
     "ERROR_CATEGORIES",

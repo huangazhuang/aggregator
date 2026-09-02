@@ -590,6 +590,11 @@ main:
         V2_OUTPUT_BRANCH: clash-cn-gmgn-v2-shadow
         V2_CHILD_IMAGE: aggregator-gmgn-v2-child
         V2_WORKERS_PER_SHARD: "16"
+        # Diagnostic shakedown: measure only N candidates so a calibration run
+        # finishes in minutes instead of hours.  "0" means measure everything.
+        # A run with a non-zero value never publishes and never counts as one
+        # of the three valid rollout runs.
+        V2_MAX_CANDIDATES: "0"
         V2_DOCKER_CLI_VERSION: "27.5.1"
         V2_DOCKER_CLI_SHA256: 4f798b3ee1e0140eab5bf30b0edc4e84f4cdb53255a429dc3bbae9524845d640
         V2_DOCKER_CLI_DIR: .cnb-runtime/gmgn-v2/docker-cli
@@ -817,7 +822,8 @@ main:
                 --mihomo /opt/aggregator/clash/clash-linux-amd \
                 --identity-fixture /opt/aggregator/tests/fixtures/gmgn_identity_v1.json \
                 --output-dir /work/.cnb-runtime/prepared \
-                --workers "${V2_WORKERS_PER_SHARD}"
+                --workers "${V2_WORKERS_PER_SHARD}" \
+                --max-candidates "${V2_MAX_CANDIDATES}"
             test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${container}")" = "none"
             test "$(docker inspect --format '{{json .Mounts}}' "${container}")" = "[]"
             if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" \

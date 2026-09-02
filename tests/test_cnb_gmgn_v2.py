@@ -1628,5 +1628,66 @@ class GuardedRuntimeTests(unittest.TestCase):
         )
 
 
+class DiagnosticSummaryTests(unittest.TestCase):
+    def _fragments(self, target_median, baseline_median, *, within, response=20):
+        results = []
+        for index in range(3):
+            results.append(
+                {
+                    "candidate_id": "candidate_" + f"{index:024x}",
+                    "attempt_count": 20,
+                    "response_count": response,
+                    "within_1000_count": within,
+                    "slow_response_count": response - within,
+                    "no_result_count": 20 - response,
+                    "median_delay_ms": target_median,
+                    "baseline_median_delay_ms": baseline_median,
+                    "baseline_response_count": response,
+                    "error_counts": {
+                        category: (20 - response if category == "client_timeout" else 0)
+                        for category in cnb_gmgn_v2.ERROR_CATEGORIES
+                    },
+                }
+            )
+        return [{"results": results}]
+
+    def test_summary_separates_a_slow_target_from_slow_nodes(self):
+        manifest = {
+            "run_id": "gmgnv2_diag_0001",
+            "total_rounds": 20,
+            "full_candidate_count": 2842,
+        }
+        # Nodes are healthy (204 in 200 ms) but gmgn.ai answers in 1.4 s.
+        slow_target = cnb_gmgn_v2._diagnostic_latency_summary(
+            manifest, self._fragments(1400.0, 200.0, within=0)
+        )
+        self.assertEqual(slow_target["measured_candidates"], 3)
+        self.assertEqual(slow_target["snapshot_candidates"], 2842)
+        self.assertEqual(slow_target["target_within_1000_rate"], 0.0)
+        self.assertEqual(slow_target["baseline_median_ms"]["p50"], 200.0)
+        self.assertEqual(slow_target["nodes_with_baseline_under_1000"], 3)
+
+        # Nodes themselves are slow: the baseline is above the bar too.
+        slow_nodes = cnb_gmgn_v2._diagnostic_latency_summary(
+            manifest, self._fragments(1600.0, 1300.0, within=0)
+        )
+        self.assertEqual(slow_nodes["nodes_with_baseline_under_1000"], 0)
+        self.assertEqual(slow_nodes["baseline_median_ms"]["p50"], 1300.0)
+
+    def test_summary_reports_rates_against_total_attempts(self):
+        manifest = {
+            "run_id": "gmgnv2_diag_0002",
+            "total_rounds": 20,
+            "full_candidate_count": 100,
+        }
+        summary = cnb_gmgn_v2._diagnostic_latency_summary(
+            manifest, self._fragments(800.0, 150.0, within=10, response=10)
+        )
+        # 3 candidates x 20 rounds = 60 attempts, 10 responses each.
+        self.assertEqual(summary["target_response_rate"], 0.5)
+        self.assertEqual(summary["target_within_1000_rate"], 0.5)
+        self.assertEqual(summary["error_counts"]["client_timeout"], 30)
+
+
 if __name__ == "__main__":
     unittest.main()
